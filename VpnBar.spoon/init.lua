@@ -22,6 +22,8 @@ package.path = obj.spoonPath .. "?.lua;" .. obj.spoonPath .. "?/init.lua;" .. pa
 local store = require("vpnbar.store")
 local menu = require("vpnbar.menu")
 local backends = require("vpnbar.backends")
+local form = require("vpnbar.form")
+local icon = require("vpnbar.icon")
 
 --- VpnBar.configPath
 --- Variable
@@ -287,6 +289,34 @@ function obj:runtime(allowPanelReads)
   }
 end
 
+-- ---------------------------------------------------------------------- icon
+
+-- Four images, drawn once and kept. The alternative is a canvas per refresh,
+-- which is a new bitmap every ten seconds for a picture that has four possible
+-- values.
+local iconCache = {}
+
+local function menubarIcon(state)
+  if iconCache[state] then
+    return iconCache[state]
+  end
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = icon.SIZE, h = icon.SIZE })
+  if not canvas then
+    return nil
+  end
+  canvas:replaceElements(icon.elements(state))
+  local image = canvas:imageFromCanvas()
+  canvas:delete()
+  if image then
+    -- A template image is tinted by macOS: white on a dark menu bar, black on
+    -- a light one, inverted again while the menu is open. Anything drawn in a
+    -- colour of its own would be right in one of those and wrong in the others.
+    image = image:template(true)
+    iconCache[state] = image
+  end
+  return image
+end
+
 -- --------------------------------------------------------------------- state
 
 function obj:refresh(allowPanelReads)
@@ -297,7 +327,16 @@ function obj:refresh(allowPanelReads)
   end
   self.states = states
   if self.menubar then
-    self.menubar:setTitle(menu.title(states))
+    local image = menubarIcon(menu.overall(states))
+    if image then
+      self.menubar:setIcon(image)
+      -- The count sits beside the icon only when it says something: one tunnel
+      -- up is the normal case and the icon already reports it.
+      local connected = menu.connectedCount(states)
+      self.menubar:setTitle(connected > 1 and tostring(connected) or "")
+    else
+      self.menubar:setTitle(menu.title(states))
+    end
   end
   return states
 end
@@ -322,88 +361,69 @@ function obj:apply(config, err)
   return self:save(config)
 end
 
-function obj:addProfile()
-  local name = ask("New connection", "What should it be called in the menu?")
-  if not name or name:match("^%s*$") then
+--- Walk the fields for a backend, one prompt at a time, and hand back the
+--- profile they describe. Returns nil when the user cancels, which every
+--- caller treats as "change nothing".
+---
+--- This replaced a single dialog holding the whole profile as JSON. A one-line
+--- text field cannot show a JSON object, so the thing being edited was mostly
+--- off-screen — an excellent way to lose a working config to a typo nobody
+--- could see.
+--- @param backend string
+--- @param base table|nil the profile being edited
+--- @return table|nil profile, string|nil err
+local function runForm(backend, base)
+  local answers = form.defaults(backend, base)
+  for _, field in ipairs(form.fields(backend)) do
+    if form.applies(field, answers) then
+      local text = ask(field.label, field.informative, answers[field.key])
+      if text == nil then
+        return nil, nil
+      end
+      answers[field.key] = text
+    else
+      -- Not asked, so not kept: a probe interface without a probe is a setting
+      -- that does nothing and would confuse the next person to read the file.
+      answers[field.key] = ""
+    end
+  end
+  return form.build(backend, answers, base)
+end
+
+function obj:addProfile(backend)
+  local profile, err = runForm(backend, nil)
+  if not profile then
+    if err then
+      self:complain(err)
+    end
     return
   end
-  local backend = hs.dialog.blockAlert(
-    "How is " .. name .. " controlled?",
-    "scutil — a VPN service macOS knows about.\n"
-      .. "GlobalProtect — the Palo Alto agent, driven through its own menu-bar panel.\n"
-      .. "Shell — anything else, by way of two commands you give.",
-    "scutil",
-    "GlobalProtect",
-    "Shell"
-  )
-  local profile = { id = store.freeId(self.config, name), name = name }
-  if backend == "scutil" then
-    profile.backend = "scutil"
-    profile.service = ask("Service name", "Exactly as `scutil --nc list` prints it, without the quotes.")
-    if not profile.service then
-      return
-    end
-  elseif backend == "GlobalProtect" then
-    profile.backend = "globalprotect"
-    profile.app = ask("Application", "The name of the agent in the menu bar.", "GlobalProtect") or "GlobalProtect"
-  else
-    profile.backend = "shell"
-    local connect = ask("Connect command", "Run by /bin/sh when you click to connect.")
-    if not connect then
-      return
-    end
-    local disconnect = ask("Disconnect command", "Run by /bin/sh when you click to disconnect.")
-    if not disconnect then
-      return
-    end
-    local status = ask("Status command (optional)", "Should print connected, connecting or disconnected.", "")
-    profile.commands = { connect = connect, disconnect = disconnect }
-    if status and status:match("%S") then
-      profile.commands.status = status
-    end
-  end
-
-  local cidr = ask(
-    "Interface probe (optional)",
-    "A CIDR that only this VPN hands out, such as 10.0.0.0/8. With one, the state is read from\n"
-      .. "`ifconfig`, which costs nothing and opens no panel. Leave it empty to skip the probe.",
-    ""
-  )
-  if cidr and cidr:match("%S") then
-    profile.probe = { cidr = cidr, interface = "utun" }
-  end
-
+  profile.id = store.freeId(self.config, profile.name)
   if self:apply(store.add(self.config, profile)) then
     self:refresh()
   end
 end
 
 function obj:editProfile(id)
-  local profile = store.get(self.config, id)
+  local existing = store.get(self.config, id)
+  if not existing then
+    return
+  end
+  local profile, err = runForm(existing.backend, existing)
   if not profile then
+    if err then
+      self:complain(err)
+    end
     return
   end
-  local text = ask(
-    "Edit " .. profile.name,
-    "The profile as JSON. It is validated before anything is written.",
-    hs.json.encode(profile, true)
-  )
-  if not text then
-    return
-  end
-  local decoded = hs.json.decode(text)
-  if type(decoded) ~= "table" then
-    self:complain("That is not a JSON object — nothing was changed.")
-    return
-  end
-  -- Replace rather than merge: what the user edited is the whole profile, and
-  -- a key they deleted is a key they meant to delete.
-  local without, err = store.remove(self.config, id)
+  -- Replaced rather than merged: what came back is the whole profile, and a
+  -- field the user emptied is a field they meant to empty.
+  local without, removeErr = store.remove(self.config, id)
   if not without then
-    self:complain(err)
+    self:complain(removeErr)
     return
   end
-  local added, addErr = store.add(without, decoded)
+  local added, addErr = store.add(without, profile)
   if self:apply(added, addErr) then
     self:refresh()
   end
@@ -467,7 +487,7 @@ function obj:dispatch(action)
       self:act(action.id, "disconnect")
     end,
     add = function()
-      self:addProfile()
+      self:addProfile(action.backend)
     end,
     edit = function()
       self:editProfile(action.id)
@@ -488,6 +508,12 @@ function obj:dispatch(action)
     toggleHidden = function()
       local profile = store.get(self.config, action.id)
       if profile and self:apply(store.update(self.config, action.id, { hidden = not profile.hidden })) then
+        self:refresh()
+      end
+    end,
+    toggleMonitor = function()
+      local profile = store.get(self.config, action.id)
+      if profile and self:apply(store.update(self.config, action.id, { monitor = not profile.monitor })) then
         self:refresh()
       end
     end,

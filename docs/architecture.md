@@ -1,11 +1,15 @@
 # Architecture
 
-Four modules decide things and one file talks to Hammerspoon.
+Six modules decide things and one file talks to Hammerspoon.
 
 ```mermaid
 flowchart TD
     M["init.lua<br/>the Spoon adapter"] -->|"config table"| S["vpnbar/store.lua<br/>CRUD, validation"]
     M -->|"config + states"| U["vpnbar/menu.lua<br/>menu model"]
+    M -->|"backend + answers"| F["vpnbar/form.lua<br/>fields, one per prompt"]
+    M -->|"state"| I["vpnbar/icon.lua<br/>the menu-bar mark"]
+    F --> S
+    U --> F
     M -->|"profile + runtime"| B["vpnbar/backends.lua<br/>scutil · globalprotect · shell"]
     B --> P["vpnbar/parse.lua<br/>output parsing, IPv4 maths"]
     U --> S
@@ -13,7 +17,8 @@ flowchart TD
     B --> R
 ```
 
-`store`, `menu`, `parse` and `backends` never call Hammerspoon. `backends` is
+`store`, `menu`, `parse`, `backends`, `form` and `icon` never call
+Hammerspoon. `backends` is
 handed a **runtime** — four functions — and asks it for everything, which is
 how a test drives the real decision code with a table of canned answers. See
 [ADR 0002](adr/0002-a-pure-core-and-a-thin-shell.md).
@@ -53,6 +58,22 @@ opening one.
 config go through `store`, and `store` returns a *new* config or an error: a
 rejected edit cannot leave a partly-applied one behind, and the result is
 written atomically or not at all.
+
+## One edit
+
+`form.fields(backend)` is an ordered list of what to ask; the adapter walks it
+with one prompt each, prefilled from `form.defaults`. `form.build` puts the
+answers back into a profile, keeps what the form never asked about, drops the
+previous backend's fields, and validates before anything reaches disk. Add and
+Edit are the same walk with a different starting point
+([ADR 0010](adr/0010-a-profile-is-edited-field-by-field.md)).
+
+## The mark in the menu bar
+
+`icon.elements(state)` returns `hs.canvas` descriptors and draws nothing; the
+adapter renders them once per state and caches the four images. They are
+template images, so the state is carried by the fill and never by a colour
+([ADR 0011](adr/0011-the-menu-bar-mark-is-a-template-image.md)).
 
 ## The accessibility path
 
