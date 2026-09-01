@@ -17,7 +17,19 @@ The policy that lives there:
 | attempts before the fallback | 2 |
 | attempts before giving up | 6, until something clears the memory |
 | cleared by | the connection coming up, a wake, switching autoconnect on |
-| never touched | `connecting` (already on its way), `unknown` (nothing is known), monitored connections |
+| never touched | `connecting` (already on its way), `unknown` (nothing is known) |
+| tidied up | the fallback is disconnected once the wanted one is up |
+
+## Two tunnels to the same place
+
+Not twice the connectivity: one routing table with an argument in it. So when
+the connection somebody actually wanted comes up, the stand-in that was started
+while it was down is taken back down again — and that check runs *before* the
+connect rules, because the alternative is briefly having three.
+
+Only what autoconnect itself started, tracked in the same memory table. A
+tunnel opened by hand is not this function's to close, and neither is a
+protected one ([ADR 0008](0008-an-always-on-vpn-is-protected-from-being-disconnected.md)).
 
 ## Why one action per refresh
 
@@ -41,6 +53,7 @@ the old failures meaningless anyway.
 
 ## Why the policy is not in the adapter
 
-Because every one of those numbers is a decision, and a decision inside a timer
+Because every one of those numbers, and the order the rules run in, is a
+decision, and a decision inside a timer
 callback can only be checked by waiting. In a module it is nineteen tests that
 run in a hundredth of a second.

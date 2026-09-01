@@ -131,14 +131,23 @@ function menu.build(cfg, states)
 
   for _, profile in ipairs(visible) do
     local state = states[profile.id] or "unknown"
-    if profile.monitor then
-      -- Some tunnels are not this menu's to change: an always-on corporate VPN
-      -- is a policy, and a menu item that would breach it is worse than no
-      -- menu item. The row still reports, which is the half that is wanted.
+    if profile.protected and state ~= "disconnected" then
+      -- Protected means protected from being brought *down*: an always-on
+      -- corporate VPN is a policy, and a menu item that would breach it is
+      -- worse than no menu item. Up or on its way up, there is nothing this
+      -- row may do, so it only reports.
       items[#items + 1] = {
         title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s, monitored only"):format(profile.name, menu.label(state)),
+        tooltip = ("%s — %s, protected from disconnecting"):format(profile.name, menu.label(state)),
         disabled = true,
+      }
+    elseif profile.protected then
+      -- Down, though, it may be brought back: that is the direction the
+      -- protection points in.
+      items[#items + 1] = {
+        title = ("%s  %s"):format(menu.glyph(state), profile.name),
+        tooltip = ("%s — %s, protected once it is up"):format(profile.name, menu.label(state)),
+        action = { kind = "connect", id = profile.id },
       }
     else
       items[#items + 1] = {
@@ -176,14 +185,14 @@ function menu.build(cfg, states)
           action = { kind = "toggleHidden", id = profile.id },
         },
         {
-          title = profile.monitor and "Allow connect and disconnect" or "Monitor only, never change it",
-          action = { kind = "toggleMonitor", id = profile.id },
+          title = profile.protected and "Allow disconnecting" or "Protect from disconnecting",
+          action = { kind = "toggleProtected", id = profile.id },
         },
         {
           title = profile.autoconnect and "Do not connect automatically" or "Connect automatically",
-          -- A monitored connection is never acted on, so it cannot autoconnect
-          -- either; `store` refuses the combination outright.
-          disabled = profile.monitor or false,
+          -- Protected and autoconnect belong together: a tunnel that must stay
+          -- up is exactly the one worth bringing up on its own.
+          disabled = false,
           action = { kind = "toggleAutoconnect", id = profile.id },
         },
         { separator = true },

@@ -334,10 +334,16 @@ function obj:refresh(allowPanelReads)
   local plan = autoconnect.plan(self.config, states, self.attempts, os.time())
   if plan then
     local profile = store.get(self.config, plan.id)
-    autoconnect.remember(self.attempts, plan.id, os.time())
-    self.logger.i(("autoconnect: %s (%s)"):format(plan.id, plan.reason))
+    self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
+    if plan.verb == "connect" then
+      autoconnect.remember(self.attempts, plan.id, os.time())
+    else
+      -- Taking the stand-in back down ends its history: it is not a failure,
+      -- and the next time it is needed it should start from nothing.
+      autoconnect.forget(self.attempts, plan.id)
+    end
     if profile then
-      backends.act(profile, "connect", runtime)
+      backends.act(profile, plan.verb, runtime)
     end
   end
 
@@ -538,9 +544,9 @@ function obj:dispatch(action)
         self:refresh()
       end
     end,
-    toggleMonitor = function()
+    toggleProtected = function()
       local profile = store.get(self.config, action.id)
-      if profile and self:apply(store.update(self.config, action.id, { monitor = not profile.monitor })) then
+      if profile and self:apply(store.update(self.config, action.id, { protected = not profile.protected })) then
         self:refresh()
       end
     end,

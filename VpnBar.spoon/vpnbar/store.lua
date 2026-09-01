@@ -155,8 +155,8 @@ function store.validate(profile)
   if profile.hidden ~= nil and type(profile.hidden) ~= "boolean" then
     return false, "hidden must be true or false"
   end
-  if profile.monitor ~= nil and type(profile.monitor) ~= "boolean" then
-    return false, "monitor must be true or false"
+  if profile.protected ~= nil and type(profile.protected) ~= "boolean" then
+    return false, "protected must be true or false"
   end
   if profile.autoconnect ~= nil and type(profile.autoconnect) ~= "boolean" then
     return false, "autoconnect must be true or false"
@@ -166,9 +166,6 @@ function store.validate(profile)
   end
   if profile.fallback == profile.id then
     return false, "a connection cannot fall back to itself"
-  end
-  if profile.monitor and profile.autoconnect then
-    return false, "a monitored connection is never acted on, so it cannot autoconnect"
   end
 
   if profile.backend == "scutil" and not isNonEmptyString(profile.service) then
@@ -228,7 +225,7 @@ function store.normalise(raw)
     if type(profile) == "table" then
       profile.order = profile.order or index * 10
       profile.hidden = profile.hidden or false
-      profile.monitor = profile.monitor or false
+      profile.protected = profile.protected or false
       profile.autoconnect = profile.autoconnect or false
       if profile.backend == "globalprotect" then
         profile.app = profile.app or "GlobalProtect"
@@ -294,7 +291,7 @@ function store.add(cfg, profile)
   local candidate = copy(profile)
   candidate.order = candidate.order or (#(cfg.profiles or {}) + 1) * 10
   candidate.hidden = candidate.hidden or false
-  candidate.monitor = candidate.monitor or false
+  candidate.protected = candidate.protected or false
   candidate.autoconnect = candidate.autoconnect or false
   if candidate.backend == "globalprotect" then
     candidate.app = candidate.app or "GlobalProtect"

@@ -82,7 +82,7 @@ describe("menu.build", function()
       edit = true,
       move = true,
       toggleHidden = true,
-      toggleMonitor = true,
+      toggleProtected = true,
       toggleAutoconnect = true,
       remove = true,
     }, kinds)
@@ -97,11 +97,11 @@ describe("menu.build", function()
   end)
 end)
 
-describe("menu.build, monitor-only profiles", function()
+describe("menu.build, protected profiles", function()
   -- Some tunnels are policy, not preference: an always-on corporate VPN must
   -- still be visible and must never be offered a disconnect.
-  local function monitored()
-    return assert(store.update(config("gp"), "gp", { name = "Always-on VPN", monitor = true }))
+  local function protected()
+    return assert(store.update(config("gp"), "gp", { name = "Always-on VPN", protected = true }))
   end
 
   local function deep(items, needle)
@@ -119,28 +119,44 @@ describe("menu.build, monitor-only profiles", function()
     return nil
   end
 
-  it("shows the state but offers no action", function()
-    local item = menu.build(monitored(), { gp = "connected" })[1]
+  it("offers nothing while it is up", function()
+    local item = menu.build(protected(), { gp = "connected" })[1]
     assert.equals("●  Always-on VPN", item.title)
+    assert.is_nil(item.action)
+    assert.is_true(item.disabled)
+    assert.equals("Always-on VPN — connected, protected from disconnecting", item.tooltip)
+  end)
+
+  it("offers nothing while it is on its way up either", function()
+    local item = menu.build(protected(), { gp = "connecting" })[1]
     assert.is_nil(item.action)
     assert.is_true(item.disabled)
   end)
 
-  it("says why it cannot be clicked", function()
-    local item = menu.build(monitored(), { gp = "connected" })[1]
-    assert.equals("Always-on VPN — connected, monitored only", item.tooltip)
+  it("offers to bring it back when it is down", function()
+    -- Protection points one way. A protected tunnel that is down is exactly
+    -- the one you want a single click to fix.
+    local item = menu.build(protected(), { gp = "disconnected" })[1]
+    assert.same({ kind = "connect", id = "gp" }, item.action)
+    assert.matches("protected once it is up", item.tooltip)
+  end)
+
+  it("never offers to disconnect it, in any state", function()
+    for _, state in ipairs({ "connected", "connecting", "disconnected", "unknown" }) do
+      local item = menu.build(protected(), { gp = state })[1]
+      assert.not_equals("disconnect", item.action and item.action.kind)
+    end
   end)
 
   it("reports every state like any other row", function()
     for state, glyph in pairs({ connected = "●", connecting = "◐", disconnected = "○", unknown = "◌" }) do
-      local item = menu.build(monitored(), { gp = state })[1]
+      local item = menu.build(protected(), { gp = state })[1]
       assert.equals(glyph .. "  Always-on VPN", item.title)
-      assert.is_nil(item.action)
     end
   end)
 
   it("is still renameable, editable and removable", function()
-    local items = menu.build(monitored(), {})
+    local items = menu.build(protected(), {})
     assert.equals("rename", deep(items, "Rename").action.kind)
     assert.equals("edit", deep(items, "Edit").action.kind)
     assert.equals("remove", deep(items, "Remove").action.kind)
@@ -171,10 +187,10 @@ describe("menu.overall and menu.connectedCount", function()
   end)
 end)
 
-describe("menu.build, the monitor toggle", function()
-  local function config1(monitor)
+describe("menu.build, the protection toggle", function()
+  local function config1(protectedFlag)
     local cfg = assert(store.normalise({
-      profiles = { { id = "a", name = "A", backend = "scutil", service = "a", monitor = monitor } },
+      profiles = { { id = "a", name = "A", backend = "scutil", service = "a", protected = protectedFlag } },
     }))
     return cfg
   end
@@ -194,14 +210,14 @@ describe("menu.build, the monitor toggle", function()
     return nil
   end
 
-  it("offers to lock a controllable connection", function()
-    local item = deep(menu.build(config1(false), {}), "Monitor only")
-    assert.same({ kind = "toggleMonitor", id = "a" }, item.action)
+  it("offers to protect a connection that is not", function()
+    local item = deep(menu.build(config1(false), {}), "Protect from disconnecting")
+    assert.same({ kind = "toggleProtected", id = "a" }, item.action)
   end)
 
-  it("offers to unlock a monitored one", function()
-    local item = deep(menu.build(config1(true), {}), "Allow connect and disconnect")
-    assert.same({ kind = "toggleMonitor", id = "a" }, item.action)
+  it("offers to unprotect one that is", function()
+    local item = deep(menu.build(config1(true), {}), "Allow disconnecting")
+    assert.same({ kind = "toggleProtected", id = "a" }, item.action)
   end)
 end)
 
@@ -276,9 +292,9 @@ describe("menu.build, force disconnect", function()
     assert.is_nil(deep(menu.build(scutil, {}), "Force disconnect"))
   end)
 
-  it("never offers it on a monitored connection", function()
+  it("never offers it on a protected connection", function()
     local cfg = shellProfile("pkill -f vpn")
-    cfg.profiles[1].monitor = true
+    cfg.profiles[1].protected = true
     assert.is_nil(deep(menu.build(cfg, {}), "Force disconnect"))
   end)
 end)
@@ -313,7 +329,7 @@ describe("menu.build, the autoconnect toggle", function()
     assert.is_truthy(deep(menu.build(on, {}), "Do not connect automatically"))
   end)
 
-  it("greys it out on a monitored connection, which is never acted on", function()
-    assert.is_true(deep(menu.build(cfg({ monitor = true }), {}), "Connect automatically").disabled)
+  it("offers it on a protected connection too, which is where it matters most", function()
+    assert.is_false(deep(menu.build(cfg({ protected = true }), {}), "Connect automatically").disabled)
   end)
 end)

@@ -191,23 +191,29 @@ describe("backends.act", function()
   end)
 end)
 
-describe("backends.act, monitor-only profiles", function()
+describe("backends.act, protected profiles", function()
   local profile = {
     id = "gp",
     name = "Always-on VPN",
     backend = "scutil",
     service = "Always-on VPN",
-    monitor = true,
+    protected = true,
   }
 
-  it("refuses to act, whatever the backend would have done", function()
+  it("refuses to bring it down, by either verb", function()
     local runtime = fakeRuntime()
-    for _, verb in ipairs({ "connect", "disconnect" }) do
+    for _, verb in ipairs({ "disconnect", "force" }) do
       local ok, err = backends.act(profile, verb, runtime)
       assert.is_false(ok)
-      assert.matches("monitored only", err)
+      assert.matches("protected from being disconnected", err)
     end
     assert.equals(0, #runtime.calls.exec)
+  end)
+
+  it("connects it happily, which is the direction protection allows", function()
+    local runtime = fakeRuntime()
+    assert.is_true((backends.act(profile, "connect", runtime)))
+    assert.equals(1, #runtime.calls.exec)
   end)
 
   it("names the connection it refused", function()
@@ -245,8 +251,8 @@ describe("backends.canForce", function()
     assert.is_false(backends.canForce({ id = "g", backend = "globalprotect", app = "GlobalProtect" }))
   end)
 
-  it("is false for a monitored connection, whatever it was given", function()
-    assert.is_false(backends.canForce(shell("pkill -f vpn", { monitor = true })))
+  it("is false for a protected connection, whatever it was given", function()
+    assert.is_false(backends.canForce(shell("pkill -f vpn", { protected = true })))
   end)
 
   it("is false for anything that is not a profile", function()
