@@ -277,23 +277,23 @@ describe("store.import", function()
   end)
 end)
 
-describe("store, monitor-only profiles", function()
-  it("defaults monitor to false and keeps it when set", function()
+describe("store, protected profiles", function()
+  it("defaults protected to false and keeps it when set", function()
     local cfg =
-      assert(store.normalise({ profiles = { scutilProfile(), scutilProfile({ id = "gp", monitor = true }) } }))
-    assert.is_false(cfg.profiles[1].monitor)
-    assert.is_true(cfg.profiles[2].monitor)
+      assert(store.normalise({ profiles = { scutilProfile(), scutilProfile({ id = "gp", protected = true }) } }))
+    assert.is_false(cfg.profiles[1].protected)
+    assert.is_true(cfg.profiles[2].protected)
   end)
 
-  it("rejects a monitor that is not a boolean", function()
-    local ok, err = store.validate(scutilProfile({ monitor = "yes" }))
+  it("rejects a protected that is not a boolean", function()
+    local ok, err = store.validate(scutilProfile({ protected = "yes" }))
     assert.is_false(ok)
-    assert.matches("monitor must be", err)
+    assert.matches("protected must be", err)
   end)
 
   it("can be turned on and off by a patch", function()
     local cfg = assert(store.add(store.empty(), scutilProfile()))
-    assert.is_true(assert(store.update(cfg, "work", { monitor = true })).profiles[1].monitor)
+    assert.is_true(assert(store.update(cfg, "work", { protected = true })).profiles[1].protected)
   end)
 end)
 
@@ -327,17 +327,17 @@ describe("store, autoconnect and fallback", function()
     assert.matches("fall back to itself", err)
   end)
 
-  it("refuses to autoconnect something it is not allowed to touch", function()
-    local ok, err = store.validate({
+  it("allows a protected connection to autoconnect, which is the whole point", function()
+    -- Protection points at bringing a tunnel down. A tunnel that must stay up
+    -- is exactly the one worth bringing up on its own.
+    assert.is_true((store.validate({
       id = "a",
       name = "A",
       backend = "scutil",
       service = "a",
-      monitor = true,
+      protected = true,
       autoconnect = true,
-    })
-    assert.is_false(ok)
-    assert.matches("never acted on", err)
+    })))
   end)
 
   it("rejects an autoconnect that is not a boolean", function()

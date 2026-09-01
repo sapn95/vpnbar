@@ -44,8 +44,8 @@ interrupted save cannot leave a half-written config behind.
 | `backend` | yes | `scutil`, `globalprotect` or `shell`. |
 | `order` | no | Sort key; the menu renumbers to 10, 20, 30 … whenever you move something. Defaults to position × 10. |
 | `hidden` | no | Keeps it out of the top level but still manageable under **Connections**. Defaults to `false`. |
-| `monitor` | no | Shows the state and refuses to change it: the row is greyed out and carries no action. For a tunnel that must stay up. Defaults to `false`. |
-| `autoconnect` | no | Bring it up on its own when it is down. Defaults to `false`. Cannot be combined with `monitor`. |
+| `protected` | no | Never disconnected from here, always connectable. For a tunnel that must stay up. Defaults to `false`. |
+| `autoconnect` | no | Bring it up on its own when it is down. Defaults to `false`. Works with `protected`, which is where it matters most. |
 | `fallback` | no | The id of another connection to try when this one will not come up. Only used together with `autoconnect`. |
 | `probe` | no | `{ "cidr": …, "interface": … }`. See below. |
 
@@ -123,20 +123,25 @@ answers for whichever session is actually running. **Connect opens the app and
 stops** — these endpoints authenticate in a browser, and the login is finished
 by hand. `AWS_VPN_MGMT_PORT` overrides the port if a future client moves it.
 
-### `monitor`
+### `protected`
 
 ```json
-{ "id": "corp", "name": "Corporate VPN", "backend": "globalprotect", "app": "GlobalProtect", "monitor": true }
+{ "id": "corp", "name": "Corporate VPN", "backend": "globalprotect", "app": "GlobalProtect", "protected": true }
 ```
 
-The row reports and nothing else: greyed out, no click, tooltip
-`monitored only`. Use it where staying connected is a requirement rather than a
-choice — the state is still the most useful thing in the menu, and the button
-that would break it should not exist
-([ADR 0008](adr/0008-an-always-on-vpn-is-monitored-not-controlled.md)). It is
-enforced in the menu *and* in the backend, so nothing acts on such a profile by
-another route. Renaming, reordering, hiding and removing still work: those
-change this menu's list, not the tunnel.
+The protection points **one way**: this connection can never be disconnected or
+force-disconnected from the menu, and can always be connected. Up or on its way
+up, the row reports and is greyed out (`protected from disconnecting`); down,
+it offers a single click to bring it back (`protected once it is up`).
+
+Use it where staying connected is a requirement rather than a choice — the
+state is still the most useful thing in the menu, and the button that would
+break it should not exist
+([ADR 0008](adr/0008-an-always-on-vpn-is-protected-from-being-disconnected.md)). It is enforced in the menu *and* in the
+backend, so nothing brings such a connection down by another route. Renaming,
+reordering, hiding and removing still work: those change this menu's list, not
+the tunnel. Toggle it from **Connections → the connection → Protect from
+disconnecting**.
 
 ### `autoconnect` and `fallback`
 
@@ -157,8 +162,13 @@ automatically**, and the fallback is the last question **Edit…** asks.
 What then happens, on the refresh that already runs every ten seconds: a
 connection that is `disconnected` is asked to connect, at most one per refresh,
 never more often than once a minute. After two tries it moves to its
-`fallback` — if that one is not itself up, on its way up, or monitored. After
-six it stops, until the connection comes up, the Mac wakes, or you toggle it.
+`fallback` — if that one is not itself up or on its way up. After six it stops,
+until the connection comes up, the Mac wakes, or you toggle it.
+
+When the wanted connection comes up, a fallback that autoconnect started is
+disconnected again: two tunnels to the same place is one routing table with an
+argument in it. Only what autoconnect itself started, and never a `protected`
+one.
 `connecting` is left alone because it is already on its way, and `unknown` is
 left alone because asking an unreadable connection to connect is how a probe
 nobody configured turns into a login prompt every ten seconds. All of it is in
@@ -167,7 +177,9 @@ nobody configured turns into a login prompt every ten seconds. All of it is in
 A `fallback` must name a connection that exists in the same file — vpnbar
 refuses the config otherwise, because a dead end at the moment it is needed is
 worse than having no fallback at all. A connection cannot fall back to itself,
-and a `monitor` connection cannot autoconnect: it is never acted on.
+and a `protected` connection may autoconnect — bringing one up is the direction
+its protection allows, and a tunnel that must stay up is exactly the one worth
+starting on its own.
 
 ### `probe`
 

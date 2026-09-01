@@ -37,7 +37,7 @@ end
 --- @param id string
 --- @param now number seconds
 function autoconnect.remember(memory, id, now)
-  memory[id] = { attempts = attemptsFor(memory, id) + 1, lastTry = now }
+  memory[id] = { attempts = attemptsFor(memory, id) + 1, lastTry = now, started = true }
 end
 
 --- Forget a connection's history. Called when it comes up, and when something
@@ -59,18 +59,36 @@ end
 --- Returns at most one action, because two VPNs coming up at the same moment
 --- is a routing table nobody asked for. The next refresh takes the next one.
 ---
+--- A protected connection may be *connected* here: protection points at
+--- bringing one down, and a tunnel that must stay up is exactly the one worth
+--- bringing up on its own.
+---
 --- @param cfg table
 --- @param states table map of profile id to state
 --- @param memory table the caller's memory of what has been tried
 --- @param now number seconds
---- @return table|nil { id = string, reason = "wanted"|"fallback" }
+--- @return table|nil { id, verb = "connect"|"disconnect", reason }
 function autoconnect.plan(cfg, states, memory, now)
   states, memory = states or {}, memory or {}
 
+  -- Tidying up comes first. Two tunnels to the same place is not twice the
+  -- connectivity, it is one routing table with an argument in it — so once the
+  -- connection somebody actually wanted is up, the stand-in that was started
+  -- for it goes away again.
   for _, profile in ipairs(store.list(cfg, true)) do
-    -- A monitored connection is never acted on, and `store` refuses the
-    -- combination anyway; this is the second half of that rule.
-    if profile.autoconnect and not profile.monitor then
+    if profile.autoconnect and profile.fallback and states[profile.id] == "connected" then
+      local fallback = store.get(cfg, profile.fallback)
+      local startedByUs = memory[profile.fallback] and memory[profile.fallback].started
+      -- Only what autoconnect itself started, and never something protected:
+      -- a tunnel opened by hand is not this function's to close.
+      if fallback and not fallback.protected and startedByUs and states[profile.fallback] == "connected" then
+        return { id = profile.fallback, verb = "disconnect", reason = "superseded" }
+      end
+    end
+  end
+
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if profile.autoconnect then
       local state = states[profile.id] or "unknown"
 
       if state == "connected" then
@@ -82,17 +100,17 @@ function autoconnect.plan(cfg, states, memory, now)
 
         if ready and attempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
           if attempts < autoconnect.ATTEMPTS_BEFORE_FALLBACK or not profile.fallback then
-            return { id = profile.id, reason = "wanted" }
+            return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
           local fallback = store.get(cfg, profile.fallback)
           local fallbackState = states[profile.fallback] or "unknown"
-          if fallback and not fallback.monitor and fallbackState ~= "connected" and fallbackState ~= "connecting" then
+          if fallback and fallbackState ~= "connected" and fallbackState ~= "connecting" then
             local fallbackAttempts = attemptsFor(memory, profile.fallback)
             local fallbackLast = lastTryFor(memory, profile.fallback)
             local fallbackReady = fallbackLast == nil or (now - fallbackLast) >= autoconnect.COOLDOWN
             if fallbackReady and fallbackAttempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
-              return { id = profile.fallback, reason = "fallback" }
+              return { id = profile.fallback, verb = "connect", reason = "fallback" }
             end
           end
         end

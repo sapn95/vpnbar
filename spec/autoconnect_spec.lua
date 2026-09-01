@@ -23,7 +23,7 @@ end
 describe("autoconnect.plan", function()
   it("asks for the connection somebody chose when it is down", function()
     local plan = autoconnect.plan(config(), { aws = "disconnected" }, {}, 1000)
-    assert.same({ id = "aws", reason = "wanted" }, plan)
+    assert.same({ id = "aws", verb = "connect", reason = "wanted" }, plan)
   end)
 
   it("does nothing when it is already up", function()
@@ -43,10 +43,13 @@ describe("autoconnect.plan", function()
     assert.is_nil(autoconnect.plan(config({ autoconnect = false }), { aws = "disconnected" }, {}, 1000))
   end)
 
-  it("never acts on a monitored connection", function()
+  it("brings a protected connection UP, which is the direction protection allows", function()
+    -- A tunnel that must stay up is exactly the one worth bringing up on its
+    -- own. Protection points at taking one down, not at starting it.
     local cfg = config()
-    cfg.profiles[1].monitor = true
-    assert.is_nil(autoconnect.plan(cfg, { aws = "disconnected" }, {}, 1000))
+    cfg.profiles[1].protected = true
+    local plan = autoconnect.plan(cfg, { aws = "disconnected" }, {}, 1000)
+    assert.same({ id = "aws", verb = "connect", reason = "wanted" }, plan)
   end)
 end)
 
@@ -87,13 +90,16 @@ describe("autoconnect, the fallback", function()
 
   it("keeps asking for the wanted one until the attempts run out", function()
     local memory = afterAttempts(1, 0)
-    assert.same({ id = "aws", reason = "wanted" }, autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000))
+    assert.same(
+      { id = "aws", verb = "connect", reason = "wanted" },
+      autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000)
+    )
   end)
 
   it("moves to the fallback once it has asked enough times", function()
     local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
     local plan = autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000)
-    assert.same({ id = "alt", reason = "fallback" }, plan)
+    assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
   end)
 
   it("does not fall back to something that is already up", function()
@@ -108,11 +114,12 @@ describe("autoconnect, the fallback", function()
     assert.is_nil(autoconnect.plan(config(), states, memory, 1000))
   end)
 
-  it("does not fall back to a monitored connection", function()
+  it("may fall back to a protected connection, since that only starts it", function()
     local cfg = config()
-    cfg.profiles[2].monitor = true
+    cfg.profiles[2].protected = true
     local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
-    assert.is_nil(autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000))
+    local plan = autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000)
+    assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
   end)
 
   it("keeps asking for the wanted one when there is no fallback at all", function()
@@ -122,7 +129,10 @@ describe("autoconnect, the fallback", function()
       profiles = { { id = "aws", name = "AWS", backend = "scutil", service = "AWS", autoconnect = true } },
     }))
     local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
-    assert.same({ id = "aws", reason = "wanted" }, autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000))
+    assert.same(
+      { id = "aws", verb = "connect", reason = "wanted" },
+      autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000)
+    )
   end)
 
   it("respects the fallback's own cooldown", function()
@@ -162,5 +172,57 @@ describe("autoconnect, more than one candidate", function()
     }))
     local plan = autoconnect.plan(cfg, { a = "disconnected", b = "disconnected" }, {}, 1000)
     assert.equals("a", plan.id)
+  end)
+end)
+
+describe("autoconnect, two tunnels to the same place", function()
+  --- The wanted connection is up, and the stand-in that was started while it
+  --- was down is still up beside it.
+  local function bothUp()
+    local memory = {}
+    autoconnect.remember(memory, "alt", 500)
+    return memory
+  end
+
+  it("takes the stand-in down once the wanted one is up", function()
+    local plan = autoconnect.plan(config(), { aws = "connected", alt = "connected" }, bothUp(), 1000)
+    assert.same({ id = "alt", verb = "disconnect", reason = "superseded" }, plan)
+  end)
+
+  it("leaves a tunnel it did not start alone", function()
+    -- Opened by hand: not this function's to close.
+    assert.is_nil(autoconnect.plan(config(), { aws = "connected", alt = "connected" }, {}, 1000))
+  end)
+
+  it("never takes down a protected stand-in", function()
+    local cfg = config()
+    cfg.profiles[2].protected = true
+    assert.is_nil(autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, bothUp(), 1000))
+  end)
+
+  it("does nothing while the wanted one is only on its way up", function()
+    assert.is_nil(autoconnect.plan(config(), { aws = "connecting", alt = "connected" }, bothUp(), 1000))
+  end)
+
+  it("tidies up before it connects anything else", function()
+    -- Both rules could fire on the same refresh; taking one down wins, because
+    -- the alternative is briefly having three.
+    local cfg = assert(store.normalise({
+      profiles = {
+        {
+          id = "aws",
+          name = "AWS",
+          backend = "scutil",
+          service = "AWS",
+          autoconnect = true,
+          fallback = "alt",
+          order = 10,
+        },
+        { id = "alt", name = "Alt", backend = "scutil", service = "Alt", order = 20 },
+        { id = "third", name = "Third", backend = "scutil", service = "T", autoconnect = true, order = 30 },
+      },
+    }))
+    local states = { aws = "connected", alt = "connected", third = "disconnected" }
+    assert.equals("disconnect", autoconnect.plan(cfg, states, bothUp(), 1000).verb)
   end)
 end)

@@ -101,7 +101,7 @@ backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shel
 --- @param profile table
 --- @return boolean
 function backends.canForce(profile)
-  if type(profile) ~= "table" or profile.monitor then
+  if type(profile) ~= "table" or profile.protected then
     return false
   end
   return profile.backend == "shell" and type(profile.commands) == "table" and profile.commands.force ~= nil
@@ -137,10 +137,14 @@ end
 --- @return boolean ok, string|nil err
 function backends.act(profile, verb, runtime)
   -- Enforced here as well as in the menu. The menu decides what is offered;
-  -- this decides what happens, and a monitored connection has to be safe from
+  -- this decides what happens, and a protected connection has to be safe from
   -- a dispatch that reaches it by any other route.
-  if profile.monitor then
-    return false, ("%s is monitored only"):format(profile.name or profile.id or "this connection")
+  --
+  -- Protected means protected from being *brought down*. Connecting one is
+  -- always allowed — a tunnel that must stay up is exactly the one worth
+  -- bringing up automatically.
+  if profile.protected and verb ~= "connect" then
+    return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end
   local backend = backends.byName[profile.backend]
   if not backend or not backend[verb] then
