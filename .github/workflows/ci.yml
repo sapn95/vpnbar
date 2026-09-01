@@ -57,7 +57,8 @@ jobs:
           luarocks install luacheck
           luacheck .
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        # scripts/vpnbar has no extension: it is a command, not a library.
+        run: shellcheck scripts/*.sh scripts/vpnbar
 
   test:
     name: unit tests

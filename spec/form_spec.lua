@@ -55,6 +55,27 @@ describe("form.fields", function()
     return out
   end
 
+  it("asks about a fallback last, after everything else", function()
+    for _, backend in ipairs({ "scutil", "globalprotect", "shell" }) do
+      local fields = form.fields(backend)
+      assert.equals("fallback", fields[#fields].key)
+    end
+  end)
+
+  it("asks a shell profile whether it has a harder way down, and nobody else", function()
+    local function has(backend, key)
+      for _, field in ipairs(form.fields(backend)) do
+        if field.key == key then
+          return true
+        end
+      end
+      return false
+    end
+    assert.is_true(has("shell", "commands.force"))
+    assert.is_false(has("scutil", "commands.force"))
+    assert.is_false(has("globalprotect", "commands.force"))
+  end)
+
   it("asks for the name first, whatever the backend", function()
     for _, backend in ipairs({ "scutil", "globalprotect", "shell" }) do
       assert.equals("name", form.fields(backend)[1].key)
@@ -62,7 +83,7 @@ describe("form.fields", function()
   end)
 
   it("asks a scutil profile for its service", function()
-    assert.same({ "name", "service", "probe.cidr", "probe.interface" }, keys("scutil"))
+    assert.same({ "name", "service", "probe.cidr", "probe.interface", "fallback" }, keys("scutil"))
   end)
 
   it("asks a shell profile for its three commands", function()
@@ -71,25 +92,33 @@ describe("form.fields", function()
       "commands.connect",
       "commands.disconnect",
       "commands.status",
+      "commands.force",
       "probe.cidr",
       "probe.interface",
+      "fallback",
     }, keys("shell"))
   end)
 
-  it("asks every backend about a probe last", function()
+  it("asks every backend about a probe, after its own fields", function()
     for _, backend in ipairs({ "scutil", "globalprotect", "shell" }) do
-      local fields = form.fields(backend)
-      assert.equals("probe.interface", fields[#fields].key)
+      local ordered = keys(backend)
+      assert.equals("probe.cidr", ordered[#ordered - 2])
+      assert.equals("probe.interface", ordered[#ordered - 1])
     end
   end)
 
   it("has nothing to ask about a backend it does not know", function()
-    assert.same({ "name", "probe.cidr", "probe.interface" }, keys("carrier-pigeon"))
+    assert.same({ "name", "probe.cidr", "probe.interface", "fallback" }, keys("carrier-pigeon"))
   end)
 
   it("marks what may not be left empty", function()
     for _, field in ipairs(form.fields("shell")) do
-      if field.key == "commands.status" or field.key:match("^probe%.") then
+      if
+        field.key:match("^commands%.status$")
+        or field.key:match("^commands%.force$")
+        or field.key:match("^probe%.")
+        or field.key == "fallback"
+      then
         assert.is_falsy(field.required)
       else
         assert.is_true(field.required)

@@ -84,7 +84,28 @@ function shell.disconnect(profile, runtime)
   return ok and true or false, ok and nil or "the disconnect command failed"
 end
 
+function shell.force(profile, runtime)
+  local _, ok = runtime.exec(profile.commands.force)
+  return ok and true or false, ok and nil or "the force command failed"
+end
+
 backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shell }
+
+--- Is there a harder way to bring this connection down than asking politely?
+---
+--- Only where one genuinely exists. `scutil --nc stop` has no stronger form,
+--- and the GlobalProtect panel has one Disconnect and nothing behind it —
+--- offering a "force" that runs the identical command would be a menu item
+--- that lies about being stronger. A shell profile has one exactly when its
+--- config gives it one.
+--- @param profile table
+--- @return boolean
+function backends.canForce(profile)
+  if type(profile) ~= "table" or profile.monitor then
+    return false
+  end
+  return profile.backend == "shell" and type(profile.commands) == "table" and profile.commands.force ~= nil
+end
 
 --- The state of one connection.
 ---

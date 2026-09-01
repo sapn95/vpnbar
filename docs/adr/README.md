@@ -17,3 +17,6 @@ whether their idea was considered or simply missed.
 | [0009](0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md) | The AWS VPN Client is driven through OpenVPN's management interface |
 | [0010](0010-a-profile-is-edited-field-by-field.md) | A profile is edited field by field, never as JSON |
 | [0011](0011-the-menu-bar-mark-is-a-template-image.md) | The menu-bar mark is a template image, and its state is the fill |
+| [0012](0012-force-is-only-offered-where-one-exists.md) | Force disconnect is only offered where one exists |
+| [0013](0013-autoconnect-is-a-plan-not-a-timer.md) | Autoconnect is a plan, not a timer |
+| [0014](0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md) | Homebrew installs it, and `vpnbar link` puts it in place |
