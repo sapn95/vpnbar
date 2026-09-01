@@ -1,8 +1,8 @@
-# ADR-0005 — The toolchain is pinned to Lua 5.4
+# 0007 — The toolchain is pinned to Lua 5.4
 
-**Status:** accepted
+**Status:** accepted, 2026-09-01.
 
-## Decision
+## The decision
 
 CI installs Lua **5.4** explicitly, and the local `make check` expects the same.
 On a Mac that means `brew install lua@5.4` beside whatever `lua` currently is.
@@ -20,7 +20,7 @@ at all: it fails while loading its own standard-library definitions, because
 the obvious `brew install lua luarocks`, therefore has a lint step that cannot
 start — which reads like a broken repository rather than a broken tool.
 
-## Consequence
+## What follows from it
 
 `README.md` names `lua@5.4` in the development setup, and the CI workflow pins
 `LUA_VERSION` in one place. When luacheck supports 5.5, this is one number in

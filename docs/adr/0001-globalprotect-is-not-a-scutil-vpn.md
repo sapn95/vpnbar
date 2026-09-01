@@ -1,6 +1,6 @@
-# ADR-0001 — GlobalProtect is not a `scutil` VPN, so it is driven through its panel
+# 0001 — GlobalProtect is not a `scutil` VPN, so it is driven through its panel
 
-**Status:** accepted
+**Status:** accepted, 2026-09-01.
 
 ## What was measured
 
@@ -19,7 +19,7 @@ The app offers no other handle: its bundle declares one URL scheme, and that
 one is the SAML callback. There is no scripting dictionary, no CLI, and the
 agent's IPC socket is root-only.
 
-## Decision
+## The decision
 
 `scutil` stays the backend for VPN services macOS genuinely owns. GlobalProtect
 gets its own backend which clicks its menu-bar panel through the accessibility
@@ -35,7 +35,7 @@ Deliberately excluded: **Disable**. It sits in the same menu, reads like a
 stronger Disconnect, and is not — it is a different action, in some
 configurations one this menu could not reverse.
 
-## Rejected
+## What was rejected
 
 - **`scutil --nc stop`** — measured above; it does nothing here.
 - **Killing the agent processes.** The tunnel is held by a root daemon; killing
@@ -43,8 +43,8 @@ configurations one this menu could not reverse.
 - **Parsing the agent's log for the state.** It is written for support cases,
   is 3 MB of WebKit noise per session, and its lines are not a contract.
 
-## Consequence
+## What follows from it
 
 A GlobalProtect profile needs Accessibility permission for Hammerspoon, and its
 state cannot be read without opening a panel — which is what
-[ADR-0003](0003-a-probe-beats-asking-the-app.md) is about.
+[ADR 0003](0003-a-probe-beats-asking-the-app.md) is about.

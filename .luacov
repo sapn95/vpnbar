@@ -3,7 +3,7 @@ return {
   -- adapter: it cannot be loaded outside Hammerspoon, and counting it as
   -- uncovered would put a permanent hole in a number that is supposed to mean
   -- something. What it is allowed to contain instead is written down in
-  -- docs/adr/0002-a-pure-core-and-a-thin-hammerspoon-shell.md.
+  -- docs/adr/0002-a-pure-core-and-a-thin-shell.md.
   include = { "VpnBar%.spoon/vpnbar/" },
   exclude = { "_spec$", "/luacov", "/busted", "/luassert" },
   runreport = false,

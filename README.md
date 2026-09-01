@@ -99,6 +99,12 @@ Start with an empty menu and `Import from scutil…`, or write
 `~/.config/vpnbar/profiles.json` by hand — the format is in
 [docs/configuration.md](docs/configuration.md).
 
+| | |
+| --- | --- |
+| [docs/configuration.md](docs/configuration.md) | Every field in the config file |
+| [docs/architecture.md](docs/architecture.md) | The modules, one refresh, one click, and the accessibility path |
+| [docs/adr/](docs/adr/) | Why it is like this, and what was rejected |
+
 ## Development
 
 ```bash
@@ -130,7 +136,9 @@ menu:
   service; the agent's menu-bar panel is a native accessibility tree, not a web
   view; its panel exposes an options popup and a status line; `scutil --nc
   list` and `--nc status` parse as the tests assume; an interface probe
-  identifies a live tunnel.
+  identifies a live tunnel. The Spoon itself loads in Hammerspoon, reads a
+  config, polls both backends, renders its glyph in the menu bar and stops
+  again without leaving anything behind.
 - **Not yet exercised against a live agent.** The click that disconnects
   GlobalProtect. The panel was read while it was *connecting*, and the control
   that appears once it is connected was not captured. The code therefore looks

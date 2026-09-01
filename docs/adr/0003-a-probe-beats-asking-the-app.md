@@ -1,8 +1,8 @@
-# ADR-0003 — An interface probe beats asking the application
+# 0003 — An interface probe beats asking the application
 
-**Status:** accepted
+**Status:** accepted, 2026-09-01.
 
-## Decision
+## The decision
 
 A profile may carry a `probe` — a CIDR, optionally narrowed to an interface
 name prefix. When it is set, the state is decided by looking for an address in
@@ -23,7 +23,7 @@ once per refresh, not once per profile — and it costs nothing.
 It is also more truthful. The panel says what the agent believes; the interface
 says what the routing table will actually do with a packet.
 
-## Consequence
+## What follows from it
 
 A GlobalProtect profile with no probe shows as **unknown** rather than lying,
 and its menu entry stays clickable anyway: refusing to act because a probe was

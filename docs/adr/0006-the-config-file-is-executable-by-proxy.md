@@ -1,8 +1,8 @@
-# ADR-0004 — The config file is executable by proxy, and stays out of the repo
+# 0006 — The config file is executable by proxy, and stays out of the repo
 
-**Status:** accepted
+**Status:** accepted, 2026-09-01.
 
-## Decision
+## The decision
 
 The `shell` backend runs the `connect`, `disconnect` and `status` commands
 exactly as the config file gives them. That file therefore has the same weight
@@ -21,7 +21,7 @@ Three things follow, and they are the whole of the security posture here:
    "Work VPN"; the machine's actual ranges and service names live only in the
    file above.
 
-## Rejected
+## What was rejected
 
 **Restricting `shell` to a vetted list of commands.** It is the escape hatch
 that lets a VPN this project has never heard of work without new code, and a
