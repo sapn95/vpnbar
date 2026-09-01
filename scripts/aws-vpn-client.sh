@@ -11,6 +11,7 @@
 #   status      connected / connecting / disconnected, on stdout
 #   connect     opens the app; the federated login is finished by hand
 #   disconnect  asks OpenVPN to terminate, through the management interface
+#   force       asks, waits, and then quits the client itself
 #
 # Nothing here needs root: the management port listens on loopback and its
 # password file is written readable by the user who owns the session.
@@ -26,9 +27,11 @@ readonly APP="AWS VPN Client"
 readonly MGMT_HOST="127.0.0.1"
 readonly MGMT_PORT="${AWS_VPN_MGMT_PORT:-35001}"
 readonly MGMT_DIR="${HOME}/.config/AWSVPNClient"
+# Seconds to wait for a polite SIGTERM before closing the app out from under it.
+readonly FORCE_WAIT="${AWS_VPN_FORCE_WAIT:-5}"
 
 usage() {
-  echo "usage: ${0##*/} status|connect|disconnect" >&2
+  echo "usage: ${0##*/} status|connect|disconnect|force" >&2
   exit 2
 }
 
@@ -100,9 +103,27 @@ cmd_disconnect() {
   management 'signal SIGTERM' >/dev/null
 }
 
+# Ask nicely, give it a moment, and if the session is still there close the
+# app that owns it. The tunnel goes with the app. This is the last resort and
+# not the everyday path: `disconnect` leaves the client running and ready.
+cmd_force() {
+  if listening; then
+    management 'signal SIGTERM' >/dev/null
+    local waited=0
+    while [ "${waited}" -lt "${FORCE_WAIT}" ]; do
+      listening || return 0
+      sleep 1
+      waited=$((waited + 1))
+    done
+  fi
+  osascript -e "tell application \"${APP}\" to quit" >/dev/null 2>&1 || true
+  echo "closed ${APP}"
+}
+
 case "${1:-}" in
   status) cmd_status ;;
   connect) cmd_connect ;;
   disconnect) cmd_disconnect ;;
+  force) cmd_force ;;
   *) usage ;;
 esac

@@ -45,6 +45,8 @@ interrupted save cannot leave a half-written config behind.
 | `order` | no | Sort key; the menu renumbers to 10, 20, 30 … whenever you move something. Defaults to position × 10. |
 | `hidden` | no | Keeps it out of the top level but still manageable under **Connections**. Defaults to `false`. |
 | `monitor` | no | Shows the state and refuses to change it: the row is greyed out and carries no action. For a tunnel that must stay up. Defaults to `false`. |
+| `autoconnect` | no | Bring it up on its own when it is down. Defaults to `false`. Cannot be combined with `monitor`. |
+| `fallback` | no | The id of another connection to try when this one will not come up. Only used together with `autoconnect`. |
 | `probe` | no | `{ "cidr": …, "interface": … }`. See below. |
 
 ### `backend: "scutil"`
@@ -75,6 +77,7 @@ it means opening the agent's panel on screen.
 | `commands.connect` | yes | Run by the shell when you click to connect. |
 | `commands.disconnect` | yes | Run by the shell when you click to disconnect. |
 | `commands.status` | no | Should print `connected`, `connecting` or `disconnected`. Without it the state is `unknown`, which is still clickable. |
+| `commands.force` | no | The harder way down. **Force disconnect** appears in the menu only for a profile that has one. |
 
 ```json
 {
@@ -134,6 +137,37 @@ that would break it should not exist
 enforced in the menu *and* in the backend, so nothing acts on such a profile by
 another route. Renaming, reordering, hiding and removing still work: those
 change this menu's list, not the tunnel.
+
+### `autoconnect` and `fallback`
+
+```json
+{
+  "id": "aws",
+  "name": "AWS VPN",
+  "backend": "shell",
+  "autoconnect": true,
+  "fallback": "aws-split",
+  "commands": { "connect": "…", "disconnect": "…", "status": "…" }
+}
+```
+
+Both are toggled and typed from the menu: **Connections → the connection → Connect
+automatically**, and the fallback is the last question **Edit…** asks.
+
+What then happens, on the refresh that already runs every ten seconds: a
+connection that is `disconnected` is asked to connect, at most one per refresh,
+never more often than once a minute. After two tries it moves to its
+`fallback` — if that one is not itself up, on its way up, or monitored. After
+six it stops, until the connection comes up, the Mac wakes, or you toggle it.
+`connecting` is left alone because it is already on its way, and `unknown` is
+left alone because asking an unreadable connection to connect is how a probe
+nobody configured turns into a login prompt every ten seconds. All of it is in
+[ADR 0013](adr/0013-autoconnect-is-a-plan-not-a-timer.md).
+
+A `fallback` must name a connection that exists in the same file — vpnbar
+refuses the config otherwise, because a dead end at the moment it is needed is
+worse than having no fallback at all. A connection cannot fall back to itself,
+and a `monitor` connection cannot autoconnect: it is never acted on.
 
 ### `probe`
 

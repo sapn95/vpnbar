@@ -220,3 +220,64 @@ describe("backends.act, monitor-only profiles", function()
     assert.equals("connected", backends.status(profile, runtime))
   end)
 end)
+
+describe("backends.canForce", function()
+  local function shell(force, extra)
+    local profile = {
+      id = "s",
+      name = "S",
+      backend = "shell",
+      commands = { connect = "up", disconnect = "down", force = force },
+    }
+    for key, value in pairs(extra or {}) do
+      profile[key] = value
+    end
+    return profile
+  end
+
+  it("is true only when a shell profile was given a force command", function()
+    assert.is_true(backends.canForce(shell("pkill -f vpn")))
+    assert.is_false(backends.canForce(shell(nil)))
+  end)
+
+  it("is false for the backends that have nothing stronger to run", function()
+    assert.is_false(backends.canForce({ id = "a", backend = "scutil", service = "a" }))
+    assert.is_false(backends.canForce({ id = "g", backend = "globalprotect", app = "GlobalProtect" }))
+  end)
+
+  it("is false for a monitored connection, whatever it was given", function()
+    assert.is_false(backends.canForce(shell("pkill -f vpn", { monitor = true })))
+  end)
+
+  it("is false for anything that is not a profile", function()
+    assert.is_false(backends.canForce(nil))
+    assert.is_false(backends.canForce("nope"))
+  end)
+end)
+
+describe("backends.act with force", function()
+  local profile = {
+    id = "s",
+    name = "S",
+    backend = "shell",
+    commands = { connect = "up", disconnect = "down", force = "pkill -f vpn" },
+  }
+
+  it("runs the force command, not the disconnect one", function()
+    local runtime = fakeRuntime()
+    assert.is_true((backends.act(profile, "force", runtime)))
+    assert.same({ "pkill -f vpn" }, runtime.calls.exec)
+  end)
+
+  it("reports a force command that failed", function()
+    local ok, err = backends.act(profile, "force", fakeRuntime({ execOk = false }))
+    assert.is_false(ok)
+    assert.matches("force command failed", err)
+  end)
+
+  it("refuses on a backend with no force at all", function()
+    local ok, err = backends.act({ id = "a", name = "A", backend = "scutil", service = "a" }, "force", fakeRuntime())
+    assert.is_false(ok)
+    assert.matches("no force for", err)
+  end)
+end)
