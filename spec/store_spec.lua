@@ -276,3 +276,23 @@ describe("store.import", function()
     assert.same({}, added)
   end)
 end)
+
+describe("store, monitor-only profiles", function()
+  it("defaults monitor to false and keeps it when set", function()
+    local cfg =
+      assert(store.normalise({ profiles = { scutilProfile(), scutilProfile({ id = "gp", monitor = true }) } }))
+    assert.is_false(cfg.profiles[1].monitor)
+    assert.is_true(cfg.profiles[2].monitor)
+  end)
+
+  it("rejects a monitor that is not a boolean", function()
+    local ok, err = store.validate(scutilProfile({ monitor = "yes" }))
+    assert.is_false(ok)
+    assert.matches("monitor must be", err)
+  end)
+
+  it("can be turned on and off by a patch", function()
+    local cfg = assert(store.add(store.empty(), scutilProfile()))
+    assert.is_true(assert(store.update(cfg, "work", { monitor = true })).profiles[1].monitor)
+  end)
+end)

@@ -115,6 +115,12 @@ end
 --- @param runtime table
 --- @return boolean ok, string|nil err
 function backends.act(profile, verb, runtime)
+  -- Enforced here as well as in the menu. The menu decides what is offered;
+  -- this decides what happens, and a monitored connection has to be safe from
+  -- a dispatch that reaches it by any other route.
+  if profile.monitor then
+    return false, ("%s is monitored only"):format(profile.name or profile.id or "this connection")
+  end
   local backend = backends.byName[profile.backend]
   if not backend or not backend[verb] then
     return false, ("no %s for a %s connection"):format(verb, tostring(profile.backend))

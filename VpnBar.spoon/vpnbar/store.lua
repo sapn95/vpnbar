@@ -155,6 +155,9 @@ function store.validate(profile)
   if profile.hidden ~= nil and type(profile.hidden) ~= "boolean" then
     return false, "hidden must be true or false"
   end
+  if profile.monitor ~= nil and type(profile.monitor) ~= "boolean" then
+    return false, "monitor must be true or false"
+  end
 
   if profile.backend == "scutil" and not isNonEmptyString(profile.service) then
     return false, "a scutil profile needs the service name shown by `scutil --nc list`"
@@ -210,6 +213,7 @@ function store.normalise(raw)
     if type(profile) == "table" then
       profile.order = profile.order or index * 10
       profile.hidden = profile.hidden or false
+      profile.monitor = profile.monitor or false
       if profile.backend == "globalprotect" then
         profile.app = profile.app or "GlobalProtect"
       end
@@ -267,6 +271,7 @@ function store.add(cfg, profile)
   local candidate = copy(profile)
   candidate.order = candidate.order or (#(cfg.profiles or {}) + 1) * 10
   candidate.hidden = candidate.hidden or false
+  candidate.monitor = candidate.monitor or false
   if candidate.backend == "globalprotect" then
     candidate.app = candidate.app or "GlobalProtect"
   end

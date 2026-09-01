@@ -80,14 +80,25 @@ function menu.build(cfg, states)
 
   for _, profile in ipairs(visible) do
     local state = states[profile.id] or "unknown"
-    items[#items + 1] = {
-      title = ("%s  %s"):format(menu.glyph(state), profile.name),
-      tooltip = ("%s — %s"):format(profile.name, menu.label(state)),
-      -- A connection whose state is unknown is still clickable: refusing to
-      -- act because the probe could not answer would make an unconfigured
-      -- probe look like a broken connection.
-      action = { kind = toggleAction(state), id = profile.id },
-    }
+    if profile.monitor then
+      -- Some tunnels are not this menu's to change: an always-on corporate VPN
+      -- is a policy, and a menu item that would breach it is worse than no
+      -- menu item. The row still reports, which is the half that is wanted.
+      items[#items + 1] = {
+        title = ("%s  %s"):format(menu.glyph(state), profile.name),
+        tooltip = ("%s — %s, monitored only"):format(profile.name, menu.label(state)),
+        disabled = true,
+      }
+    else
+      items[#items + 1] = {
+        title = ("%s  %s"):format(menu.glyph(state), profile.name),
+        tooltip = ("%s — %s"):format(profile.name, menu.label(state)),
+        -- A connection whose state is unknown is still clickable: refusing to
+        -- act because the probe could not answer would make an unconfigured
+        -- probe look like a broken connection.
+        action = { kind = toggleAction(state), id = profile.id },
+      }
+    end
   end
 
   items[#items + 1] = { separator = true }

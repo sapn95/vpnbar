@@ -39,6 +39,7 @@ interrupted save cannot leave a half-written config behind.
 | `backend` | yes | `scutil`, `globalprotect` or `shell`. |
 | `order` | no | Sort key; the menu renumbers to 10, 20, 30 … whenever you move something. Defaults to position × 10. |
 | `hidden` | no | Keeps it out of the top level but still manageable under **Connections**. Defaults to `false`. |
+| `monitor` | no | Shows the state and refuses to change it: the row is greyed out and carries no action. For a tunnel that must stay up. Defaults to `false`. |
 | `probe` | no | `{ "cidr": …, "interface": … }`. See below. |
 
 ### `backend: "scutil"`
@@ -86,6 +87,48 @@ it means opening the agent's panel on screen.
 These strings are executed as written, by you, as you — the same trust as a
 line in `~/.zshrc`. Use absolute paths: the shell Hammerspoon spawns does not
 have a login shell's `PATH`.
+
+#### The AWS VPN Client
+
+`scripts/aws-vpn-client.sh` is a ready-made helper for it, and the reason the
+`shell` backend exists: the client is in neither `scutil` nor the accessibility
+API, but it runs OpenVPN with a management interface on `127.0.0.1:35001`, and
+that answers both questions — see
+[ADR 0009](adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md).
+
+```json
+{
+  "id": "aws",
+  "name": "AWS VPN",
+  "backend": "shell",
+  "commands": {
+    "status": "$HOME/git/vpnbar/scripts/aws-vpn-client.sh status",
+    "connect": "$HOME/git/vpnbar/scripts/aws-vpn-client.sh connect",
+    "disconnect": "$HOME/git/vpnbar/scripts/aws-vpn-client.sh disconnect"
+  }
+}
+```
+
+Give it no `probe`: the client CIDR is a property of the endpoint, and a
+machine with two profiles has two of them, while the management interface
+answers for whichever session is actually running. **Connect opens the app and
+stops** — these endpoints authenticate in a browser, and the login is finished
+by hand. `AWS_VPN_MGMT_PORT` overrides the port if a future client moves it.
+
+### `monitor`
+
+```json
+{ "id": "corp", "name": "Corporate VPN", "backend": "globalprotect", "app": "GlobalProtect", "monitor": true }
+```
+
+The row reports and nothing else: greyed out, no click, tooltip
+`monitored only`. Use it where staying connected is a requirement rather than a
+choice — the state is still the most useful thing in the menu, and the button
+that would break it should not exist
+([ADR 0008](adr/0008-an-always-on-vpn-is-monitored-not-controlled.md)). It is
+enforced in the menu *and* in the backend, so nothing acts on such a profile by
+another route. Renaming, reordering, hiding and removing still work: those
+change this menu's list, not the tunnel.
 
 ### `probe`
 

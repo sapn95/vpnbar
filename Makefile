@@ -14,6 +14,7 @@ test:
 	busted --coverage
 	luacov
 	lua scripts/coverage-floor.lua
+	bats spec/*.bats
 
 # Rewrites the files rather than checking them. Never run in CI.
 format:
