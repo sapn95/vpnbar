@@ -3,6 +3,7 @@
 --- Hammerspoon. The Spoon turns each `action` descriptor into a click handler;
 --- the tests read the same descriptors and never open a menu.
 
+local form = require("vpnbar.form")
 local store = require("vpnbar.store")
 
 local menu = {}
@@ -38,24 +39,62 @@ function menu.label(state)
   return LABELS[state or "unknown"] or LABELS.unknown
 end
 
---- The menu-bar title: one glyph for the whole set, plus a count when more
---- than one connection is up, because two tunnels at once is worth noticing.
+--- The one state that speaks for the whole menu: anything connected beats
+--- anything in flight, which beats anything known to be down.
 --- @param states table map of profile id to state
 --- @return string
-function menu.title(states)
-  local best, connected = "unknown", 0
+function menu.overall(states)
+  local best = "unknown"
   for _, state in pairs(states or {}) do
     if (PRECEDENCE[state] or 0) > (PRECEDENCE[best] or 0) then
       best = state
     end
+  end
+  return best
+end
+
+--- How many tunnels are up. Shown beside the icon once it is more than one,
+--- because two at once is worth noticing and one is the normal case.
+--- @param states table map of profile id to state
+--- @return number
+function menu.connectedCount(states)
+  local connected = 0
+  for _, state in pairs(states or {}) do
     if state == "connected" then
       connected = connected + 1
     end
   end
+  return connected
+end
+
+--- The text form of the title. The menu bar draws the icon instead, but this
+--- is what a build without a canvas falls back to, and it is what the tests
+--- read.
+--- @param states table map of profile id to state
+--- @return string
+function menu.title(states)
+  local connected = menu.connectedCount(states)
   if connected > 1 then
     return GLYPHS.connected .. tostring(connected)
   end
-  return menu.glyph(best)
+  return menu.glyph(menu.overall(states))
+end
+
+-- The backend chooser is a submenu and not a dialog: hs.dialog.blockAlert
+-- takes two buttons and reads a third argument as a *style*, so the version of
+-- this that offered three of them was quietly dropping one. A submenu also
+-- puts each backend's one-line explanation where it is read, next to the thing
+-- it explains.
+local function addMenu()
+  local items = {}
+  for _, backend in ipairs(form.BACKENDS) do
+    items[#items + 1] = {
+      title = backend.label,
+      tooltip = backend.hint,
+      action = { kind = "add", backend = backend.value },
+    }
+  end
+  return items
 end
 
 local function toggleAction(state)
@@ -104,7 +143,7 @@ function menu.build(cfg, states)
   items[#items + 1] = { separator = true }
 
   local manage = {
-    { title = "Add a connection…", action = { kind = "add" } },
+    { title = "Add a connection", menu = addMenu() },
     { title = "Import from scutil…", action = { kind = "import" } },
   }
   local all = store.list(cfg, true)
@@ -123,6 +162,10 @@ function menu.build(cfg, states)
         {
           title = profile.hidden and "Show in the menu" or "Hide from the menu",
           action = { kind = "toggleHidden", id = profile.id },
+        },
+        {
+          title = profile.monitor and "Allow connect and disconnect" or "Monitor only, never change it",
+          action = { kind = "toggleMonitor", id = profile.id },
         },
         { separator = true },
         { title = "Remove…", action = { kind = "remove", id = profile.id } },

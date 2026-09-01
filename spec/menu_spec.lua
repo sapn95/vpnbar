@@ -66,7 +66,8 @@ describe("menu.build", function()
 
   it("carries the whole CRUD in the Connections submenu", function()
     local manage = find(menu.build(config("a"), {}), "Connections").menu
-    assert.is_table(find(manage, "Add a connection…"))
+    -- No ellipsis: it opens a submenu of backends, not a dialog.
+    assert.is_table(find(manage, "Add a connection").menu)
     assert.is_table(find(manage, "Import from scutil…"))
     assert.is_table(find(manage, "Open the config file"))
     local perProfile = find(manage, "A").menu
@@ -76,7 +77,14 @@ describe("menu.build", function()
         kinds[item.action.kind] = true
       end
     end
-    assert.same({ rename = true, edit = true, move = true, toggleHidden = true, remove = true }, kinds)
+    assert.same({
+      rename = true,
+      edit = true,
+      move = true,
+      toggleHidden = true,
+      toggleMonitor = true,
+      remove = true,
+    }, kinds)
   end)
 
   it("does not offer a move that would fall off the end", function()
@@ -135,5 +143,95 @@ describe("menu.build, monitor-only profiles", function()
     assert.equals("rename", deep(items, "Rename").action.kind)
     assert.equals("edit", deep(items, "Edit").action.kind)
     assert.equals("remove", deep(items, "Remove").action.kind)
+  end)
+end)
+
+describe("menu.overall and menu.connectedCount", function()
+  it("let the best state speak for the whole menu", function()
+    assert.equals("connected", menu.overall({ a = "connected", b = "disconnected" }))
+    assert.equals("connecting", menu.overall({ a = "connecting", b = "disconnected" }))
+    assert.equals("disconnected", menu.overall({ a = "disconnected", b = "unknown" }))
+    assert.equals("unknown", menu.overall({ a = "unknown" }))
+  end)
+
+  it("have an answer for an empty menu", function()
+    assert.equals("unknown", menu.overall({}))
+    assert.equals("unknown", menu.overall(nil))
+    assert.equals(0, menu.connectedCount(nil))
+  end)
+
+  it("count only what is actually up", function()
+    assert.equals(2, menu.connectedCount({ a = "connected", b = "connected", c = "connecting" }))
+  end)
+
+  it("agree with the text title, which is the fallback for both", function()
+    assert.equals("●2", menu.title({ a = "connected", b = "connected" }))
+    assert.equals("◐", menu.title({ a = "connecting" }))
+  end)
+end)
+
+describe("menu.build, the monitor toggle", function()
+  local function config1(monitor)
+    local cfg = assert(store.normalise({
+      profiles = { { id = "a", name = "A", backend = "scutil", service = "a", monitor = monitor } },
+    }))
+    return cfg
+  end
+
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  it("offers to lock a controllable connection", function()
+    local item = deep(menu.build(config1(false), {}), "Monitor only")
+    assert.same({ kind = "toggleMonitor", id = "a" }, item.action)
+  end)
+
+  it("offers to unlock a monitored one", function()
+    local item = deep(menu.build(config1(true), {}), "Allow connect and disconnect")
+    assert.same({ kind = "toggleMonitor", id = "a" }, item.action)
+  end)
+end)
+
+describe("menu.build, adding a connection", function()
+  local function addMenu()
+    for _, item in ipairs(menu.build(store.empty(), {})) do
+      if item.menu then
+        for _, sub in ipairs(item.menu) do
+          if sub.title == "Add a connection" then
+            return sub.menu
+          end
+        end
+      end
+    end
+    return nil
+  end
+
+  it("offers one entry per backend rather than a dialog with three buttons", function()
+    local items = addMenu()
+    assert.equals(3, #items)
+    local backends = {}
+    for _, item in ipairs(items) do
+      backends[item.action.backend] = item.action.kind
+    end
+    assert.same({ scutil = "add", globalprotect = "add", shell = "add" }, backends)
+  end)
+
+  it("explains each backend where the choice is made", function()
+    for _, item in ipairs(addMenu()) do
+      assert.is_string(item.tooltip)
+      assert.is_true(#item.tooltip > 10)
+    end
   end)
 end)

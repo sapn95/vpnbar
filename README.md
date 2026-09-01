@@ -12,17 +12,24 @@ is up. vpnbar puts the answer in one glyph and the action one click under it.
 It is a [Hammerspoon](https://www.hammerspoon.org) Spoon. Hammerspoon is already
 running here for the lock and sleep policy; this adds a menu, not a daemon.
 
+The mark itself is drawn, not typed: a shield, filled with a tick cut out of it
+when a tunnel is up, an outline when none is, and faint when it could not be
+read. It is a template image, so macOS tints it to the bar it is sitting on and
+the state is carried by the fill rather than by a colour that would be wrong in
+two of the three tints ([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template-image.md)).
+
 ```text
-●2                        ← the menu-bar title: two tunnels up
+●2                        ← two tunnels up: the mark, plus a count
 ├─ ●  Work VPN            → click to disconnect
 ├─ ○  Gateway VPN         → click to connect
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
 ├─ ────────────
 ├─ Connections ▸
-│    Add a connection…
+│    Add a connection ▸  scutil · GlobalProtect · Shell
 │    Import from scutil…
 │    ────────────
-│    Work VPN ▸  Rename… · Edit… · Move up · Move down · Hide · Remove…
+│    Work VPN ▸  Rename… · Edit… · Move up · Move down
+│                Hide · Monitor only · Remove…
 │    ────────────
 │    Open the config file
 │    Reload from disk
