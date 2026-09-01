@@ -108,6 +108,11 @@ jobs:
     name: secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # gitleaks lists the pull request's commits through the API, which the
+      # default token may not do on a private repository.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:

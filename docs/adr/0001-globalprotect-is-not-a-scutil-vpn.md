@@ -1,52 +1,50 @@
-# 0001 — GlobalProtect is not a `scutil` VPN
+# ADR-0001 — GlobalProtect is not a `scutil` VPN, so it is driven through its panel
 
-**Status:** accepted, 2026-09-01.
+**Status:** accepted
 
-## What was found
+## What was measured
 
-This Mac has a VPN service that macOS knows about, pushed by device
-management, named for the GlobalProtect agent and visible in `scutil --nc
-list`. It is not the tunnel. With traffic flowing over a `utun` interface, that
-service still reported:
+On the Mac this was built for, with the tunnel demonstrably up — `ifconfig`
+showing a `utun` interface holding an address out of the corporate pool —
+`scutil --nc status` for the VPN service the MDM had pushed answered
+`Disconnected`, and its `LastStatusChangeTime` was two weeks old.
 
-```text
-$ scutil --nc status "<the managed service>"
-Disconnected
-```
+The service macOS knows about and the tunnel that is actually carrying traffic
+are two different things. The Palo Alto agent runs its own network system
+extension and does not go through the `NEVPNConnection` the MDM profile
+defines. `scutil --nc stop` on that service therefore stops nothing, and
+reports success while doing it.
 
-The agent runs its own system extension and manages the tunnel itself. The
-managed service is a leftover the agent does not use.
+The app offers no other handle: its bundle declares one URL scheme, and that
+one is the SAML callback. There is no scripting dictionary, no CLI, and the
+agent's IPC socket is root-only.
 
-Nor is there another door. The application bundle ships:
+## Decision
 
-- no command-line tool,
-- no AppleScript dictionary (`.sdef`),
-- one URL scheme, and it is the SAML login callback, not a control channel.
+`scutil` stays the backend for VPN services macOS genuinely owns. GlobalProtect
+gets its own backend which clicks its menu-bar panel through the accessibility
+API — open the panel, find the control whose text contains the verb, press it,
+close the panel.
 
-Its panel, however, is a native accessibility tree — an `AXWindow` with an
-`AXPopUpButton` for the options menu and `AXStaticText` for the status, not a
-web view.
+The control is located **by its text at runtime**, searched for on the panel
+first and in its options menu second. Which of the two holds Disconnect depends
+on the state the agent is in, and hard-coding a path through that tree is how
+this breaks on the next agent release.
 
-## The decision
+Deliberately excluded: **Disable**. It sits in the same menu, reads like a
+stronger Disconnect, and is not — it is a different action, in some
+configurations one this menu could not reverse.
 
-The `globalprotect` backend drives the agent's menu-bar panel through the
-accessibility API, and reads its state either from a probe or from that same
-panel.
+## Rejected
 
-## What follows from it
+- **`scutil --nc stop`** — measured above; it does nothing here.
+- **Killing the agent processes.** The tunnel is held by a root daemon; killing
+  the user-facing agent leaves it up and leaves nothing to reconnect from.
+- **Parsing the agent's log for the state.** It is written for support cases,
+  is 3 MB of WebKit noise per session, and its lines are not a contract.
 
-- Hammerspoon needs Accessibility permission for this backend. The other two
-  work without it.
-- Reading the state costs a panel appearing on screen, so it happens on demand
-  and never on the timer — [ADR 0003](0003-a-probe-beats-asking-the-app.md).
-- Controls are found by their text, not by position, so an agent update that
-  moves Disconnect from the panel into the options menu changes nothing here.
-- Nothing presses *Disable*. On that panel it is a different action with a
-  different meaning, and this menu cannot undo it.
+## Consequence
 
-## What was not settled
-
-The panel was captured while the agent was *connecting*. The exact element that
-appears once it is connected was not, which is why the search covers the panel
-and the options menu and matches on text. The first real disconnect is still
-the first real disconnect.
+A GlobalProtect profile needs Accessibility permission for Hammerspoon, and its
+state cannot be read without opening a panel — which is what
+[ADR-0003](0003-a-probe-beats-asking-the-app.md) is about.

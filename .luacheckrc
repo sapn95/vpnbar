@@ -1,4 +1,8 @@
 std = "lua54"
+
+-- luarocks drops a project tree with vendored dependencies into whatever
+-- directory it is run in. None of it is ours.
+exclude_files = { ".luarocks/", "lua_modules/" }
 max_line_length = 120
 
 -- Hammerspoon injects this one global into every Spoon.

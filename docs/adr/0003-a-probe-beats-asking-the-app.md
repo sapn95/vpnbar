@@ -1,38 +1,30 @@
-# 0003 — An interface probe beats asking the app
+# ADR-0003 — An interface probe beats asking the application
 
-**Status:** accepted, 2026-09-01.
+**Status:** accepted
 
-## The problem
+## Decision
 
-The menu polls. Every poll needs a state per connection, and the three ways of
-getting one are not equally priced:
+A profile may carry a `probe` — a CIDR, optionally narrowed to an interface
+name prefix. When it is set, the state is decided by looking for an address in
+that block in one `ifconfig`, and the backend's own answer is not asked for.
 
-| Way | Cost |
-| --- | --- |
-| Read `ifconfig` | One command for the whole menu, nothing on screen |
-| `scutil --nc status` | One command per connection |
-| A `shell` status command | Whatever the user's command costs |
-| Open an agent's panel | A window appears on screen, every time |
+Where a profile has no probe, the backend answers. For `scutil` that is one
+cheap command. For GlobalProtect it means **opening the panel**, so that read
+is allowed only on an explicit *Refresh now* — never on the timer, and never
+when the menu is merely redrawn.
 
-The last one is not a poll. It is a window opening every ten seconds.
+## Why
 
-## The decision
+The timer runs every ten seconds for as long as the Mac is awake. A state read
+that opens a panel, at that cadence, is a menu that takes the screen away from
+whoever is using it. The probe is one `ifconfig` for the whole set — parsed
+once per refresh, not once per profile — and it costs nothing.
 
-A profile may carry a `probe` — a CIDR that only that VPN hands out, and
-optionally an interface prefix. Where a probe is configured it answers, and the
-backend is not asked at all.
+It is also more truthful. The panel says what the agent believes; the interface
+says what the routing table will actually do with a packet.
 
-Panel reads are allowed **only** for an explicit refresh: the timer builds its
-runtime with `allowPanelReads = false`, and `runtime.panel` then returns
-`unknown` without touching anything.
+## Consequence
 
-## What follows from it
-
-- A `globalprotect` connection without a probe shows `unknown` until somebody
-  clicks **Refresh now**. That is a documented, visible gap rather than a
-  window that opens by itself, and the fix is one line of config.
-- `unknown` stays clickable. Refusing to act because a probe was not configured
-  would make a missing setting look like a broken tunnel.
-- A probe matching a range something else also uses reports a tunnel that is
-  not there. The documentation says to pick a block unique to that VPN; nothing
-  can check it.
+A GlobalProtect profile with no probe shows as **unknown** rather than lying,
+and its menu entry stays clickable anyway: refusing to act because a probe was
+never configured would make an unconfigured probe look like a broken VPN.
