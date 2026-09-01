@@ -15,3 +15,5 @@ whether their idea was considered or simply missed.
 | [0007](0007-the-toolchain-is-pinned-to-lua-5-4.md) | The toolchain is pinned to Lua 5.4 |
 | [0008](0008-an-always-on-vpn-is-monitored-not-controlled.md) | An always-on VPN is monitored, not controlled |
 | [0009](0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md) | The AWS VPN Client is driven through OpenVPN's management interface |
+| [0010](0010-a-profile-is-edited-field-by-field.md) | A profile is edited field by field, never as JSON |
+| [0011](0011-the-menu-bar-mark-is-a-template-image.md) | The menu-bar mark is a template image, and its state is the fill |
