@@ -79,21 +79,32 @@ a probe**, or reading its state means opening its panel.
 ## Tunnels that must stay up
 
 Not every VPN in the menu is one you are allowed to drop. A profile with
-`"monitor": true` shows its glyph, its name and its state, is greyed out, and
-carries no action at all — because a menu item that would breach an always-on
-requirement is one mis-click, and the mis-click looks exactly like the thing
-the menu is for. The rule is enforced in the menu *and* in the backend, so no
-other route reaches it either. Renaming, reordering and removing still work:
-those change this menu's list, not the tunnel
-([ADR 0008](docs/adr/0008-an-always-on-vpn-is-monitored-not-controlled.md)).
+`"protected": true` can never be disconnected from here, and can always be
+connected — the protection points one way. Up, the row reports and is greyed
+out; down, it offers a single click to bring it back.
+
+That direction matters: a tunnel that must stay up is exactly the one worth
+bringing back automatically, and exactly the one that should have a fallback
+when it will not come. Enforced in the menu *and* in the backend, so no other
+route reaches it either
+([ADR 0008](docs/adr/0008-an-always-on-vpn-is-protected-from-being-disconnected.md)).
 
 ## Connecting on its own, and falling back
 
 A connection set to **Connect automatically** is asked to come up whenever it
 is down — at most one per refresh, never more than once a minute. After two
-tries it moves to its **fallback**, if that one is not already up, on its way
-up, or monitored. After six it stops until something happens that makes the old
-failures meaningless: the connection comes up, the Mac wakes, or you toggle it.
+tries it moves to its **fallback**, if that one is not already up or on its way
+up. After six it stops until something happens that makes the old failures
+meaningless: the connection comes up, the Mac wakes, or you toggle it.
+
+And when the wanted one does come up, the stand-in is taken back down. Two
+tunnels to the same place is not twice the connectivity, it is one routing
+table with an argument in it. Only what autoconnect itself started, though —
+a tunnel opened by hand is nobody's to close but yours.
+
+The pairing this was built for: the always-on corporate VPN is `protected` and
+set to connect automatically, with the AWS client as its `fallback`. AWS then
+only ever comes up when the first one would not.
 
 All of that is one pure function returning at most one action, so the policy is
 nineteen fast tests rather than an afternoon of waiting

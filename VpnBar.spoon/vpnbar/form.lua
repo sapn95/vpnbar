@@ -196,7 +196,7 @@ function form.applies(field, answers)
 end
 
 --- Assemble a profile from the answers, keeping anything the form does not
---- ask about — `order`, `hidden`, `monitor` — exactly as it was.
+--- ask about — `order`, `hidden`, `protected` — exactly as it was.
 --- @param backend string
 --- @param answers table map of key to string
 --- @param base table|nil the profile being edited

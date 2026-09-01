@@ -172,14 +172,14 @@ describe("form.build", function()
     assert.matches("scutil %-%-nc list", err)
   end)
 
-  it("keeps the id, order, hidden and monitor of the profile being edited", function()
+  it("keeps the id, order, hidden and protection of the profile being edited", function()
     local base =
-      { id = "kept", name = "Old", backend = "scutil", service = "Old", order = 40, hidden = true, monitor = true }
+      { id = "kept", name = "Old", backend = "scutil", service = "Old", order = 40, hidden = true, protected = true }
     local profile = assert(form.build("scutil", answersFor(), base))
     assert.equals("kept", profile.id)
     assert.equals(40, profile.order)
     assert.is_true(profile.hidden)
-    assert.is_true(profile.monitor)
+    assert.is_true(profile.protected)
     assert.equals("Work VPN", profile.name)
   end)
 
