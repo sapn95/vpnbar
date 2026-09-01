@@ -87,6 +87,28 @@ other route reaches it either. Renaming, reordering and removing still work:
 those change this menu's list, not the tunnel
 ([ADR 0008](docs/adr/0008-an-always-on-vpn-is-monitored-not-controlled.md)).
 
+## Connecting on its own, and falling back
+
+A connection set to **Connect automatically** is asked to come up whenever it
+is down — at most one per refresh, never more than once a minute. After two
+tries it moves to its **fallback**, if that one is not already up, on its way
+up, or monitored. After six it stops until something happens that makes the old
+failures meaningless: the connection comes up, the Mac wakes, or you toggle it.
+
+All of that is one pure function returning at most one action, so the policy is
+nineteen fast tests rather than an afternoon of waiting
+([ADR 0013](docs/adr/0013-autoconnect-is-a-plan-not-a-timer.md)).
+
+## Force disconnect
+
+Offered **only** where there is genuinely something stronger to run — a `shell`
+profile whose config gives it a `commands.force`. Never for `scutil` or
+GlobalProtect, where it would run the identical command under a stronger name
+([ADR 0012](docs/adr/0012-force-is-only-offered-where-one-exists.md)).
+
+The AWS helper's version is the shape to copy: ask through the management
+interface, wait, and only then quit the client — the tunnel goes with it.
+
 ## The probe
 
 A probe says "this VPN, and only this VPN, hands out an address in this range":
@@ -105,6 +127,18 @@ enough, and a `globalprotect` connection reads `unknown` until you click
 ## Install
 
 ```bash
+brew tap sapn95/vpnbar git@github.com:sapn95/vpnbar.git
+brew install --HEAD sapn95/vpnbar/vpnbar
+vpnbar link
+```
+
+The tap is the repository itself, over SSH: it is private, and a formula in a
+public tap would need a token in the environment of whoever runs `brew install`
+([ADR 0014](docs/adr/0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md)).
+`vpnbar link` is a separate step because a formula must not write into a home
+directory. From a checkout instead:
+
+```bash
 git clone git@github.com:sapn95/vpnbar.git ~/git/vpnbar
 ~/git/vpnbar/scripts/install.sh
 ```
@@ -119,6 +153,13 @@ The installer symlinks rather than copies, so `git pull` is the whole update.
 Hammerspoon needs Accessibility permission for the `globalprotect` backend; it
 already has it here for other reasons, and without it the other two backends
 still work.
+
+**If the icon does not appear, run `vpnbar doctor` before anything else.** It
+checks Hammerspoon, the link and the line in `init.lua`, and then asks
+Hammerspoon where the icon actually is. The usual answer is that it is drawing
+perfectly, in the menu bar, at x = −9224, because a menu bar manager is holding
+it off-screen — in Bartender that is **Settings → Menu Bar Layout**, where the
+item has to be dragged from *Hidden Items* into *Shown Items*.
 
 Start with an empty menu and `Import from scutil…`, or write
 `~/.config/vpnbar/profiles.json` by hand — the format is in

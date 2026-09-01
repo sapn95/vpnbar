@@ -83,6 +83,7 @@ describe("menu.build", function()
       move = true,
       toggleHidden = true,
       toggleMonitor = true,
+      toggleAutoconnect = true,
       remove = true,
     }, kinds)
   end)
@@ -233,5 +234,86 @@ describe("menu.build, adding a connection", function()
       assert.is_string(item.tooltip)
       assert.is_true(#item.tooltip > 10)
     end
+  end)
+end)
+
+describe("menu.build, force disconnect", function()
+  local function shellProfile(force)
+    local commands = { connect = "up", disconnect = "down" }
+    commands.force = force
+    return assert(store.normalise({
+      profiles = { { id = "s", name = "Shell VPN", backend = "shell", commands = commands } },
+    }))
+  end
+
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  it("offers it when the connection has a harder path", function()
+    local item = deep(menu.build(shellProfile("pkill -f vpn"), {}), "Force disconnect")
+    assert.same({ kind = "force", id = "s" }, item.action)
+  end)
+
+  it("does not offer it when there is nothing stronger to run", function()
+    -- A greyed-out entry here would promise something the menu cannot do:
+    -- `scutil --nc stop` has no harder form, and neither has the panel click.
+    assert.is_nil(deep(menu.build(shellProfile(nil), {}), "Force disconnect"))
+    local scutil = assert(store.normalise({
+      profiles = { { id = "a", name = "A", backend = "scutil", service = "A" } },
+    }))
+    assert.is_nil(deep(menu.build(scutil, {}), "Force disconnect"))
+  end)
+
+  it("never offers it on a monitored connection", function()
+    local cfg = shellProfile("pkill -f vpn")
+    cfg.profiles[1].monitor = true
+    assert.is_nil(deep(menu.build(cfg, {}), "Force disconnect"))
+  end)
+end)
+
+describe("menu.build, the autoconnect toggle", function()
+  local function cfg(fields)
+    local profile = { id = "a", name = "A", backend = "scutil", service = "a" }
+    for key, value in pairs(fields or {}) do
+      profile[key] = value
+    end
+    return assert(store.normalise({ profiles = { profile } }))
+  end
+
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  it("offers to switch it on and off", function()
+    assert.same({ kind = "toggleAutoconnect", id = "a" }, deep(menu.build(cfg(), {}), "Connect automatically").action)
+    local on = cfg({ autoconnect = true })
+    assert.is_truthy(deep(menu.build(on, {}), "Do not connect automatically"))
+  end)
+
+  it("greys it out on a monitored connection, which is never acted on", function()
+    assert.is_true(deep(menu.build(cfg({ monitor = true }), {}), "Connect automatically").disabled)
   end)
 end)

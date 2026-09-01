@@ -18,24 +18,27 @@ icon.SIZE = 16
 local INK = { white = 0, alpha = 1 }
 local FAINT = { white = 0, alpha = 0.45 }
 
--- A shield as five points: flat shoulders, straight flanks, a blunt point.
--- Curves were tried and are mud at eighteen points; so were rounded shoulders.
+-- A shield: square shoulders, flanks that curve in, and a rounded point. The
+-- curves are the whole difference between a shield and a baseball home plate,
+-- which is what the straight-flanked version read as at the size it is
+-- actually drawn. `c1`/`c2` are the Bézier controls for the curve *into* that
+-- point, in the same unit square as the rest.
 local SHIELD = {
-  { x = 0.14, y = 0.11 },
-  { x = 0.86, y = 0.11 },
-  { x = 0.86, y = 0.50 },
-  { x = 0.50, y = 0.91 },
-  { x = 0.14, y = 0.50 },
+  { x = 0.19, y = 0.13 },
+  { x = 0.81, y = 0.13 },
+  { x = 0.81, y = 0.44 },
+  { x = 0.50, y = 0.89, c1x = 0.81, c1y = 0.67, c2x = 0.66, c2y = 0.79 },
+  { x = 0.19, y = 0.44, c1x = 0.34, c1y = 0.79, c2x = 0.19, c2y = 0.67 },
 }
 
 -- The tick is cut *out* of the filled shield rather than drawn on top of it.
 -- On a template image the cut is transparent, so it takes the colour of the
--- menu bar behind it and stays legible whichever way macOS tints the mark —
+-- menu bar behind it and stays legible whichever way macOS tints the mark --
 -- which a second colour on top would not.
 local TICK = {
-  { x = 0.32, y = 0.42 },
+  { x = 0.34, y = 0.44 },
   { x = 0.45, y = 0.56 },
-  { x = 0.70, y = 0.28 },
+  { x = 0.68, y = 0.30 },
 }
 
 --- The shield outline, scaled to `size`.
@@ -44,7 +47,12 @@ local TICK = {
 function icon.shield(size)
   local points = {}
   for index, point in ipairs(SHIELD) do
-    points[index] = { x = point.x * size, y = point.y * size }
+    local scaled = { x = point.x * size, y = point.y * size }
+    if point.c1x then
+      scaled.c1x, scaled.c1y = point.c1x * size, point.c1y * size
+      scaled.c2x, scaled.c2y = point.c2x * size, point.c2y * size
+    end
+    points[index] = scaled
   end
   return points
 end
@@ -57,7 +65,7 @@ local function shieldElement(size, action, colour)
     action = action,
     fillColor = colour,
     strokeColor = colour,
-    strokeWidth = size / 9,
+    strokeWidth = size / 11,
     strokeJoinStyle = "round",
   }
 end
@@ -73,7 +81,7 @@ local function tickElement(size)
     coordinates = points,
     action = "stroke",
     strokeColor = INK,
-    strokeWidth = size / 7,
+    strokeWidth = size / 8,
     strokeCapStyle = "round",
     strokeJoinStyle = "round",
     compositeRule = "clear",
@@ -83,8 +91,8 @@ end
 local function dot(size, colour)
   return {
     type = "circle",
-    center = { x = size * 0.5, y = size * 0.42 },
-    radius = size * 0.15,
+    center = { x = size * 0.5, y = size * 0.44 },
+    radius = size * 0.13,
     action = "fill",
     fillColor = colour,
   }

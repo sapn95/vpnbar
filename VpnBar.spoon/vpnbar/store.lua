@@ -158,6 +158,18 @@ function store.validate(profile)
   if profile.monitor ~= nil and type(profile.monitor) ~= "boolean" then
     return false, "monitor must be true or false"
   end
+  if profile.autoconnect ~= nil and type(profile.autoconnect) ~= "boolean" then
+    return false, "autoconnect must be true or false"
+  end
+  if profile.fallback ~= nil and not isNonEmptyString(profile.fallback) then
+    return false, "fallback must be the id of another connection"
+  end
+  if profile.fallback == profile.id then
+    return false, "a connection cannot fall back to itself"
+  end
+  if profile.monitor and profile.autoconnect then
+    return false, "a monitored connection is never acted on, so it cannot autoconnect"
+  end
 
   if profile.backend == "scutil" and not isNonEmptyString(profile.service) then
     return false, "a scutil profile needs the service name shown by `scutil --nc list`"
@@ -175,6 +187,9 @@ function store.validate(profile)
     end
     if commands.status ~= nil and not isNonEmptyString(commands.status) then
       return false, "commands.status must be a command that prints the state"
+    end
+    if commands.force ~= nil and not isNonEmptyString(commands.force) then
+      return false, "commands.force must be a command that brings the tunnel down the hard way"
     end
   end
 
@@ -214,6 +229,7 @@ function store.normalise(raw)
       profile.order = profile.order or index * 10
       profile.hidden = profile.hidden or false
       profile.monitor = profile.monitor or false
+      profile.autoconnect = profile.autoconnect or false
       if profile.backend == "globalprotect" then
         profile.app = profile.app or "GlobalProtect"
       end
@@ -227,6 +243,13 @@ function store.normalise(raw)
     end
     seen[profile.id] = true
     cfg.profiles[#cfg.profiles + 1] = profile
+  end
+  -- Checked once every id is known: a fallback naming a connection that is not
+  -- there would be a silent dead end at exactly the moment it is needed.
+  for index, profile in ipairs(cfg.profiles) do
+    if profile.fallback and not seen[profile.fallback] then
+      return nil, ("profile #%d: fallback %q is not a connection in this file"):format(index, profile.fallback)
+    end
   end
   return cfg
 end
@@ -272,6 +295,7 @@ function store.add(cfg, profile)
   candidate.order = candidate.order or (#(cfg.profiles or {}) + 1) * 10
   candidate.hidden = candidate.hidden or false
   candidate.monitor = candidate.monitor or false
+  candidate.autoconnect = candidate.autoconnect or false
   if candidate.backend == "globalprotect" then
     candidate.app = candidate.app or "GlobalProtect"
   end

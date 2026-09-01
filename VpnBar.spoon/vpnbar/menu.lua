@@ -3,6 +3,7 @@
 --- Hammerspoon. The Spoon turns each `action` descriptor into a click handler;
 --- the tests read the same descriptors and never open a menu.
 
+local backends = require("vpnbar.backends")
 local form = require("vpnbar.form")
 local store = require("vpnbar.store")
 
@@ -97,6 +98,17 @@ local function addMenu()
   return items
 end
 
+-- Only where `backends.canForce` says there is something stronger to run.
+-- Everywhere else this returns a separator, which the renderer collapses --
+-- a greyed-out "Force disconnect" on a connection that has no such thing
+-- would be a promise the menu cannot keep.
+local function forceItem(profile)
+  if not backends.canForce(profile) then
+    return { separator = true }
+  end
+  return { title = "Force disconnect", action = { kind = "force", id = profile.id } }
+end
+
 local function toggleAction(state)
   if state == "connected" then
     return "disconnect"
@@ -167,7 +179,15 @@ function menu.build(cfg, states)
           title = profile.monitor and "Allow connect and disconnect" or "Monitor only, never change it",
           action = { kind = "toggleMonitor", id = profile.id },
         },
+        {
+          title = profile.autoconnect and "Do not connect automatically" or "Connect automatically",
+          -- A monitored connection is never acted on, so it cannot autoconnect
+          -- either; `store` refuses the combination outright.
+          disabled = profile.monitor or false,
+          action = { kind = "toggleAutoconnect", id = profile.id },
+        },
         { separator = true },
+        forceItem(profile),
         { title = "Remove…", action = { kind = "remove", id = profile.id } },
       },
     }

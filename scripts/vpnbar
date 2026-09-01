@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# The command line half of vpnbar: link the Spoon into Hammerspoon, take it out
+# again, and say what is wrong when the icon is not where it should be.
+#
+# Homebrew installs the Spoon into its own prefix and must not write to a home
+# directory, so linking is a separate step the user asks for. `doctor` exists
+# because the first thing that goes wrong is not vpnbar at all — it is a menu
+# bar manager holding the icon off-screen, which looks exactly like a program
+# that failed to start.
+set -euo pipefail
+
+readonly SPOONS="${HOME}/.hammerspoon/Spoons"
+# Overridable for the tests, which have no Hammerspoon to find.
+readonly HAMMERSPOON_APP="${VPNBAR_HAMMERSPOON_APP:-/Applications/Hammerspoon.app}"
+readonly INIT="${HOME}/.hammerspoon/init.lua"
+readonly LOAD_LINE='hs.loadSpoon("VpnBar"):start()'
+# What counts as "init.lua loads it". Matching the whole suggested line would
+# call a config that keeps a handle on the Spoon — the two-line form — broken.
+readonly LOAD_MARK='loadSpoon("VpnBar")'
+
+# `timeout` is GNU and not on a stock macOS. A Hammerspoon that is wedged, or
+# whose ipc is off, must not hang the doctor.
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  "$@" &
+  local worker=$!
+  (
+    sleep "${seconds}"
+    kill -TERM "${worker}" 2>/dev/null
+  ) &
+  local watcher=$!
+  wait "${worker}" 2>/dev/null
+  local code=$?
+  kill -TERM "${watcher}" 2>/dev/null
+  wait "${watcher}" 2>/dev/null || true
+  return "${code}"
+}
+
+# Homebrew puts a symlink in its bin and the real file in the Cellar, so the
+# path this script was invoked by says nothing about where its Spoon is.
+resolve_symlinks() {
+  local target="$1" link
+  while [ -L "${target}" ]; do
+    link="$(readlink "${target}")"
+    case "${link}" in
+      /*) target="${link}" ;;
+      *) target="$(dirname "${target}")/${link}" ;;
+    esac
+  done
+  printf '%s\n' "${target}"
+}
+
+# Where the Spoon we install from lives: `libexec` under the Homebrew prefix
+# when installed as a formula, the repository root when run from a checkout.
+spoon_source() {
+  local here
+  here="$(cd "$(dirname "$(resolve_symlinks "${BASH_SOURCE[0]}")")/.." && pwd)"
+  if [ -d "${here}/VpnBar.spoon" ]; then
+    printf '%s\n' "${here}/VpnBar.spoon"
+  else
+    printf '%s\n' "${here}/libexec/VpnBar.spoon"
+  fi
+}
+
+ok() { printf '  ok    %s\n' "$1"; }
+bad() { printf '  FAIL  %s\n' "$1"; }
+note() { printf '        %s\n' "$1"; }
+
+cmd_link() {
+  local source
+  source="$(spoon_source)"
+  [ -d "${source}" ] || {
+    echo "no VpnBar.spoon at ${source}" >&2
+    exit 1
+  }
+  mkdir -p "${SPOONS}"
+  ln -sfn "${source}" "${SPOONS}/VpnBar.spoon"
+  echo "linked ${SPOONS}/VpnBar.spoon -> ${source}"
+  if [ -f "${INIT}" ] && grep -qF "${LOAD_MARK}" "${INIT}"; then
+    echo "${INIT} already loads it"
+  else
+    echo
+    echo "Add this to ${INIT} and reload Hammerspoon:"
+    echo
+    echo "    ${LOAD_LINE}"
+  fi
+}
+
+cmd_unlink() {
+  rm -f "${SPOONS}/VpnBar.spoon"
+  echo "removed ${SPOONS}/VpnBar.spoon"
+  echo "The line in ${INIT} is left alone; take it out by hand."
+}
+
+cmd_doctor() {
+  local failures=0
+
+  echo "Hammerspoon"
+  if [ -d "${HAMMERSPOON_APP}" ]; then
+    ok "installed"
+  else
+    bad "not installed — brew install --cask hammerspoon"
+    failures=$((failures + 1))
+  fi
+  if pgrep -f 'Hammerspoon.app/Contents/MacOS' >/dev/null 2>&1; then
+    ok "running"
+  else
+    bad "not running — open -a Hammerspoon"
+    failures=$((failures + 1))
+  fi
+
+  echo "The Spoon"
+  if [ -L "${SPOONS}/VpnBar.spoon" ] || [ -d "${SPOONS}/VpnBar.spoon" ]; then
+    ok "linked into ${SPOONS}"
+  else
+    bad "not linked — run: vpnbar link"
+    failures=$((failures + 1))
+  fi
+  if [ -f "${INIT}" ] && grep -qF "${LOAD_MARK}" "${INIT}"; then
+    ok "loaded from init.lua"
+  else
+    bad "init.lua does not load it — add: ${LOAD_LINE}"
+    failures=$((failures + 1))
+  fi
+
+  echo "The menu bar"
+  local frame=""
+  if command -v hs >/dev/null 2>&1; then
+    frame="$(run_with_timeout 6 hs -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d", f.x, f.w)' 2>/dev/null | tail -1 || true)"
+  fi
+  case "${frame}" in
+    "")
+      note "cannot ask Hammerspoon — enable its command line with hs.ipc"
+      ;;
+    none)
+      bad "vpnbar is not running inside Hammerspoon"
+      failures=$((failures + 1))
+      ;;
+    *)
+      local x="${frame%% *}"
+      if [ "${x}" -ge 0 ] 2>/dev/null; then
+        ok "icon is on screen at x=${x}"
+      else
+        # This is the one nobody guesses. Bartender, Ice, Vanilla and the rest
+        # hide an item by parking it at a large negative x. The item is running
+        # and drawing; it is simply not where anyone can see it.
+        bad "icon is parked off-screen at x=${x}"
+        note "A menu bar manager is hiding it. In Bartender: Settings →"
+        note "Menu Bar Items → Hammerspoon → Show. Ice and Vanilla have the"
+        note "same idea under a different name."
+        failures=$((failures + 1))
+      fi
+      ;;
+  esac
+
+  echo "Connections"
+  local config="${HOME}/.config/vpnbar/profiles.json"
+  if [ -f "${config}" ]; then
+    ok "config at ${config}"
+  else
+    note "no config yet — the menu writes one when you add a connection"
+  fi
+
+  echo
+  if [ "${failures}" -eq 0 ]; then
+    echo "Nothing to fix."
+  else
+    echo "${failures} thing(s) to fix."
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  link) cmd_link ;;
+  unlink) cmd_unlink ;;
+  doctor) cmd_doctor ;;
+  *)
+    echo "usage: ${0##*/} link|unlink|doctor" >&2
+    exit 2
+    ;;
+esac

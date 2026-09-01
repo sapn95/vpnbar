@@ -18,8 +18,10 @@ setup() {
 
   export STUB_SENT="${TMP}/sent"
   export STUB_OPENED="${TMP}/opened"
+  export STUB_OSASCRIPT="${TMP}/osascript"
   : >"${STUB_SENT}"
   : >"${STUB_OPENED}"
+  : >"${STUB_OSASCRIPT}"
 
   cat >"${STUB}/nc" <<'EOF'
 #!/usr/bin/env bash
@@ -37,10 +39,15 @@ EOF
 printf '%s\n' "$*" >>"${STUB_OPENED}"
 EOF
 
+  cat >"${STUB}/osascript" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${STUB_OSASCRIPT}"
+EOF
+
   # Real sleeps would add a second to every test that talks to the socket.
   printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"
 
-  chmod +x "${STUB}/nc" "${STUB}/open" "${STUB}/sleep"
+  chmod +x "${STUB}/nc" "${STUB}/open" "${STUB}/osascript" "${STUB}/sleep"
   export VPNBAR_PATH="${STUB}:/usr/bin:/bin"
 }
 
@@ -127,4 +134,35 @@ password_file() {
 
   run "${SCRIPT}"
   [ "${status}" -eq 2 ]
+}
+
+@test "force asks politely first" {
+  export STUB_NC_LISTENING=1
+  export AWS_VPN_FORCE_WAIT=1
+  run "${SCRIPT}" force
+  [ "${status}" -eq 0 ]
+  grep -q '^signal SIGTERM$' "${STUB_SENT}"
+}
+
+@test "force closes the app when the session will not go" {
+  # The stub keeps answering, which is exactly the case force exists for.
+  export STUB_NC_LISTENING=1
+  export AWS_VPN_FORCE_WAIT=1
+  run "${SCRIPT}" force
+  grep -q 'AWS VPN Client' "${STUB_OSASCRIPT}"
+  grep -q 'quit' "${STUB_OSASCRIPT}"
+}
+
+@test "force closes the app even when nothing is listening" {
+  export STUB_NC_LISTENING=0
+  run "${SCRIPT}" force
+  [ "${status}" -eq 0 ]
+  [ ! -s "${STUB_SENT}" ]
+  grep -q 'quit' "${STUB_OSASCRIPT}"
+}
+
+@test "disconnect never closes the app" {
+  export STUB_NC_LISTENING=1
+  run "${SCRIPT}" disconnect
+  [ ! -s "${STUB_OSASCRIPT}" ]
 }

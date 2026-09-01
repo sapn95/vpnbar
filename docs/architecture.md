@@ -1,6 +1,6 @@
 # Architecture
 
-Six modules decide things and one file talks to Hammerspoon.
+Seven modules decide things and one file talks to Hammerspoon.
 
 ```mermaid
 flowchart TD
@@ -8,6 +8,8 @@ flowchart TD
     M -->|"config + states"| U["vpnbar/menu.lua<br/>menu model"]
     M -->|"backend + answers"| F["vpnbar/form.lua<br/>fields, one per prompt"]
     M -->|"state"| I["vpnbar/icon.lua<br/>the menu-bar mark"]
+    M -->|"config + states + memory"| A["vpnbar/autoconnect.lua<br/>what to connect, if anything"]
+    A --> S
     F --> S
     U --> F
     M -->|"profile + runtime"| B["vpnbar/backends.lua<br/>scutil · globalprotect · shell"]
@@ -17,8 +19,8 @@ flowchart TD
     B --> R
 ```
 
-`store`, `menu`, `parse`, `backends`, `form` and `icon` never call
-Hammerspoon. `backends` is
+`store`, `menu`, `parse`, `backends`, `form`, `icon` and `autoconnect` never
+call Hammerspoon. `backends` is
 handed a **runtime** — four functions — and asks it for everything, which is
 how a test drives the real decision code with a table of canned answers. See
 [ADR 0002](adr/0002-a-pure-core-and-a-thin-shell.md).
@@ -67,6 +69,14 @@ answers back into a profile, keeps what the form never asked about, drops the
 previous backend's fields, and validates before anything reaches disk. Add and
 Edit are the same walk with a different starting point
 ([ADR 0010](adr/0010-a-profile-is-edited-field-by-field.md)).
+
+## One autoconnect
+
+After the states are read, `autoconnect.plan` is asked for **one** thing to
+connect. It has no timers and no state: the adapter owns the memory table of
+what has been tried and when, clears it when a connection comes up or the Mac
+wakes, and acts on at most one answer per refresh
+([ADR 0013](adr/0013-autoconnect-is-a-plan-not-a-timer.md)).
 
 ## The mark in the menu bar
 

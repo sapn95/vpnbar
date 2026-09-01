@@ -21,6 +21,7 @@ package.path = obj.spoonPath .. "?.lua;" .. obj.spoonPath .. "?/init.lua;" .. pa
 
 local store = require("vpnbar.store")
 local menu = require("vpnbar.menu")
+local autoconnect = require("vpnbar.autoconnect")
 local backends = require("vpnbar.backends")
 local form = require("vpnbar.form")
 local icon = require("vpnbar.icon")
@@ -326,6 +327,20 @@ function obj:refresh(allowPanelReads)
     states[profile.id] = backends.status(profile, runtime)
   end
   self.states = states
+
+  -- At most one connection is started per refresh, and only from this one
+  -- place. The policy — cooldown, how many tries before the fallback, when to
+  -- give up — is all in vpnbar/autoconnect.lua and under test there.
+  local plan = autoconnect.plan(self.config, states, self.attempts, os.time())
+  if plan then
+    local profile = store.get(self.config, plan.id)
+    autoconnect.remember(self.attempts, plan.id, os.time())
+    self.logger.i(("autoconnect: %s (%s)"):format(plan.id, plan.reason))
+    if profile then
+      backends.act(profile, "connect", runtime)
+    end
+  end
+
   if self.menubar then
     local image = menubarIcon(menu.overall(states))
     if image then
@@ -511,6 +526,18 @@ function obj:dispatch(action)
         self:refresh()
       end
     end,
+    force = function()
+      self:act(action.id, "force")
+    end,
+    toggleAutoconnect = function()
+      local profile = store.get(self.config, action.id)
+      if profile and self:apply(store.update(self.config, action.id, { autoconnect = not profile.autoconnect })) then
+        -- A connection just switched on should be tried now, not after
+        -- whatever its previous failures had earned it.
+        autoconnect.forget(self.attempts, action.id)
+        self:refresh()
+      end
+    end,
     toggleMonitor = function()
       local profile = store.get(self.config, action.id)
       if profile and self:apply(store.update(self.config, action.id, { monitor = not profile.monitor })) then
@@ -547,7 +574,12 @@ function obj:hammerspoonMenu(items)
   local out = {}
   for _, item in ipairs(items) do
     if item.separator then
-      out[#out + 1] = { title = "-" }
+      -- Collapse a run of them, and never open with one. Items that appear
+      -- conditionally leave separators behind when they are absent, and two
+      -- lines with nothing between them read as a bug.
+      if #out > 0 and out[#out].title ~= "-" then
+        out[#out + 1] = { title = "-" }
+      end
     else
       local entry = { title = item.title, disabled = item.disabled or false, tooltip = item.tooltip }
       if item.menu then
@@ -569,6 +601,9 @@ end
 function obj:init()
   self.states = {}
   self.config = store.empty()
+  -- What autoconnect has already tried, and when. Owned here, reasoned about
+  -- in vpnbar/autoconnect.lua.
+  self.attempts = {}
   return self
 end
 
@@ -590,6 +625,9 @@ function obj:start()
   -- A tunnel does not survive sleep, and the title should not claim otherwise.
   self.wake = hs.caffeinate.watcher.new(function(event)
     if event == hs.caffeinate.watcher.systemDidWake then
+      -- Failures from before the lid closed say nothing about the network on
+      -- the other side of it, so autoconnect starts again from nothing.
+      autoconnect.forget(self.attempts)
       self:refresh()
     end
   end)

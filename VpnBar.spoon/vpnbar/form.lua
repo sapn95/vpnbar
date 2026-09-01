@@ -67,6 +67,23 @@ local BY_BACKEND = {
       informative = "Optional. Should print connected, connecting or disconnected.",
       required = false,
     },
+    {
+      key = "commands.force",
+      label = "Force-disconnect command",
+      informative = "Optional. The harder way down, for when the normal disconnect will not take. "
+        .. "Without one, the menu offers no Force disconnect at all.",
+      required = false,
+    },
+  },
+}
+
+local TAIL = {
+  {
+    key = "fallback",
+    label = "Fallback connection",
+    informative = "Optional. The id of another connection to try when this one will not come up. "
+      .. "Only used when this connection is set to connect automatically.",
+    required = false,
   },
 }
 
@@ -144,6 +161,9 @@ function form.fields(backend)
     fields[#fields + 1] = field
   end
   for _, field in ipairs(PROBE) do
+    fields[#fields + 1] = field
+  end
+  for _, field in ipairs(TAIL) do
     fields[#fields + 1] = field
   end
   return fields

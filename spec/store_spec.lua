@@ -296,3 +296,51 @@ describe("store, monitor-only profiles", function()
     assert.is_true(assert(store.update(cfg, "work", { monitor = true })).profiles[1].monitor)
   end)
 end)
+
+describe("store, autoconnect and fallback", function()
+  local function pair(primary)
+    local first = { id = "a", name = "A", backend = "scutil", service = "a" }
+    for key, value in pairs(primary or {}) do
+      first[key] = value
+    end
+    return { profiles = { first, { id = "b", name = "B", backend = "scutil", service = "b" } } }
+  end
+
+  it("defaults autoconnect to false", function()
+    assert.is_false(assert(store.normalise(pair())).profiles[1].autoconnect)
+  end)
+
+  it("accepts a fallback that names another connection", function()
+    assert.is_truthy(store.normalise(pair({ autoconnect = true, fallback = "b" })))
+  end)
+
+  it("refuses a fallback that names nothing in the file", function()
+    -- A dead end exactly when it is needed is worse than no fallback at all.
+    local cfg, err = store.normalise(pair({ fallback = "ghost" }))
+    assert.is_nil(cfg)
+    assert.matches("is not a connection in this file", err)
+  end)
+
+  it("refuses a connection that falls back to itself", function()
+    local ok, err = store.validate({ id = "a", name = "A", backend = "scutil", service = "a", fallback = "a" })
+    assert.is_false(ok)
+    assert.matches("fall back to itself", err)
+  end)
+
+  it("refuses to autoconnect something it is not allowed to touch", function()
+    local ok, err = store.validate({
+      id = "a",
+      name = "A",
+      backend = "scutil",
+      service = "a",
+      monitor = true,
+      autoconnect = true,
+    })
+    assert.is_false(ok)
+    assert.matches("never acted on", err)
+  end)
+
+  it("rejects an autoconnect that is not a boolean", function()
+    assert.is_false((store.validate({ id = "a", name = "A", backend = "scutil", service = "a", autoconnect = "yes" })))
+  end)
+end)
