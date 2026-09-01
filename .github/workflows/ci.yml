@@ -85,6 +85,23 @@ jobs:
           luacov
           lua scripts/coverage-floor.lua
 
+  shell-tests:
+    name: shell tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: install bats
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bats
+      - name: bats
+        # The helper drives a macOS app, but nothing it does is macOS-only any
+        # more: the stubs stand in for `nc` and `open`, and the newest-file
+        # search uses a shell builtin rather than `stat`, whose flags differ
+        # between BSD and GNU. So this runs on the cheap runner.
+        run: bats spec/*.bats
+
   workflows:
     name: lint workflows
     runs-on: ubuntu-latest

@@ -190,3 +190,33 @@ describe("backends.act", function()
     assert.matches("boom", err)
   end)
 end)
+
+describe("backends.act, monitor-only profiles", function()
+  local profile = {
+    id = "gp",
+    name = "Always-on VPN",
+    backend = "scutil",
+    service = "Always-on VPN",
+    monitor = true,
+  }
+
+  it("refuses to act, whatever the backend would have done", function()
+    local runtime = fakeRuntime()
+    for _, verb in ipairs({ "connect", "disconnect" }) do
+      local ok, err = backends.act(profile, verb, runtime)
+      assert.is_false(ok)
+      assert.matches("monitored only", err)
+    end
+    assert.equals(0, #runtime.calls.exec)
+  end)
+
+  it("names the connection it refused", function()
+    local _, err = backends.act(profile, "disconnect", fakeRuntime())
+    assert.matches("Always%-on VPN", err)
+  end)
+
+  it("still reports its state, which is the whole point of it", function()
+    local runtime = fakeRuntime({ exec = "Connected" })
+    assert.equals("connected", backends.status(profile, runtime))
+  end)
+end)

@@ -87,3 +87,53 @@ describe("menu.build", function()
     assert.is_true(find(last, "Move down").disabled)
   end)
 end)
+
+describe("menu.build, monitor-only profiles", function()
+  -- Some tunnels are policy, not preference: an always-on corporate VPN must
+  -- still be visible and must never be offered a disconnect.
+  local function monitored()
+    return assert(store.update(config("gp"), "gp", { name = "Always-on VPN", monitor = true }))
+  end
+
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  it("shows the state but offers no action", function()
+    local item = menu.build(monitored(), { gp = "connected" })[1]
+    assert.equals("●  Always-on VPN", item.title)
+    assert.is_nil(item.action)
+    assert.is_true(item.disabled)
+  end)
+
+  it("says why it cannot be clicked", function()
+    local item = menu.build(monitored(), { gp = "connected" })[1]
+    assert.equals("Always-on VPN — connected, monitored only", item.tooltip)
+  end)
+
+  it("reports every state like any other row", function()
+    for state, glyph in pairs({ connected = "●", connecting = "◐", disconnected = "○", unknown = "◌" }) do
+      local item = menu.build(monitored(), { gp = state })[1]
+      assert.equals(glyph .. "  Always-on VPN", item.title)
+      assert.is_nil(item.action)
+    end
+  end)
+
+  it("is still renameable, editable and removable", function()
+    local items = menu.build(monitored(), {})
+    assert.equals("rename", deep(items, "Rename").action.kind)
+    assert.equals("edit", deep(items, "Edit").action.kind)
+    assert.equals("remove", deep(items, "Remove").action.kind)
+  end)
+end)

@@ -47,6 +47,13 @@ offers to list it; it never writes back.
 | `globalprotect` | The Palo Alto agent | Clicks its own menu-bar panel through the accessibility API | An interface probe, or the panel's own status line on demand |
 | `shell` | Everything else | Two commands you give | A third command you give, if you give one |
 
+The AWS VPN Client is in neither of the first two — no `scutil` service, and no
+accessibility tree at all — so it is a `shell` profile pointed at
+`scripts/aws-vpn-client.sh`, which talks to the management interface its
+bundled OpenVPN listens on. That is the escape hatch working as intended: a
+config entry, not a patch
+([ADR 0009](docs/adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
+
 The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
 never heard of needs a config entry, not a patch.
 
@@ -61,6 +68,17 @@ door in is the accessibility API, which is what
 [ADR 0001](docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md) records and what
 this code uses. The consequence for the menu: **give a GlobalProtect connection
 a probe**, or reading its state means opening its panel.
+
+## Tunnels that must stay up
+
+Not every VPN in the menu is one you are allowed to drop. A profile with
+`"monitor": true` shows its glyph, its name and its state, is greyed out, and
+carries no action at all — because a menu item that would breach an always-on
+requirement is one mis-click, and the mis-click looks exactly like the thing
+the menu is for. The rule is enforced in the menu *and* in the backend, so no
+other route reaches it either. Renaming, reordering and removing still work:
+those change this menu's list, not the tunnel
+([ADR 0008](docs/adr/0008-an-always-on-vpn-is-monitored-not-controlled.md)).
 
 ## The probe
 
@@ -139,12 +157,17 @@ menu:
   identifies a live tunnel. The Spoon itself loads in Hammerspoon, reads a
   config, polls both backends, renders its glyph in the menu bar and stops
   again without leaving anything behind.
-- **Not yet exercised against a live agent.** The click that disconnects
-  GlobalProtect. The panel was read while it was *connecting*, and the control
-  that appears once it is connected was not captured. The code therefore looks
+- **Proved for the AWS VPN Client.** No `scutil` entry, no accessibility tree,
+  no command line; OpenVPN's management interface on `127.0.0.1:35001` with a
+  session password file, taken from a real session's own logs. The helper is
+  covered by ten tests against a stubbed socket.
+- **Not yet exercised against a live tunnel.** Two write paths: the click that
+  disconnects GlobalProtect, and `signal SIGTERM` to the AWS management
+  interface. The GlobalProtect panel was read while it was *connecting*, and
+  the control that appears once connected was not captured — so the code looks
   for a control whose text contains `disconnect` anywhere in the panel *and* in
-  the options menu, rather than at a remembered position — but the first real
-  disconnect is still the first real disconnect.
+  the options menu, rather than at a remembered position. Both read paths are
+  proved; both write paths are still first-time code.
 - **Deliberately not done.** Nothing here presses *Disable*: on a GlobalProtect
   panel that is a different action with a different meaning, and this menu
   cannot undo it.
