@@ -1,2 +1,158 @@
 # vpnbar
-Hammerspoon menu-bar button for the VPNs on this Mac: status at a glance, one click to connect or disconnect, and add/edit/reorder/remove without leaving the menu.
+
+**One button in the menu bar for every VPN on this Mac: what is up, one click
+to change it, and add, rename, reorder or remove without leaving the menu.**
+
+macOS already has a menu-bar item per VPN client, and that is the problem. Each
+one shows its own state in its own idiom, disconnecting is two clicks into a
+vendor panel, and the one that matters most on this machine does not appear in
+the system's own VPN list at all — so no amount of `scutil` tells you whether it
+is up. vpnbar puts the answer in one glyph and the action one click under it.
+
+It is a [Hammerspoon](https://www.hammerspoon.org) Spoon. Hammerspoon is already
+running here for the lock and sleep policy; this adds a menu, not a daemon.
+
+```text
+●2                        ← the menu-bar title: two tunnels up
+├─ ●  Work VPN            → click to disconnect
+├─ ○  Gateway VPN         → click to connect
+├─ ◐  GlobalProtect       → working, click to disconnect anyway
+├─ ────────────
+├─ Connections ▸
+│    Add a connection…
+│    Import from scutil…
+│    ────────────
+│    Work VPN ▸  Rename… · Edit… · Move up · Move down · Hide · Remove…
+│    ────────────
+│    Open the config file
+│    Reload from disk
+└─ Refresh now
+```
+
+## What CRUD means here
+
+**The menu owns its own list of connections, not the system's.** Adding a
+connection adds a row to `~/.config/vpnbar/profiles.json`; removing one removes
+that row. Nothing is installed, nothing is uninstalled, and no macOS network
+service is created or destroyed — see
+[ADR 0005](docs/adr/0005-crud-is-over-the-menu-not-the-system.md) for why that
+line is where it is. `Import from scutil…` reads what macOS already has and
+offers to list it; it never writes back.
+
+## The three ways in
+
+| Backend | For | How it connects | How it reads the state |
+| --- | --- | --- | --- |
+| `scutil` | Anything in `scutil --nc list` | `scutil --nc start` / `stop` | `scutil --nc status` |
+| `globalprotect` | The Palo Alto agent | Clicks its own menu-bar panel through the accessibility API | An interface probe, or the panel's own status line on demand |
+| `shell` | Everything else | Two commands you give | A third command you give, if you give one |
+
+The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
+never heard of needs a config entry, not a patch.
+
+### Why GlobalProtect is special
+
+The GlobalProtect agent does not run its tunnel through the VPN service macOS
+knows about. On this machine `scutil --nc status` reports that service as
+`Disconnected` while the tunnel is up and carrying traffic, because the agent
+uses its own system extension and drives it itself. There is no CLI, no
+AppleScript dictionary and no URL scheme for connect or disconnect — the only
+door in is the accessibility API, which is what
+[ADR 0001](docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md) records and what
+this code uses. The consequence for the menu: **give a GlobalProtect connection
+a probe**, or reading its state means opening its panel.
+
+## The probe
+
+A probe says "this VPN, and only this VPN, hands out an address in this range":
+
+```json
+"probe": { "cidr": "10.0.0.0/8", "interface": "utun" }
+```
+
+With one, the state comes from `ifconfig` — no panel, no shell per connection,
+nothing on screen — which is why a probe wins over whatever the backend would
+have said. Without one, a `scutil` or `shell` connection still answers cheaply
+enough, and a `globalprotect` connection reads `unknown` until you click
+**Refresh now**. That asymmetry is deliberate, and
+[ADR 0003](docs/adr/0003-a-probe-beats-asking-the-app.md) says why.
+
+## Install
+
+```bash
+git clone git@github.com:sapn95/vpnbar.git ~/git/vpnbar
+~/git/vpnbar/scripts/install.sh
+```
+
+Then in `~/.hammerspoon/init.lua`:
+
+```lua
+hs.loadSpoon("VpnBar"):start()
+```
+
+The installer symlinks rather than copies, so `git pull` is the whole update.
+Hammerspoon needs Accessibility permission for the `globalprotect` backend; it
+already has it here for other reasons, and without it the other two backends
+still work.
+
+Start with an empty menu and `Import from scutil…`, or write
+`~/.config/vpnbar/profiles.json` by hand — the format is in
+[docs/configuration.md](docs/configuration.md).
+
+| | |
+| --- | --- |
+| [docs/configuration.md](docs/configuration.md) | Every field in the config file |
+| [docs/architecture.md](docs/architecture.md) | The modules, one refresh, one click, and the accessibility path |
+| [docs/adr/](docs/adr/) | Why it is like this, and what was rejected |
+
+## Development
+
+```bash
+make check      # what CI runs: format, lint, tests, coverage floor
+make format     # rewrites rather than checks; never run in CI
+```
+
+Lua 5.4, because that is what Hammerspoon embeds:
+
+```bash
+brew install lua@5.4 stylua luarocks
+luarocks --lua-version=5.4 install --local busted
+luarocks --lua-version=5.4 install --local luacheck
+luarocks --lua-version=5.4 install --local luacov
+```
+
+The coverage floor is 85% and lives in `scripts/coverage-floor.lua`. It counts
+`VpnBar.spoon/vpnbar/` only: everything that decides anything is there and is
+tested with no Hammerspoon in the room, while `init.lua` is the adapter and is
+kept thin instead of covered —
+[ADR 0002](docs/adr/0002-a-pure-core-and-a-thin-shell.md).
+
+## What has been proved, and what has not
+
+Honest state of play, because a menu that lies about a tunnel is worse than no
+menu:
+
+- **Proved on this machine.** GlobalProtect's tunnel is not the `scutil`
+  service; the agent's menu-bar panel is a native accessibility tree, not a web
+  view; its panel exposes an options popup and a status line; `scutil --nc
+  list` and `--nc status` parse as the tests assume; an interface probe
+  identifies a live tunnel. The Spoon itself loads in Hammerspoon, reads a
+  config, polls both backends, renders its glyph in the menu bar and stops
+  again without leaving anything behind.
+- **Not yet exercised against a live agent.** The click that disconnects
+  GlobalProtect. The panel was read while it was *connecting*, and the control
+  that appears once it is connected was not captured. The code therefore looks
+  for a control whose text contains `disconnect` anywhere in the panel *and* in
+  the options menu, rather than at a remembered position — but the first real
+  disconnect is still the first real disconnect.
+- **Deliberately not done.** Nothing here presses *Disable*: on a GlobalProtect
+  panel that is a different action with a different meaning, and this menu
+  cannot undo it.
+
+## Private on purpose
+
+This repository describes how a specific machine reaches specific networks. No
+portal hostnames, service names, address ranges or account names belong in it —
+they live in `~/.config/vpnbar/profiles.json`, which is not in git. The
+fixtures keep the shape of real output and invent every value in it. Write the
+rule, not the example.

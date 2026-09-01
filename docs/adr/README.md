@@ -1,0 +1,15 @@
+# Decision records
+
+One file per decision a reviewer would question. Each says what was chosen,
+**why**, and what was rejected — the last part being what tells the next person
+whether their idea was considered or simply missed.
+
+| | |
+| --- | --- |
+| [0001](0001-globalprotect-is-not-a-scutil-vpn.md) | GlobalProtect is not a `scutil` VPN, so it is driven through its panel |
+| [0002](0002-a-pure-core-and-a-thin-shell.md) | A pure core and a thin Hammerspoon shell |
+| [0003](0003-a-probe-beats-asking-the-app.md) | An interface probe beats asking the application |
+| [0004](0004-actions-are-data-until-they-are-clicked.md) | Menu actions are data until they are clicked |
+| [0005](0005-crud-is-over-the-menu-not-the-system.md) | CRUD is over the menu's list, not over the system's |
+| [0006](0006-the-config-file-is-executable-by-proxy.md) | The config file is executable by proxy, and stays out of the repo |
+| [0007](0007-the-toolchain-is-pinned-to-lua-5-4.md) | The toolchain is pinned to Lua 5.4 |

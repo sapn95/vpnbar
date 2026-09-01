@@ -1,0 +1,124 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The version Hammerspoon embeds, and the one the local Makefile expects.
+  # Homebrew's `lua` has moved on to 5.5, where luacheck does not run at all —
+  # see docs/adr/0007-the-toolchain-is-pinned-to-lua-5-4.md.
+  LUA_VERSION: "5.4"
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Nothing here pushes, and `pull_request` runs code from strangers.
+          persist-credentials: false
+      - name: stylua
+        uses: JohnnyMorganz/stylua-action@v5.0.0
+        with:
+          token: ${{ github.token }}
+          # Bumped by hand: it is a version inside an action's input, which no
+          # Dependabot ecosystem can see. Dependabot keeps the action itself
+          # current, and a formatter release that changes output would
+          # otherwise turn every open pull request red at once.
+          version: v2.5.2
+          args: --check .
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: leafo/gh-actions-lua@v13.0.0
+        with:
+          luaVersion: ${{ env.LUA_VERSION }}
+      - uses: leafo/gh-actions-luarocks@v6.1.0
+      - name: luacheck
+        run: |
+          luarocks install luacheck
+          luacheck .
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: leafo/gh-actions-lua@v13.0.0
+        with:
+          luaVersion: ${{ env.LUA_VERSION }}
+      - uses: leafo/gh-actions-luarocks@v6.1.0
+      - name: install busted and luacov
+        run: |
+          luarocks install busted
+          luarocks install luacov
+      - name: busted
+        run: busted --coverage
+      - name: coverage floor
+        # The floor is in scripts/coverage-floor.lua, in the repository, not in
+        # this file: a number enforced from a workflow is a number nobody
+        # editing the code ever sees.
+        run: |
+          luacov
+          lua scripts/coverage-floor.lua
+
+  workflows:
+    name: lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: actionlint
+        uses: raven-actions/actionlint@v2.2.0
+        env:
+          # shellcheck's info and style notes are advisory here; a warning or
+          # worse blocks.
+          SHELLCHECK_OPTS: --severity=warning
+      - name: yamllint
+        run: pipx run yamllint .
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v24.2.0
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # gitleaks lists the pull request's commits through the API, which the
+      # default token may not do on a private repository.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

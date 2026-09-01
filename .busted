@@ -1,0 +1,10 @@
+return {
+  _all = {
+    -- The Spoon is the package root, so `require("vpnbar.store")` resolves the
+    -- same way here as it does inside Hammerspoon.
+    lpath = "VpnBar.spoon/?.lua;VpnBar.spoon/?/init.lua",
+  },
+  default = {
+    verbose = true,
+  },
+}
