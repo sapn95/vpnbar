@@ -388,3 +388,29 @@ describe("store.setSettings", function()
     assert.is_nil((store.setSettings(store.empty(), { fallback = 1 })))
   end)
 end)
+
+describe("store, the awsvpn backend", function()
+  local function awsvpn(overrides)
+    local profile = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "sbb" }
+    for key, value in pairs(overrides or {}) do
+      profile[key] = value
+    end
+    return profile
+  end
+
+  it("accepts a profile that names its app and its row", function()
+    assert.is_true((store.validate(awsvpn())))
+  end)
+
+  it("insists on the row, because the client has more than one", function()
+    local ok, err = store.validate({ id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client" })
+    assert.is_false(ok)
+    assert.matches("row name", err)
+  end)
+
+  it("defaults the app name, which is the same on every Mac", function()
+    local cfg =
+      assert(store.normalise({ profiles = { { id = "aws", name = "AWS", backend = "awsvpn", row = "sbb" } } }))
+    assert.equals("AWS VPN Client", cfg.profiles[1].app)
+  end)
+end)

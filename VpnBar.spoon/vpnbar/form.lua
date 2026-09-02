@@ -18,6 +18,7 @@ local form = {}
 form.BACKENDS = {
   { value = "scutil", label = "scutil", hint = "A VPN service macOS knows about." },
   { value = "globalprotect", label = "GlobalProtect", hint = "The Palo Alto agent, driven through its own panel." },
+  { value = "awsvpn", label = "AWS VPN Client", hint = "One row of the AWS client's window, clicked by name." },
   { value = "shell", label = "Shell", hint = "Anything else, by way of commands you give." },
 }
 
@@ -46,6 +47,34 @@ local BY_BACKEND = {
       informative = "The name of the agent in the menu bar.",
       required = true,
       default = "GlobalProtect",
+    },
+  },
+  awsvpn = {
+    {
+      key = "app",
+      label = "Application",
+      informative = "The AWS VPN Client's name.",
+      required = true,
+      default = "AWS VPN Client",
+    },
+    {
+      key = "row",
+      label = "Profile",
+      informative = "Exactly as the client's window lists it, such as sbb. That row's own button is the one clicked.",
+      required = true,
+    },
+    {
+      key = "commands.status",
+      label = "Status command",
+      informative = "Optional but wanted: something cheap that prints the state, "
+        .. "so the menu never has to open a window to read it.",
+      required = false,
+    },
+    {
+      key = "commands.force",
+      label = "Force-disconnect command",
+      informative = "Optional. The harder way down.",
+      required = false,
     },
   },
   shell = {

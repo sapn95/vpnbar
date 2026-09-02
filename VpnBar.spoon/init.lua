@@ -229,6 +229,73 @@ local function panelState(appName)
   return state or "unknown"
 end
 
+--- Make sure an app has a window to look at, opening it if it has none.
+---
+--- The AWS client keeps running without one, and with no window its
+--- accessibility tree is empty — which is what made an earlier version of this
+--- project conclude it had none at all.
+local function windowOf(appName)
+  local app = hs.application.get(appName)
+  if not app then
+    return nil, appName .. " is not running"
+  end
+  local element = hs.axuielement.applicationElement(app)
+  local window = (element:attributeValue("AXWindows") or {})[1]
+  if window then
+    return window, nil
+  end
+  hs.execute("/usr/bin/open -a " .. backends.shellQuote(appName))
+  for _ = 1, 25 do
+    window = (element:attributeValue("AXWindows") or {})[1]
+    if window then
+      return window, nil
+    end
+    hs.timer.usleep(200000)
+  end
+  return nil, appName .. " has no window to click in"
+end
+
+--- Press a button on the row belonging to one name.
+---
+--- The tree runs name, state, button per row, so: walk it in order, remember
+--- when the name matches, and take the first button of the right title within
+--- the few elements that follow. Bounded on purpose — a row that does not
+--- offer the button being asked for must not reach into the next row and click
+--- that one instead.
+---
+--- Done here rather than in the shell helper because System Events cannot read
+--- this app: `entire contents of window 1` comes back empty while the window
+--- plainly has ten children, and it fails silently.
+local function pressRow(appName, row, buttonTitle)
+  local window, err = windowOf(appName)
+  if not window then
+    return false, err
+  end
+  local matched, since = false, 0
+  local target = walk(window, function(element)
+    local role = element:attributeValue("AXRole")
+    if role == "AXStaticText" then
+      if element:attributeValue("AXValue") == row then
+        matched, since = true, 0
+        return nil
+      end
+    elseif role == "AXButton" and matched and since <= 4 then
+      if element:attributeValue("AXTitle") == buttonTitle then
+        return element
+      end
+    end
+    if matched then
+      since = since + 1
+    end
+    return nil
+  end)
+  if not target then
+    return false, ("%s offers no %s on a row called %s"):format(appName, buttonTitle, tostring(row))
+  end
+  target:performAction("AXPress")
+  return true, nil
+end
+
 --- Click the control that carries one of `verbs`. It is looked for on the
 --- panel first and in the options menu second, because which of the two holds
 --- Disconnect depends on the state the agent is in.
@@ -286,6 +353,9 @@ function obj:runtime(allowPanelReads)
     end,
     press = function(app, verbs)
       return panelPress(app, verbs)
+    end,
+    pressRow = function(app, row, buttonTitle)
+      return pressRow(app, row, buttonTitle)
     end,
   }
 end
