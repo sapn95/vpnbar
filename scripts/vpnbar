@@ -51,16 +51,31 @@ resolve_symlinks() {
   printf '%s\n' "${target}"
 }
 
-# Where the Spoon we install from lives: `libexec` under the Homebrew prefix
-# when installed as a formula, the repository root when run from a checkout.
+# Where the Spoon we install from lives.
+#
+# Homebrew first, by way of `brew --prefix vpnbar`, which answers with the
+# stable `opt` path rather than the Cellar path carrying the version in it.
+# Linking to the Cellar would leave a dangling symlink after the next upgrade,
+# and a dangling Spoon is a menu bar with nothing in it and no error anywhere.
 spoon_source() {
-  local here
+  local opt here
+  opt="$(brew --prefix vpnbar 2>/dev/null || true)"
+  if [ -n "${opt}" ] && [ -d "${opt}/libexec/VpnBar.spoon" ]; then
+    printf '%s\n' "${opt}/libexec/VpnBar.spoon"
+    return
+  fi
   here="$(cd "$(dirname "$(resolve_symlinks "${BASH_SOURCE[0]}")")/.." && pwd)"
   if [ -d "${here}/VpnBar.spoon" ]; then
     printf '%s\n' "${here}/VpnBar.spoon"
   else
     printf '%s\n' "${here}/libexec/VpnBar.spoon"
   fi
+}
+
+# A link that points at nothing is the failure this guards against, so the
+# doctor checks the target and not just the link.
+spoon_link_is_live() {
+  [ -d "${SPOONS}/VpnBar.spoon" ]
 }
 
 ok() { printf '  ok    %s\n' "$1"; }
@@ -111,8 +126,12 @@ cmd_doctor() {
   fi
 
   echo "The Spoon"
-  if [ -L "${SPOONS}/VpnBar.spoon" ] || [ -d "${SPOONS}/VpnBar.spoon" ]; then
+  if spoon_link_is_live; then
     ok "linked into ${SPOONS}"
+  elif [ -L "${SPOONS}/VpnBar.spoon" ]; then
+    bad "the link points at nothing — run: vpnbar link"
+    note "$(printf '%s -> %s' "${SPOONS}/VpnBar.spoon" "$(readlink "${SPOONS}/VpnBar.spoon")")"
+    failures=$((failures + 1))
   else
     bad "not linked — run: vpnbar link"
     failures=$((failures + 1))
