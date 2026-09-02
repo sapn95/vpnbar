@@ -7,7 +7,10 @@
 class Vpnbar < Formula
   desc "Menu-bar VPN controller for Hammerspoon"
   homepage "https://github.com/sapn95/vpnbar"
-  head "git@github.com:sapn95/vpnbar.git", branch: "main"
+  # `ssh://git@github.com/...`, not the scp-style `git@github.com:...`:
+  # Homebrew parses this with URI and rejects the short form outright
+  # ("bad URI (is not URI?)"). `brew tap` accepts either; the formula does not.
+  head "ssh://git@github.com/sapn95/vpnbar.git", branch: "main"
 
   depends_on :macos
 
