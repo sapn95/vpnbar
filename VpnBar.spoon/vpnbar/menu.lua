@@ -202,6 +202,26 @@ function menu.build(cfg, states)
     }
   end
   manage[#manage + 1] = { separator = true }
+  local settings = store.settings(cfg)
+  manage[#manage + 1] = {
+    title = "Settings",
+    menu = {
+      {
+        title = "Only one connection at a time",
+        checked = settings.exclusive,
+        tooltip = "Autoconnect never starts a second tunnel, and takes down extras it started. "
+          .. "A connection you opened yourself is reported, never closed.",
+        action = { kind = "toggleSetting", setting = "exclusive" },
+      },
+      {
+        title = "Use fallbacks",
+        checked = settings.fallback,
+        tooltip = "Off, autoconnect keeps asking for the connection you chose instead of trying its fallback.",
+        action = { kind = "toggleSetting", setting = "fallback" },
+      },
+    },
+  }
+  manage[#manage + 1] = { separator = true }
   manage[#manage + 1] = { title = "Open the config file", action = { kind = "reveal" } }
   manage[#manage + 1] = { title = "Reload from disk", action = { kind = "reload" } }
 

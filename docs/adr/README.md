@@ -20,3 +20,4 @@ whether their idea was considered or simply missed.
 | [0012](0012-force-is-only-offered-where-one-exists.md) | Force disconnect is only offered where one exists |
 | [0013](0013-autoconnect-is-a-plan-not-a-timer.md) | Autoconnect is a plan, not a timer |
 | [0014](0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md) | Homebrew installs it, and `vpnbar link` puts it in place |
+| [0015](0015-one-at-a-time-is-a-setting-not-a-rule.md) | One connection at a time is a setting, and it never closes yours |
