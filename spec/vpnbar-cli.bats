@@ -131,3 +131,37 @@ loads_it() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"not running inside Hammerspoon"* ]]
 }
+
+@test "link prefers Homebrew's stable opt path over the Cellar" {
+  # brew --prefix answers with opt/, which survives an upgrade; the Cellar path
+  # carries the version and would leave a dangling link behind.
+  mkdir -p "${TMP}/opt/vpnbar/libexec/VpnBar.spoon"
+  cat >"${STUB}/brew" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "${TMP}/opt/vpnbar"
+EOF
+  chmod +x "${STUB}/brew"
+  run "${SCRIPT}" link
+  [ "${status}" -eq 0 ]
+  [ "$(readlink "${HOME}/.hammerspoon/Spoons/VpnBar.spoon")" = "${TMP}/opt/vpnbar/libexec/VpnBar.spoon" ]
+}
+
+@test "link falls back to the checkout when brew knows nothing" {
+  cat >"${STUB}/brew" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${STUB}/brew"
+  run "${SCRIPT}" link
+  [ "${status}" -eq 0 ]
+  [[ "$(readlink "${HOME}/.hammerspoon/Spoons/VpnBar.spoon")" == *"/VpnBar.spoon" ]]
+}
+
+@test "doctor tells a dangling link apart from a missing one" {
+  mkdir -p "${HOME}/.hammerspoon/Spoons"
+  ln -sfn "${TMP}/gone/VpnBar.spoon" "${HOME}/.hammerspoon/Spoons/VpnBar.spoon"
+  loads_it
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"points at nothing"* ]]
+}
