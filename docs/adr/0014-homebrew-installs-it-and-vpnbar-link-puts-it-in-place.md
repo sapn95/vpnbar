@@ -28,6 +28,12 @@ user already has for it, and nothing has to be published anywhere.
 `head`-only, for the same reason: a versioned release would mean a release
 asset, and a private release asset has the same token problem.
 
+One trap, paid for once: the `head` URL must be a real URI —
+`ssh://git@github.com/sapn95/vpnbar.git`, not the scp-style
+`git@github.com:sapn95/vpnbar.git`. Homebrew parses it with `URI` and refuses
+the short form with `bad URI (is not URI?)`. `brew tap` accepts either, which
+is what makes the failure look like it comes from somewhere else.
+
 ## Why there is a `doctor`
 
 Because the first thing that went wrong was not vpnbar. The icon was drawing
