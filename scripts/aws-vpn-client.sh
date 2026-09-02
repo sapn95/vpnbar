@@ -8,10 +8,22 @@
 # documented, supported way to ask a tunnel what it is doing and to bring it
 # down.
 #
-#   status      connected / connecting / disconnected, on stdout
-#   connect     opens the app; the federated login is finished by hand
-#   disconnect  asks OpenVPN to terminate, through the management interface
-#   force       asks, waits, and then quits the client itself
+#   profiles              what the client's window lists, and the button on each row
+#   status                connected / connecting / disconnected, on stdout
+#   connect [profile]     clicks Connect on that profile's row
+#   disconnect [profile]  clicks Disconnect on it, or SIGTERM with no profile
+#   force                 asks, waits, and then quits the client itself
+#
+# The window is driven through the accessibility API. An earlier version of
+# this file claimed the client had none: that was measured while the app was
+# running with no window open, which is exactly when it reports nothing. With
+# its window up it exposes the whole tree, one group per profile holding the
+# name, the state and the button.
+#
+# That access belongs to whoever spawns this script. Hammerspoon has it, so the
+# menu works. A terminal usually does not, and osascript then fails with
+# "not allowed assistive access" — which is about the terminal, not about this
+# script or the client.
 #
 # Nothing here needs root: the management port listens on loopback and its
 # password file is written readable by the user who owns the session.
@@ -31,7 +43,7 @@ readonly MGMT_DIR="${HOME}/.config/AWSVPNClient"
 readonly FORCE_WAIT="${AWS_VPN_FORCE_WAIT:-5}"
 
 usage() {
-  echo "usage: ${0##*/} status|connect|disconnect|force" >&2
+  echo "usage: ${0##*/} profiles|status|connect [profile]|disconnect [profile]|force" >&2
   exit 2
 }
 
@@ -88,14 +100,122 @@ cmd_status() {
   esac
 }
 
-cmd_connect() {
-  # The endpoints here authenticate through a browser, so this opens the app
-  # and stops. Automating the federated login is not something a menu should
-  # be doing on anyone's behalf.
+# Bring the window up. The client keeps running without one, and with no
+# window there is no accessibility tree to look at.
+open_window() {
   open -a "${APP}"
+  local waited=0
+  while [ "${waited}" -lt 10 ]; do
+    if osascript -e "tell application \"System Events\" to tell process \"${APP}\" to return (count of windows)" 2>/dev/null | grep -qv '^0$'; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# One group per profile, in tree order: the name, the state, then the button.
+# So: walk the window, remember the row whose name matches, and take the first
+# button inside the few elements that follow it. Bounded, so a row without the
+# button being asked for cannot reach into the next row and click that instead.
+row_script() {
+  cat <<'APPLESCRIPT'
+on run argv
+  set wanted to item 1 of argv
+  set verb to item 2 of argv
+  set doClick to (item 3 of argv is "click")
+  tell application "System Events"
+    tell process "AWS VPN Client"
+      set found to false
+      set since to 0
+      set state to "unknown"
+      repeat with element in (entire contents of window 1)
+        try
+          set kind to class of element
+          if kind is static text then
+            set text to value of element
+            if found and since < 4 then
+              set state to text
+            end if
+            if text is wanted then
+              set found to true
+              set since to 0
+            end if
+          else if kind is button and found and since < 5 then
+            if name of element is verb then
+              if doClick then click element
+              return verb & " " & state
+            end if
+          end if
+          if found then set since to since + 1
+        end try
+      end repeat
+    end tell
+  end tell
+  return "not found"
+end run
+APPLESCRIPT
+}
+
+# Every row the window lists, with the button it currently offers.
+cmd_profiles() {
+  open_window || {
+    echo "the ${APP} window did not open — does this process have accessibility access?" >&2
+    return 1
+  }
+  osascript -e 'tell application "System Events" to tell process "AWS VPN Client"
+    set out to ""
+    set nameNext to true
+    repeat with element in (entire contents of window 1)
+      try
+        if class of element is static text then
+          set out to out & value of element & "\t"
+        else if class of element is button then
+          set out to out & name of element & linefeed
+        end if
+      end try
+    end repeat
+    return out
+  end tell' 2>/dev/null
+}
+
+cmd_connect() {
+  local wanted="${1:-}"
+  if [ -z "${wanted}" ]; then
+    # No profile named: open the app and stop. Picking one for somebody is not
+    # a menu's job when it cannot know which.
+    open -a "${APP}"
+    return 0
+  fi
+  open_window || {
+    echo "the ${APP} window did not open — does this process have accessibility access?" >&2
+    return 1
+  }
+  local answer
+  answer="$(row_script | osascript - "${wanted}" Connect click 2>/dev/null || true)"
+  case "${answer}" in
+    Connect*) : ;;
+    *)
+      echo "no Connect button on a row called ${wanted}" >&2
+      return 1
+      ;;
+  esac
 }
 
 cmd_disconnect() {
+  local wanted="${1:-}"
+  # With a profile named, click that row's own Disconnect: it ends the session
+  # the client thinks it owns, and leaves the client's idea of the world
+  # matching the tunnel's. SIGTERM ends whichever session is running, which is
+  # the right answer only when there is one.
+  if [ -n "${wanted}" ] && open_window; then
+    local answer
+    answer="$(row_script | osascript - "${wanted}" Disconnect click 2>/dev/null || true)"
+    case "${answer}" in
+      Disconnect*) return 0 ;;
+    esac
+  fi
   if ! listening; then
     echo "no AWS VPN session is running" >&2
     return 0
@@ -121,9 +241,16 @@ cmd_force() {
 }
 
 case "${1:-}" in
+  profiles) cmd_profiles ;;
   status) cmd_status ;;
-  connect) cmd_connect ;;
-  disconnect) cmd_disconnect ;;
+  connect)
+    shift
+    cmd_connect "${1:-}"
+    ;;
+  disconnect)
+    shift
+    cmd_disconnect "${1:-}"
+    ;;
   force) cmd_force ;;
   *) usage ;;
 esac

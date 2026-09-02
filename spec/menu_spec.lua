@@ -333,3 +333,46 @@ describe("menu.build, the autoconnect toggle", function()
     assert.is_false(deep(menu.build(cfg({ protected = true }), {}), "Connect automatically").disabled)
   end)
 end)
+
+describe("menu.build, the settings submenu", function()
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  it("offers both settings, with a tick showing where they stand", function()
+    local off = menu.build(store.empty(), {})
+    assert.is_false(deep(off, "Only one connection at a time").checked)
+    assert.is_true(deep(off, "Use fallbacks").checked)
+  end)
+
+  it("carries the setting name in the action, not the label", function()
+    local item = deep(menu.build(store.empty(), {}), "Only one connection at a time")
+    assert.same({ kind = "toggleSetting", setting = "exclusive" }, item.action)
+  end)
+
+  it("follows what the config says", function()
+    local cfg = assert(store.setSettings(store.empty(), { exclusive = true, fallback = false }))
+    local items = menu.build(cfg, {})
+    assert.is_true(deep(items, "Only one connection at a time").checked)
+    assert.is_false(deep(items, "Use fallbacks").checked)
+  end)
+
+  it("says what each one does, since neither is obvious from four words", function()
+    for _, label in ipairs({ "Only one connection at a time", "Use fallbacks" }) do
+      local item = deep(menu.build(store.empty(), {}), label)
+      assert.is_string(item.tooltip)
+      assert.is_true(#item.tooltip > 40)
+    end
+  end)
+end)

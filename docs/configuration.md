@@ -16,6 +16,30 @@ every time it opens, and a file it cannot parse is refused with a notification
 rather than replaced. Writes are atomic (a temporary file and a rename), so an
 interrupted save cannot leave a half-written config behind.
 
+## Settings
+
+Two settings sit beside the profiles, because both are about the menu as a
+whole. Toggle them from **Connections → Settings**.
+
+```json
+{
+  "version": 1,
+  "settings": { "exclusive": true, "fallback": true },
+  "profiles": []
+}
+```
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `exclusive` | `false` | Autoconnect never starts a second tunnel while one is up or on its way up, and takes down any extra **it started**. |
+| `fallback` | `true` | Whether autoconnect may try a connection's `fallback` at all. Off, it keeps asking for the one you chose. |
+
+`exclusive` is a rule about what **autoconnect** does. A tunnel you opened
+yourself is reported and never closed — the menu does not overrule a person
+([ADR 0015](adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)). Changing
+either setting clears autoconnect's memory of what has failed, because those
+failures happened under the old rules.
+
 ## Shape
 
 ```json
@@ -97,6 +121,16 @@ line in `~/.zshrc`. Use absolute paths: the shell Hammerspoon spawns does not
 have a login shell's `PATH`.
 
 #### The AWS VPN Client
+
+Name the profile you want and it clicks that row's own Connect:
+
+```json
+"connect": "/opt/homebrew/bin/aws-vpn-client connect work",
+"disconnect": "/opt/homebrew/bin/aws-vpn-client disconnect work"
+```
+
+`aws-vpn-client profiles` lists what the client's window shows, which is how
+you find the name. Without one, `connect` opens the app and stops.
 
 `scripts/aws-vpn-client.sh` is a ready-made helper for it, and the reason the
 `shell` backend exists: the client is in neither `scutil` nor the accessibility
