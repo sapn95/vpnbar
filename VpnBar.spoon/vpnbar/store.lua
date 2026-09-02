@@ -12,7 +12,7 @@ store.VERSION = 1
 -- Which backend knows how to talk to which kind of connection. `shell` is the
 -- escape hatch: anything with a connect and a disconnect command fits it, so a
 -- VPN this project has never heard of needs no code here.
-local BACKENDS = { globalprotect = true, scutil = true, shell = true }
+local BACKENDS = { globalprotect = true, scutil = true, shell = true, awsvpn = true }
 
 local ID_PATTERN = "^[a-z0-9][a-z0-9_-]*$"
 
@@ -174,6 +174,14 @@ function store.validate(profile)
   if profile.backend == "globalprotect" and not isNonEmptyString(profile.app) then
     return false, "a globalprotect profile needs the menu-bar app name, normally GlobalProtect"
   end
+  if profile.backend == "awsvpn" then
+    if not isNonEmptyString(profile.app) then
+      return false, "an awsvpn profile needs the app name, normally AWS VPN Client"
+    end
+    if not isNonEmptyString(profile.row) then
+      return false, "an awsvpn profile needs the row name, exactly as the client's window shows it"
+    end
+  end
   if profile.backend == "shell" then
     local commands = profile.commands
     if type(commands) ~= "table" then
@@ -284,6 +292,8 @@ function store.normalise(raw)
       profile.autoconnect = profile.autoconnect or false
       if profile.backend == "globalprotect" then
         profile.app = profile.app or "GlobalProtect"
+      elseif profile.backend == "awsvpn" then
+        profile.app = profile.app or "AWS VPN Client"
       end
     end
     local ok, err = store.validate(profile)
@@ -350,6 +360,8 @@ function store.add(cfg, profile)
   candidate.autoconnect = candidate.autoconnect or false
   if candidate.backend == "globalprotect" then
     candidate.app = candidate.app or "GlobalProtect"
+  elseif candidate.backend == "awsvpn" then
+    candidate.app = candidate.app or "AWS VPN Client"
   end
   local ok, err = store.validate(candidate)
   if not ok then

@@ -236,13 +236,15 @@ describe("menu.build, adding a connection", function()
   end
 
   it("offers one entry per backend rather than a dialog with three buttons", function()
+    -- The dialog it replaced took two buttons and silently read the third as a
+    -- style, so the list could never grow. A submenu has no such limit.
     local items = addMenu()
-    assert.equals(3, #items)
+    assert.equals(4, #items)
     local backends = {}
     for _, item in ipairs(items) do
       backends[item.action.backend] = item.action.kind
     end
-    assert.same({ scutil = "add", globalprotect = "add", shell = "add" }, backends)
+    assert.same({ scutil = "add", globalprotect = "add", awsvpn = "add", shell = "add" }, backends)
   end)
 
   it("explains each backend where the choice is made", function()
