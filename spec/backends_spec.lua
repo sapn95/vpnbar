@@ -287,3 +287,56 @@ describe("backends.act with force", function()
     assert.matches("no force for", err)
   end)
 end)
+
+describe("the awsvpn backend", function()
+  local profile = {
+    id = "aws",
+    name = "AWS",
+    backend = "awsvpn",
+    app = "AWS VPN Client",
+    row = "sbb",
+    commands = { status = "aws-vpn-client status", force = "aws-vpn-client force" },
+  }
+
+  local function runtimeWithRows()
+    local runtime = fakeRuntime({ exec = "connected" })
+    runtime.rows = {}
+    runtime.pressRow = function(app, row, button)
+      runtime.rows[#runtime.rows + 1] = { app = app, row = row, button = button }
+      return true, nil
+    end
+    return runtime
+  end
+
+  it("clicks the named row's own button", function()
+    local runtime = runtimeWithRows()
+    backends.act(profile, "connect", runtime)
+    backends.act(profile, "disconnect", runtime)
+    assert.same({ app = "AWS VPN Client", row = "sbb", button = "Connect" }, runtime.rows[1])
+    assert.same({ app = "AWS VPN Client", row = "sbb", button = "Disconnect" }, runtime.rows[2])
+  end)
+
+  it("reads the state from a command instead, which opens no window", function()
+    local runtime = runtimeWithRows()
+    assert.equals("connected", backends.status(profile, runtime))
+    assert.same({ "aws-vpn-client status" }, runtime.calls.exec)
+    assert.equals(0, #runtime.rows)
+  end)
+
+  it("is unknown when no status command was given, rather than opening one", function()
+    local runtime = runtimeWithRows()
+    local bare = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "sbb" }
+    assert.equals("unknown", backends.status(bare, runtime))
+    assert.equals(0, #runtime.rows)
+  end)
+
+  it("forces with the command, not with a click", function()
+    local runtime = runtimeWithRows()
+    assert.is_true((backends.act(profile, "force", runtime)))
+    assert.same({ "aws-vpn-client force" }, runtime.calls.exec)
+  end)
+
+  it("can be forced, because the config gave it the command", function()
+    assert.is_true(backends.canForce(profile))
+  end)
+end)

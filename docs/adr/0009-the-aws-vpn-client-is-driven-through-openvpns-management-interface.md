@@ -68,18 +68,41 @@ AXGroup
 
 That matters because the client has **two** profiles here and the management
 interface cannot tell them apart: `state` says a session is up, not which one.
-So `connect` and `disconnect` now take a profile name and click that row's own
-button, walking the tree in order — the name, then the state, then the button —
-and bounded to a few elements after the match, so a row without the button
-being asked for cannot reach into the next row and click that instead.
 
-The management interface keeps the jobs it is better at: `status`, which costs
-nothing and opens no window, and `force`.
+So the work is split between two mechanisms, each doing what it is better at:
 
-**The access belongs to whoever spawns the script.** Hammerspoon has it, so the
-menu works. A terminal usually does not, and `osascript` then fails with *not
-allowed assistive access* — an error about the terminal, not about this script
-or the client. That is worth knowing before spending an evening on it.
+| | |
+| --- | --- |
+| `status` | the management interface — costs nothing, opens no window |
+| `force` | the management interface, then quitting the client |
+| `connect` / `disconnect` | the **`awsvpn` backend**, which clicks that profile's own row |
+
+The row walk goes name, state, button, bounded to a few elements after the
+name matches — so a row that does not offer the button being asked for cannot
+reach into the next row and click that one instead. Verified against the live
+window: `sbb` and `sbb_full` each find their own Connect, `sbb` + Disconnect
+correctly finds nothing while it is down, and an unknown name finds nothing.
+
+## Why the clicking is in Lua and not in the shell helper
+
+It was written in AppleScript first, and it does not work: **System Events
+cannot read this app.**
+
+```applescript
+count of UI elements of window 1   --> 10
+count of (entire contents of window 1)   --> 0
+```
+
+`entire contents` comes back empty for a window that plainly has ten children —
+a known hole with non-native toolkits — and it fails *silently*, returning an
+empty string rather than an error. Hammerspoon's own accessibility bindings
+read the same tree without trouble, so the clicking lives in the backend, in
+Lua, and the shell helper keeps the two jobs that need no window at all.
+
+One more thing that cost time on the way: accessibility access belongs to
+whoever spawns the process. Hammerspoon has it. A terminal usually does not,
+and `osascript` there fails with *not allowed assistive access* — an error
+about the terminal, not about the client.
 
 ## What is not proved
 

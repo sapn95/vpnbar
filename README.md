@@ -52,16 +52,14 @@ offers to list it; it never writes back.
 | --- | --- | --- | --- |
 | `scutil` | Anything in `scutil --nc list` | `scutil --nc start` / `stop` | `scutil --nc status` |
 | `globalprotect` | The Palo Alto agent | Clicks its own menu-bar panel through the accessibility API | An interface probe, or the panel's own status line on demand |
+| `awsvpn` | The AWS VPN Client | Clicks the row for the profile you name | A command you give |
 | `shell` | Everything else | Two commands you give | A third command you give, if you give one |
 
-The AWS VPN Client is in neither of the first two — no `scutil` service, no
-command line — so it is a `shell` profile pointed at
-`scripts/aws-vpn-client.sh`. That helper reads the state from the management
-interface its bundled OpenVPN listens on, and clicks the row for the profile
-you name, because the client has several and the management interface cannot
-tell them apart
+The AWS client has no `scutil` service and no command line, and it lists
+several profiles that its management interface cannot tell apart — `state`
+reports that *a* session is up, not whose. So `awsvpn` clicks the row you name
+and reads the state from a cheap command that opens no window
 ([ADR 0009](docs/adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
-The escape hatch working as intended: a config entry, not a patch.
 
 The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
 never heard of needs a config entry, not a patch.

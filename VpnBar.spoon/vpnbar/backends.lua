@@ -89,7 +89,25 @@ function shell.force(profile, runtime)
   return ok and true or false, ok and nil or "the force command failed"
 end
 
-backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shell }
+-- The AWS VPN Client. Its window lists one row per profile, and the management
+-- interface behind it cannot say which of them is up — `state` reports that a
+-- session exists, not whose. So the two halves are answered by two different
+-- things: the state by a command that costs nothing and opens no window, the
+-- clicking by the row itself.
+local awsvpn = {}
+
+awsvpn.status = shell.status
+awsvpn.force = shell.force
+
+function awsvpn.connect(profile, runtime)
+  return runtime.pressRow(profile.app, profile.row, "Connect")
+end
+
+function awsvpn.disconnect(profile, runtime)
+  return runtime.pressRow(profile.app, profile.row, "Disconnect")
+end
+
+backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shell, awsvpn = awsvpn }
 
 --- Is there a harder way to bring this connection down than asking politely?
 ---
@@ -104,7 +122,9 @@ function backends.canForce(profile)
   if type(profile) ~= "table" or profile.protected then
     return false
   end
-  return profile.backend == "shell" and type(profile.commands) == "table" and profile.commands.force ~= nil
+  -- Whether a force exists is a question about the config, not about the
+  -- backend: any profile that was given the harder command has one.
+  return type(profile.commands) == "table" and profile.commands.force ~= nil
 end
 
 --- The state of one connection.

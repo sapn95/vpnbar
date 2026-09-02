@@ -94,6 +94,39 @@ see [ADR 0001](adr/0001-globalprotect-is-not-a-scutil-vpn.md). Give it a
 `probe`: without one its state is only read when you ask for it, since reading
 it means opening the agent's panel on screen.
 
+### `backend: "awsvpn"`
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `app` | yes | The client's name. Defaults to `AWS VPN Client`. |
+| `row` | yes | The profile, exactly as the client's window lists it — `sbb`, `sbb_full`. That row's own button is the one clicked. |
+| `commands.status` | no | Something cheap that prints the state, so the menu never opens a window to read one. |
+| `commands.force` | no | The harder way down. |
+
+```json
+{
+  "id": "aws",
+  "name": "AWS VPN (sbb)",
+  "backend": "awsvpn",
+  "app": "AWS VPN Client",
+  "row": "sbb",
+  "commands": {
+    "status": "/opt/homebrew/bin/aws-vpn-client status",
+    "force": "/opt/homebrew/bin/aws-vpn-client force"
+  }
+}
+```
+
+The client lists several profiles and its management interface cannot tell them
+apart — `state` reports that *a* session is up, not whose. So connecting and
+disconnecting click the named row, and the state comes from the command
+instead, which costs nothing and opens nothing
+([ADR 0009](adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
+
+Connecting brings the client's window up if it is not showing: with no window
+the client exposes no accessibility tree at all, and there is nothing to click.
+The federated login is still finished by hand in the browser.
+
 ### `backend: "shell"`
 
 | Field | Required | Meaning |
@@ -119,18 +152,6 @@ it means opening the agent's panel on screen.
 These strings are executed as written, by you, as you — the same trust as a
 line in `~/.zshrc`. Use absolute paths: the shell Hammerspoon spawns does not
 have a login shell's `PATH`.
-
-#### The AWS VPN Client
-
-Name the profile you want and it clicks that row's own Connect:
-
-```json
-"connect": "/opt/homebrew/bin/aws-vpn-client connect sbb",
-"disconnect": "/opt/homebrew/bin/aws-vpn-client disconnect sbb"
-```
-
-`aws-vpn-client profiles` lists what the client's window shows, which is how
-you find the name. Without one, `connect` opens the app and stops.
 
 `scripts/aws-vpn-client.sh` is a ready-made helper for it, and the reason the
 `shell` backend exists: the client is in neither `scutil` nor the accessibility
