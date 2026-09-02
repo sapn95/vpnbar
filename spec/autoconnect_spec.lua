@@ -226,3 +226,87 @@ describe("autoconnect, two tunnels to the same place", function()
     assert.equals("disconnect", autoconnect.plan(cfg, states, bothUp(), 1000).verb)
   end)
 end)
+
+describe("autoconnect, only one connection at a time", function()
+  local function exclusive(cfg)
+    return assert(store.setSettings(cfg, { exclusive = true }))
+  end
+
+  it("does not start a second tunnel when one is already up", function()
+    local cfg = exclusive(assert(store.normalise({
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10 },
+        { id = "b", name = "B", backend = "scutil", service = "b", autoconnect = true, order = 20 },
+      },
+    })))
+    assert.is_nil(autoconnect.plan(cfg, { a = "connected", b = "disconnected" }, {}, 1000))
+  end)
+
+  it("does not start one while another is still on its way up", function()
+    local cfg = exclusive(assert(store.normalise({
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10 },
+        { id = "b", name = "B", backend = "scutil", service = "b", autoconnect = true, order = 20 },
+      },
+    })))
+    assert.is_nil(autoconnect.plan(cfg, { a = "connecting", b = "disconnected" }, {}, 1000))
+  end)
+
+  it("starts it once the other one has gone", function()
+    local cfg = exclusive(assert(store.normalise({
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10 },
+        { id = "b", name = "B", backend = "scutil", service = "b", autoconnect = true, order = 20 },
+      },
+    })))
+    local plan = autoconnect.plan(cfg, { a = "disconnected", b = "disconnected" }, {}, 1000)
+    assert.equals("b", plan.id)
+  end)
+
+  it("takes down any extra it started, not only a fallback", function()
+    local cfg = exclusive(config())
+    local memory = {}
+    autoconnect.remember(memory, "alt", 500)
+    local plan = autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, memory, 1000)
+    assert.same({ id = "alt", verb = "disconnect", reason = "superseded" }, plan)
+  end)
+
+  it("still leaves alone what it did not start", function()
+    local cfg = exclusive(config())
+    assert.is_nil(autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, {}, 1000))
+  end)
+
+  it("is off by default, so an unconfigured menu behaves as before", function()
+    local cfg = assert(store.normalise({
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10 },
+        { id = "b", name = "B", backend = "scutil", service = "b", autoconnect = true, order = 20 },
+      },
+    }))
+    assert.is_truthy(autoconnect.plan(cfg, { a = "connected", b = "disconnected" }, {}, 1000))
+  end)
+end)
+
+describe("autoconnect, fallbacks switched off", function()
+  local function noFallbacks(cfg)
+    return assert(store.setSettings(cfg, { fallback = false }))
+  end
+
+  it("keeps asking for the connection that was chosen", function()
+    local memory = {}
+    for _ = 1, autoconnect.ATTEMPTS_BEFORE_FALLBACK do
+      autoconnect.remember(memory, "aws", 0)
+    end
+    local plan = autoconnect.plan(noFallbacks(config()), { aws = "disconnected" }, memory, 1000)
+    assert.same({ id = "aws", verb = "connect", reason = "wanted" }, plan)
+  end)
+
+  it("never reaches for the fallback, however many times it has failed", function()
+    local memory = {}
+    for _ = 1, autoconnect.ATTEMPTS_BEFORE_GIVING_UP - 1 do
+      autoconnect.remember(memory, "aws", 0)
+    end
+    local plan = autoconnect.plan(noFallbacks(config()), { aws = "disconnected" }, memory, 1000)
+    assert.equals("aws", plan.id)
+  end)
+end)

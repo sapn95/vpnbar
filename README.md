@@ -54,12 +54,14 @@ offers to list it; it never writes back.
 | `globalprotect` | The Palo Alto agent | Clicks its own menu-bar panel through the accessibility API | An interface probe, or the panel's own status line on demand |
 | `shell` | Everything else | Two commands you give | A third command you give, if you give one |
 
-The AWS VPN Client is in neither of the first two — no `scutil` service, and no
-accessibility tree at all — so it is a `shell` profile pointed at
-`scripts/aws-vpn-client.sh`, which talks to the management interface its
-bundled OpenVPN listens on. That is the escape hatch working as intended: a
-config entry, not a patch
+The AWS VPN Client is in neither of the first two — no `scutil` service, no
+command line — so it is a `shell` profile pointed at
+`scripts/aws-vpn-client.sh`. That helper reads the state from the management
+interface its bundled OpenVPN listens on, and clicks the row for the profile
+you name, because the client has several and the management interface cannot
+tell them apart
 ([ADR 0009](docs/adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
+The escape hatch working as intended: a config entry, not a patch.
 
 The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
 never heard of needs a config entry, not a patch.
@@ -109,6 +111,17 @@ only ever comes up when the first one would not.
 All of that is one pure function returning at most one action, so the policy is
 nineteen fast tests rather than an afternoon of waiting
 ([ADR 0013](docs/adr/0013-autoconnect-is-a-plan-not-a-timer.md)).
+
+## Only one at a time
+
+**Connections → Settings** has two switches. *Only one connection at a time*
+stops autoconnect starting a second tunnel while one is up, and takes down any
+extra it started. *Use fallbacks* turns the fallback step off, so the loop
+keeps asking for the connection you actually chose.
+
+Both are rules about what **autoconnect** does. A tunnel you opened yourself is
+reported and never closed: the menu does not overrule a person
+([ADR 0015](docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
 
 ## Force disconnect
 

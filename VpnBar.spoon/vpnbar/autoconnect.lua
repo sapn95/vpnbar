@@ -2,7 +2,9 @@
 ---
 --- One function, no timers, no state of its own: the adapter calls `plan` on
 --- every refresh with what it knows and a memory table it owns, and gets back
---- at most one thing to do. That makes the whole policy — when to retry, when
+--- at most one thing to do. Two settings steer it, both in the config file and
+--- both toggled from the menu: `exclusive` (never more than one tunnel up) and
+--- `fallback` (whether a fallback may be tried at all). That makes the whole policy — when to retry, when
 --- to give up, when to try the other one — readable in one place and testable
 --- without waiting for anything.
 
@@ -70,19 +72,34 @@ end
 --- @return table|nil { id, verb = "connect"|"disconnect", reason }
 function autoconnect.plan(cfg, states, memory, now)
   states, memory = states or {}, memory or {}
+  local settings = store.settings(cfg)
 
-  -- Tidying up comes first. Two tunnels to the same place is not twice the
-  -- connectivity, it is one routing table with an argument in it — so once the
-  -- connection somebody actually wanted is up, the stand-in that was started
-  -- for it goes away again.
+  local function startedByUs(id)
+    return memory[id] ~= nil and memory[id].started == true
+  end
+
+  local function isUp(state)
+    return state == "connected" or state == "connecting"
+  end
+
+  -- Tidying up comes first, and before anything is started: two tunnels to the
+  -- same place is not twice the connectivity, it is one routing table with an
+  -- argument in it.
+  --
+  -- Only ever what autoconnect itself started, and never something protected.
+  -- A tunnel somebody opened by hand is not this function's to close, which is
+  -- the same line the rest of the menu draws.
   for _, profile in ipairs(store.list(cfg, true)) do
-    if profile.autoconnect and profile.fallback and states[profile.id] == "connected" then
-      local fallback = store.get(cfg, profile.fallback)
-      local startedByUs = memory[profile.fallback] and memory[profile.fallback].started
-      -- Only what autoconnect itself started, and never something protected:
-      -- a tunnel opened by hand is not this function's to close.
-      if fallback and not fallback.protected and startedByUs and states[profile.fallback] == "connected" then
-        return { id = profile.fallback, verb = "disconnect", reason = "superseded" }
+    if profile.autoconnect and states[profile.id] == "connected" then
+      for _, other in ipairs(store.list(cfg, true)) do
+        local extra = other.id ~= profile.id and states[other.id] == "connected" and not other.protected
+        -- Without `exclusive` this only applies to the stand-in that was
+        -- started for this very connection; with it, to any second tunnel
+        -- autoconnect is responsible for.
+        local ours = settings.exclusive or other.id == profile.fallback
+        if extra and ours and startedByUs(other.id) then
+          return { id = other.id, verb = "disconnect", reason = "superseded" }
+        end
       end
     end
   end
@@ -94,18 +111,29 @@ function autoconnect.plan(cfg, states, memory, now)
       if state == "connected" then
         autoconnect.forget(memory, profile.id)
       elseif state == "disconnected" then
+        local blocked = false
+        if settings.exclusive then
+          -- Somebody else is already up, or on the way: leave it at one.
+          for _, other in ipairs(store.list(cfg, true)) do
+            if other.id ~= profile.id and isUp(states[other.id]) then
+              blocked = true
+            end
+          end
+        end
+
         local attempts = attemptsFor(memory, profile.id)
         local last = lastTryFor(memory, profile.id)
         local ready = last == nil or (now - last) >= autoconnect.COOLDOWN
 
-        if ready and attempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
-          if attempts < autoconnect.ATTEMPTS_BEFORE_FALLBACK or not profile.fallback then
+        if not blocked and ready and attempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
+          local wantsFallback = settings.fallback and profile.fallback ~= nil
+          if attempts < autoconnect.ATTEMPTS_BEFORE_FALLBACK or not wantsFallback then
             return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
           local fallback = store.get(cfg, profile.fallback)
           local fallbackState = states[profile.fallback] or "unknown"
-          if fallback and fallbackState ~= "connected" and fallbackState ~= "connecting" then
+          if fallback and not isUp(fallbackState) then
             local fallbackAttempts = attemptsFor(memory, profile.fallback)
             local fallbackLast = lastTryFor(memory, profile.fallback)
             local fallbackReady = fallbackLast == nil or (now - fallbackLast) >= autoconnect.COOLDOWN

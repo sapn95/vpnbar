@@ -10,10 +10,10 @@ take:
 - It does not appear in `scutil --nc list`. The tunnel is OpenVPN, started by
   its own root helper daemon (`com.amazonaws.acvc.helper`), not an
   `NEVPNConnection`.
-- It has **no accessibility tree at all**. With the app running, the
-  application element reports zero windows and an empty attribute list — the
-  approach that works for GlobalProtect ([ADR 0001](0001-globalprotect-is-not-a-scutil-vpn.md))
-  finds nothing to click.
+- It appeared to have **no accessibility tree at all**: with the app running,
+  the application element reported zero windows and an empty attribute list.
+  That measurement was wrong, and the correction is below — it was taken while
+  the client had no window open.
 - Its bundle contains one executable and no command line.
 
 What it does do is run its bundled OpenVPN with a management interface on
@@ -50,6 +50,36 @@ and not a patch, and this is the first proof that it does.
   two different ones. The management interface answers for whichever is running.
 - **Automating the federated login.** Out of scope for a menu, and a place to
   put credentials that should not exist.
+
+## The correction: it does have an accessibility tree
+
+**Measured wrong, 2026-09-03.** The claim above — *no accessibility tree at
+all* — was taken while the client was running **with no window open**, which is
+exactly the state in which it reports nothing: zero windows, an empty attribute
+list. With its window up it exposes the whole tree, one group per profile
+holding the name, the state and the button:
+
+```text
+AXGroup
+  AXStaticText  v=sbb
+  AXStaticText  v=Disconnected
+  AXButton      t=Connect  AXPress
+```
+
+That matters because the client has **two** profiles here and the management
+interface cannot tell them apart: `state` says a session is up, not which one.
+So `connect` and `disconnect` now take a profile name and click that row's own
+button, walking the tree in order — the name, then the state, then the button —
+and bounded to a few elements after the match, so a row without the button
+being asked for cannot reach into the next row and click that instead.
+
+The management interface keeps the jobs it is better at: `status`, which costs
+nothing and opens no window, and `force`.
+
+**The access belongs to whoever spawns the script.** Hammerspoon has it, so the
+menu works. A terminal usually does not, and `osascript` then fails with *not
+allowed assistive access* — an error about the terminal, not about this script
+or the client. That is worth knowing before spending an evening on it.
 
 ## What is not proved
 

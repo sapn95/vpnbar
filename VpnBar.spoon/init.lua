@@ -544,6 +544,16 @@ function obj:dispatch(action)
         self:refresh()
       end
     end,
+    toggleSetting = function()
+      local settings = store.settings(self.config)
+      local updated, err = store.setSettings(self.config, { [action.setting] = not settings[action.setting] })
+      if self:apply(updated, err) then
+        -- Both settings change what autoconnect is allowed to do, so its
+        -- history of failures under the old rules is no longer worth keeping.
+        autoconnect.forget(self.attempts)
+        self:refresh()
+      end
+    end,
     toggleProtected = function()
       local profile = store.get(self.config, action.id)
       if profile and self:apply(store.update(self.config, action.id, { protected = not profile.protected })) then
@@ -587,7 +597,12 @@ function obj:hammerspoonMenu(items)
         out[#out + 1] = { title = "-" }
       end
     else
-      local entry = { title = item.title, disabled = item.disabled or false, tooltip = item.tooltip }
+      local entry = {
+        title = item.title,
+        disabled = item.disabled or false,
+        tooltip = item.tooltip,
+        checked = item.checked,
+      }
       if item.menu then
         entry.menu = self:hammerspoonMenu(item.menu)
       elseif item.action then

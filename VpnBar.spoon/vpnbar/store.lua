@@ -193,10 +193,53 @@ function store.validate(profile)
   return validateProbe(profile.probe)
 end
 
+--- The settings that are about the menu as a whole rather than one connection,
+--- with what they mean when the file does not say.
+store.DEFAULTS = {
+  -- Only one tunnel up at a time. Governs what autoconnect does: it will not
+  -- start a second one, and it takes down extras it started itself. A tunnel
+  -- somebody opened by hand is reported, never closed — see
+  -- docs/adr/0005-crud-is-over-the-menu-not-the-system.md for why that line is
+  -- where it is.
+  exclusive = false,
+  -- Whether autoconnect is allowed to try a connection's `fallback` at all.
+  -- Off, it keeps asking for the one that was actually chosen.
+  fallback = true,
+}
+
 --- An empty, valid config.
 --- @return table
 function store.empty()
-  return { version = store.VERSION, profiles = {} }
+  return { version = store.VERSION, settings = copy(store.DEFAULTS), profiles = {} }
+end
+
+--- The settings, with every default filled in.
+--- @param cfg table
+--- @return table
+function store.settings(cfg)
+  local settings = copy(store.DEFAULTS)
+  for key, value in pairs((cfg or {}).settings or {}) do
+    settings[key] = value
+  end
+  return settings
+end
+
+--- @param cfg table
+--- @param patch table
+--- @return table|nil cfg, string|nil err
+function store.setSettings(cfg, patch)
+  local next_ = copy(cfg)
+  next_.settings = store.settings(cfg)
+  for key, value in pairs(patch) do
+    if store.DEFAULTS[key] == nil then
+      return nil, ("no such setting: %s"):format(tostring(key))
+    end
+    if type(value) ~= type(store.DEFAULTS[key]) then
+      return nil, ("%s must be %s"):format(key, type(store.DEFAULTS[key]))
+    end
+    next_.settings[key] = value
+  end
+  return next_
 end
 
 --- Accept whatever came off disk and hand back something the rest of the code
@@ -218,7 +261,19 @@ function store.normalise(raw)
     return nil, "profiles must be an array"
   end
 
-  local cfg = { version = store.VERSION, profiles = {} }
+  if raw.settings ~= nil and type(raw.settings) ~= "table" then
+    return nil, "settings must be an object"
+  end
+  for key, value in pairs(raw.settings or {}) do
+    if store.DEFAULTS[key] == nil then
+      return nil, ("no such setting: %s"):format(tostring(key))
+    end
+    if type(value) ~= type(store.DEFAULTS[key]) then
+      return nil, ("setting %s must be %s"):format(key, type(store.DEFAULTS[key]))
+    end
+  end
+
+  local cfg = { version = store.VERSION, settings = store.settings(raw), profiles = {} }
   local seen = {}
   for index, rawProfile in ipairs(raw.profiles or {}) do
     local profile = copy(rawProfile)
