@@ -68,7 +68,7 @@ password_file() {
 
 @test "status is connected when the management interface says CONNECTED" {
   export STUB_NC_LISTENING=1
-  export STUB_NC_REPLY=">STATE:1788227014,CONNECTED,SUCCESS,44.0.43.2,3.79.82.46,443"
+  export STUB_NC_REPLY=">STATE:1788227014,CONNECTED,SUCCESS,10.0.0.2,198.51.100.7,443"
   run "${SCRIPT}" status
   [ "${output}" = "connected" ]
 }
@@ -100,7 +100,7 @@ password_file() {
   export STUB_NC_LISTENING=1
   password_file old "OLDPASSWORD00000"
   sleep 1
-  password_file sbb "NEWPASSWORD00000"
+  password_file work "NEWPASSWORD00000"
   run "${SCRIPT}" disconnect
   [ "$(head -1 "${STUB_SENT}")" = "NEWPASSWORD00000" ]
 }

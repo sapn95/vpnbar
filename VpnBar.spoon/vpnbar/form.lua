@@ -60,7 +60,7 @@ local BY_BACKEND = {
     {
       key = "row",
       label = "Profile",
-      informative = "Exactly as the client's window lists it, such as sbb. That row's own button is the one clicked.",
+      informative = "Exactly as the client's window lists it, such as work. That row's own button is the one clicked.",
       required = true,
     },
     {

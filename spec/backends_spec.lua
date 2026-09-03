@@ -294,7 +294,7 @@ describe("the awsvpn backend", function()
     name = "AWS",
     backend = "awsvpn",
     app = "AWS VPN Client",
-    row = "sbb",
+    row = "work",
     commands = { status = "aws-vpn-client status", force = "aws-vpn-client force" },
   }
 
@@ -312,8 +312,8 @@ describe("the awsvpn backend", function()
     local runtime = runtimeWithRows()
     backends.act(profile, "connect", runtime)
     backends.act(profile, "disconnect", runtime)
-    assert.same({ app = "AWS VPN Client", row = "sbb", button = "Connect" }, runtime.rows[1])
-    assert.same({ app = "AWS VPN Client", row = "sbb", button = "Disconnect" }, runtime.rows[2])
+    assert.same({ app = "AWS VPN Client", row = "work", button = "Connect" }, runtime.rows[1])
+    assert.same({ app = "AWS VPN Client", row = "work", button = "Disconnect" }, runtime.rows[2])
   end)
 
   it("reads the state from a command instead, which opens no window", function()
@@ -325,7 +325,7 @@ describe("the awsvpn backend", function()
 
   it("is unknown when no status command was given, rather than opening one", function()
     local runtime = runtimeWithRows()
-    local bare = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "sbb" }
+    local bare = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "work" }
     assert.equals("unknown", backends.status(bare, runtime))
     assert.equals(0, #runtime.rows)
   end)

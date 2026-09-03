@@ -391,7 +391,7 @@ end)
 
 describe("store, the awsvpn backend", function()
   local function awsvpn(overrides)
-    local profile = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "sbb" }
+    local profile = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "work" }
     for key, value in pairs(overrides or {}) do
       profile[key] = value
     end
@@ -410,7 +410,7 @@ describe("store, the awsvpn backend", function()
 
   it("defaults the app name, which is the same on every Mac", function()
     local cfg =
-      assert(store.normalise({ profiles = { { id = "aws", name = "AWS", backend = "awsvpn", row = "sbb" } } }))
+      assert(store.normalise({ profiles = { { id = "aws", name = "AWS", backend = "awsvpn", row = "work" } } }))
     assert.equals("AWS VPN Client", cfg.profiles[1].app)
   end)
 end)
