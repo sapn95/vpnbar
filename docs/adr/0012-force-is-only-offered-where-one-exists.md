@@ -6,9 +6,9 @@
 
 **Force disconnect** appears in a connection's submenu only when
 `backends.canForce` says there is genuinely something stronger to run — which
-today means a `shell` profile whose config gives it a `commands.force`. It is
-never shown for `scutil`, never for `globalprotect`, and never for a monitored
-connection.
+means a profile whose config gives it a `commands.force`. It is
+never shown for a connection whose config gives it no such command, and never
+for a protected one.
 
 ## Why not offer it everywhere
 

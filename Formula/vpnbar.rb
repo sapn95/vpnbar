@@ -1,16 +1,18 @@
 # frozen_string_literal: true
 
-# vpnbar is a private repository, so this formula lives in it rather than in a
-# public tap: `brew tap sapn95/vpnbar git@github.com:sapn95/vpnbar.git` taps it
-# over SSH with the keys the user already has, and no release tarball has to be
-# fetched from anywhere that would need a token.
+# The formula lives in the repository it builds rather than in a separate tap,
+# the same way sapn95/git-tidy does it: `brew tap sapn95/vpnbar
+# https://github.com/sapn95/vpnbar.git` taps this repository directly, so there
+# is one place to change and no second repository to keep in step.
 class Vpnbar < Formula
   desc "Menu-bar VPN controller for Hammerspoon"
   homepage "https://github.com/sapn95/vpnbar"
-  # `ssh://git@github.com/...`, not the scp-style `git@github.com:...`:
-  # Homebrew parses this with URI and rejects the short form outright
-  # ("bad URI (is not URI?)"). `brew tap` accepts either; the formula does not.
-  head "ssh://git@github.com/sapn95/vpnbar.git", branch: "main"
+  # HTTPS, so anyone can install it without an SSH key of their own. While the
+  # repository was private this was `ssh://git@github.com/...` — and note the
+  # `ssh://`: Homebrew parses this with URI and rejects the scp-style
+  # `git@github.com:...` outright with "bad URI (is not URI?)", even though
+  # `brew tap` accepts either spelling.
+  head "https://github.com/sapn95/vpnbar.git", branch: "main"
 
   depends_on :macos
 

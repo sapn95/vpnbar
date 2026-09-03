@@ -48,10 +48,22 @@ obj.logger = hs.logger.new("vpnbar", "info")
 
 -- ---------------------------------------------------------------- config i/o
 
+--- Make every missing directory on the way to `path`.
+---
+--- `hs.fs.mkdir` creates one level, and the default config lives two below a
+--- `~/.config` that a fresh Mac has never needed. One level meant the very
+--- first save failed on exactly the machine that had never run this before.
 local function ensureDirectory(path)
   local directory = path:match("^(.*)/[^/]*$")
-  if directory then
-    hs.fs.mkdir(directory)
+  if not directory then
+    return
+  end
+  local sofar = directory:sub(1, 1) == "/" and "" or "."
+  for part in directory:gmatch("[^/]+") do
+    sofar = sofar .. "/" .. part
+    if not hs.fs.attributes(sofar) then
+      hs.fs.mkdir(sofar)
+    end
   end
 end
 
@@ -77,7 +89,16 @@ end
 function obj:load()
   local file = io.open(self.configPath, "r")
   if not file then
-    self.config = store.empty()
+    -- Only a file that genuinely is not there means "no connections yet".
+    -- Anything else — permissions, a directory in the way — must not empty the
+    -- menu, because the next save would then write that emptiness over a
+    -- config that was fine.
+    if hs.fs.attributes(self.configPath) then
+      self:complain("The config file cannot be read — leaving it alone.")
+      self.config = self.config or store.empty()
+      return self.config
+    end
+    self.config = self.config or store.empty()
     return self.config
   end
   local contents = file:read("a")
@@ -390,8 +411,14 @@ end
 
 -- --------------------------------------------------------------------- state
 
-function obj:refresh(allowPanelReads)
-  local runtime = self:runtime(allowPanelReads == true)
+--- Read every connection's state, and optionally act on it.
+---
+--- @param options table|nil
+---   panelReads: allow a state read that puts a panel on screen
+---   autoconnect: allow autoconnect to start or stop something
+function obj:refresh(options)
+  options = options or {}
+  local runtime = self:runtime(options.panelReads == true)
   local states = {}
   for _, profile in ipairs(store.list(self.config, true)) do
     states[profile.id] = backends.status(profile, runtime)
@@ -401,7 +428,12 @@ function obj:refresh(allowPanelReads)
   -- At most one connection is started per refresh, and only from this one
   -- place. The policy — cooldown, how many tries before the fallback, when to
   -- give up — is all in vpnbar/autoconnect.lua and under test there.
-  local plan = autoconnect.plan(self.config, states, self.attempts, os.time())
+  --
+  -- Only when the caller allows it, which the timer and a wake do and opening
+  -- the menu does not. Otherwise looking at the menu would start a VPN: the
+  -- awsvpn backend brings a window up and clicks it, and having that happen
+  -- because somebody wanted to read a status is not acceptable.
+  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time()) or nil
   if plan then
     local profile = store.get(self.config, plan.id)
     self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
@@ -645,7 +677,9 @@ function obj:dispatch(action)
       self:refresh()
     end,
     refresh = function()
-      self:refresh(true)
+      -- Explicitly asked for, so a panel read is fair; still no autoconnect,
+      -- because what was asked for is a look and not a change.
+      self:refresh({ panelReads = true })
     end,
   }
   local handler = kinds[action.kind]
@@ -711,7 +745,7 @@ function obj:start()
   self:refresh()
 
   self.timer = hs.timer.doEvery(self.interval, function()
-    self:refresh()
+    self:refresh({ autoconnect = true })
   end)
   -- A tunnel does not survive sleep, and the title should not claim otherwise.
   self.wake = hs.caffeinate.watcher.new(function(event)
@@ -719,7 +753,7 @@ function obj:start()
       -- Failures from before the lid closed say nothing about the network on
       -- the other side of it, so autoconnect starts again from nothing.
       autoconnect.forget(self.attempts)
-      self:refresh()
+      self:refresh({ autoconnect = true })
     end
   end)
   self.wake:start()

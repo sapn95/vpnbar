@@ -29,7 +29,7 @@ two of the three tints ([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template
 │    Import from scutil…
 │    ────────────
 │    Work VPN ▸  Rename… · Edit… · Move up · Move down
-│                Hide · Monitor only · Remove…
+│                Hide · Protect from disconnecting · Remove…
 │    ────────────
 │    Open the config file
 │    Reload from disk
@@ -149,16 +149,16 @@ enough, and a `globalprotect` connection reads `unknown` until you click
 ## Install
 
 ```bash
-brew tap sapn95/vpnbar git@github.com:sapn95/vpnbar.git
+brew tap sapn95/vpnbar https://github.com/sapn95/vpnbar.git
 brew install --HEAD sapn95/vpnbar/vpnbar
 vpnbar link
 ```
 
-The tap is the repository itself, over SSH: it is private, and a formula in a
-public tap would need a token in the environment of whoever runs `brew install`
+The tap is the repository itself, so there is one place to change and no second
+repository to keep in step. `vpnbar link` is a separate step because a formula
+must not write into a home directory
 ([ADR 0014](docs/adr/0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md)).
-`vpnbar link` is a separate step because a formula must not write into a home
-directory. From a checkout instead:
+From a checkout instead:
 
 ```bash
 git clone git@github.com:sapn95/vpnbar.git ~/git/vpnbar
@@ -242,21 +242,23 @@ menu:
   panel that is a different action with a different meaning, and this menu
   cannot undo it.
 
-## Private on purpose
+## Employer-neutral on purpose
 
-This repository describes how a specific machine reaches specific networks. No
-portal hostnames, service names, address ranges or account names belong in it —
-they live in `~/.config/vpnbar/profiles.json`, which is not in git. The
-fixtures keep the shape of real output and invent every value in it. Write the
-rule, not the example.
+This tool describes how a machine reaches particular networks, so no real
+hostnames, service names, address ranges or account names belong in it. They
+live in `~/.config/vpnbar/profiles.json`, which is not in git and never will
+be. The fixtures keep the shape of real output and invent every value in it:
+write the rule, not the example.
 
-Half of that is enforced: `scripts/leak-lint.sh` runs in CI and fails on any
-IPv4 address that is not from a documentation or private range. An allowlist,
-so it contains no secrets itself and fails closed — the reasoning is
+Half of that is enforced. `scripts/leak-lint.sh` runs in CI and in `make lint`,
+and fails on any IPv4 address in the tree that is not from a documentation or
+private range. An **allowlist**, so it contains nothing worth hiding and fails
+closed — the reasoning is
 [container-commander's ADR 0011](https://github.com/sapn95/container-commander/blob/main/docs/adr/0011-employer-neutral-public-repo.md).
 
-The other half is not, and cannot easily be: a VPN profile named after an
-employer looks like any other word. That one is checked by reading, and it has
-been got wrong here once — real profile names and two addresses out of a live
-session's log sat in the fixtures and the decision records for two days before
-anybody asked.
+The other half cannot easily be: a VPN profile named after an employer looks
+like any other word. That one is checked by reading, and it was got wrong here
+once. Real profile names and two addresses out of a live session's log sat in
+the fixtures and the decision records for two days, while the repository was
+private, until somebody asked the direct question. They were taken out and the
+history was rewritten before this became public.

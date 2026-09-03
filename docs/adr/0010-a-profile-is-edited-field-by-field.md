@@ -32,7 +32,7 @@ its one-line explanation as a tooltip. A submenu has no button limit and puts
 the explanation next to the thing it explains.
 
 `form.build` reassembles the answers, keeps what the form does not ask about
-(`id`, `order`, `hidden`, `monitor`), drops the fields belonging to a backend
+(`id`, `order`, `hidden`, `protected`), drops the fields belonging to a backend
 that is no longer selected, and validates before anything is written.
 
 ## What was rejected
@@ -42,5 +42,5 @@ that is no longer selected, and validates before anything is written.
 - **Opening the file in an editor.** That still exists, one item below, and is
   the right answer for a bulk edit. It is a poor answer for changing one
   hostname.
-- **Leaving Edit to re-run Add.** It loses `order`, `hidden` and `monitor`, and
+- **Leaving Edit to re-run Add.** It loses `order`, `hidden` and `protected`, and
   every one of those is a setting somebody chose.
