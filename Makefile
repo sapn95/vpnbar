@@ -9,6 +9,7 @@ fmt:
 
 lint:
 	luacheck .
+	./scripts/leak-lint.sh
 
 test:
 	busted --coverage

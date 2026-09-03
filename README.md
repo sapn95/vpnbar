@@ -249,3 +249,14 @@ portal hostnames, service names, address ranges or account names belong in it �
 they live in `~/.config/vpnbar/profiles.json`, which is not in git. The
 fixtures keep the shape of real output and invent every value in it. Write the
 rule, not the example.
+
+Half of that is enforced: `scripts/leak-lint.sh` runs in CI and fails on any
+IPv4 address that is not from a documentation or private range. An allowlist,
+so it contains no secrets itself and fails closed — the reasoning is
+[container-commander's ADR 0011](https://github.com/sapn95/container-commander/blob/main/docs/adr/0011-employer-neutral-public-repo.md).
+
+The other half is not, and cannot easily be: a VPN profile named after an
+employer looks like any other word. That one is checked by reading, and it has
+been got wrong here once — real profile names and two addresses out of a live
+session's log sat in the fixtures and the decision records for two days before
+anybody asked.
