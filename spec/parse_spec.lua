@@ -97,7 +97,7 @@ describe("parse.inCidr", function()
   end)
 
   it("treats /0 as any address", function()
-    assert.is_true(parse.inCidr("0.0.0.0/0", "8.8.8.8"))
+    assert.is_true(parse.inCidr("0.0.0.0/0", "198.51.100.8"))
   end)
 
   it("refuses nonsense rather than guessing", function()

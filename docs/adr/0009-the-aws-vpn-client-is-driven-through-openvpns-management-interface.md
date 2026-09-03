@@ -61,7 +61,7 @@ holding the name, the state and the button:
 
 ```text
 AXGroup
-  AXStaticText  v=sbb
+  AXStaticText  v=work
   AXStaticText  v=Disconnected
   AXButton      t=Connect  AXPress
 ```
@@ -80,7 +80,7 @@ So the work is split between two mechanisms, each doing what it is better at:
 The row walk goes name, state, button, bounded to a few elements after the
 name matches — so a row that does not offer the button being asked for cannot
 reach into the next row and click that one instead. Verified against the live
-window: `sbb` and `sbb_full` each find their own Connect, `sbb` + Disconnect
+window: `work` and `work-full` each find their own Connect, `work` + Disconnect
 correctly finds nothing while it is down, and an unknown name finds nothing.
 
 ## Why the clicking is in Lua and not in the shell helper

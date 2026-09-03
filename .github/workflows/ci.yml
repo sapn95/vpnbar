@@ -59,6 +59,11 @@ jobs:
       - name: shellcheck
         # scripts/vpnbar has no extension: it is a command, not a library.
         run: shellcheck scripts/*.sh scripts/vpnbar
+      - name: addresses
+        # Every IPv4 in the tree has to be a documentation or private one. The
+        # repository describes how one machine reaches particular networks, and
+        # a real address is the part of that which is worth keeping out.
+        run: ./scripts/leak-lint.sh
 
   test:
     name: unit tests

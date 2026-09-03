@@ -99,17 +99,17 @@ it means opening the agent's panel on screen.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `app` | yes | The client's name. Defaults to `AWS VPN Client`. |
-| `row` | yes | The profile, exactly as the client's window lists it — `sbb`, `sbb_full`. That row's own button is the one clicked. |
+| `row` | yes | The profile, exactly as the client's window lists it — `work`, `work-full`. That row's own button is the one clicked. |
 | `commands.status` | no | Something cheap that prints the state, so the menu never opens a window to read one. |
 | `commands.force` | no | The harder way down. |
 
 ```json
 {
   "id": "aws",
-  "name": "AWS VPN (sbb)",
+  "name": "AWS VPN (work)",
   "backend": "awsvpn",
   "app": "AWS VPN Client",
-  "row": "sbb",
+  "row": "work",
   "commands": {
     "status": "/opt/homebrew/bin/aws-vpn-client status",
     "force": "/opt/homebrew/bin/aws-vpn-client force"
