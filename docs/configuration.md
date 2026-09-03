@@ -8,7 +8,8 @@ Everything vpnbar knows lives in one file:
 
 **Connections → Add a connection ▸** picks a backend and then asks for one
 field at a time; **Edit…** asks the same questions with the current answers
-filled in. **Monitor only** and **Hide** are toggles in the same submenu. Only
+filled in. **Protect from disconnecting**, **Hide** and **Connect
+automatically** are toggles in the same submenu. Only
 the things below that no prompt covers need the file opening by hand.
 
 It is written by the menu and it is safe to edit by hand — the menu re-reads it
