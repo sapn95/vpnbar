@@ -179,9 +179,21 @@ still work.
 **If the icon does not appear, run `vpnbar doctor` before anything else.** It
 checks Hammerspoon, the link and the line in `init.lua`, and then asks
 Hammerspoon where the icon actually is. The usual answer is that it is drawing
-perfectly, in the menu bar, at x = −9224, because a menu bar manager is holding
-it off-screen — in Bartender that is **Settings → Menu Bar Layout**, where the
-item has to be dragged from *Hidden Items* into *Shown Items*.
+perfectly, in the menu bar, at a large negative x, because a menu bar manager
+is holding it off-screen.
+
+The doctor prints the id the manager knows it by and the command that shows it:
+
+```bash
+osascript -e 'tell application "Bartender 6" \
+  to show "org.hammerspoon.Hammerspoon-vpnbar"'
+```
+
+A **name** rather than an ordinal, because the status item is created with an
+autosave name — which is the whole reason a manager's decision about it now
+sticks instead of landing on whichever Hammerspoon item happened to be first
+([ADR 0016](docs/adr/0016-the-menu-bar-item-has-a-name.md)). Add that id to the
+manager's shown items to keep it.
 
 Start with an empty menu and `Import from scutil…`, or write
 `~/.config/vpnbar/profiles.json` by hand — the format is in

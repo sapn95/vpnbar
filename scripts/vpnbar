@@ -17,6 +17,11 @@ readonly LOAD_LINE='hs.loadSpoon("VpnBar"):start()'
 # What counts as "init.lua loads it". Matching the whole suggested line would
 # call a config that keeps a handle on the Spoon — the two-line form — broken.
 readonly LOAD_MARK='loadSpoon("VpnBar")'
+# What a menu bar manager calls this icon: the application's bundle id plus the
+# autosave name the Spoon gives its status item. Without that name it would be
+# an ordinal, and an ordinal is not something a decision can stick to — see
+# docs/adr/0016-the-menu-bar-item-has-a-name.md.
+readonly BARTENDER_ID="org.hammerspoon.Hammerspoon-vpnbar"
 
 # `timeout` is GNU and not on a stock macOS. A Hammerspoon that is wedged, or
 # whose ipc is off, must not hang the doctor.
@@ -165,13 +170,17 @@ cmd_doctor() {
         # hide an item by parking it at a large negative x. The item is running
         # and drawing; it is simply not where anyone can see it.
         bad "icon is parked off-screen at x=${x}"
-        note "A menu bar manager is holding it there. In Bartender:"
-        note "Settings → Menu Bar Items → Hammerspoon → Show. Ice and"
-        note "Vanilla have the same idea under a different name."
-        note "Measured, not guessed: quit the manager and this icon sits"
-        note "at the right of the menu bar. Its show/hide lists are not"
-        note "the lever — dragging the icon out of the hidden area in its"
-        note "layout editor is."
+        note "A menu bar manager is holding it there. Bartender knows it"
+        note "as ${BARTENDER_ID} — a name"
+        note "rather than an ordinal, because the Spoon gives its status"
+        note "item an autosave name, so a decision about it sticks."
+        note ""
+        note "Show it now:"
+        note "  osascript -e 'tell application \"Bartender 6\" \\"
+        note "    to show \"${BARTENDER_ID}\"'"
+        note ""
+        note "To keep it, add that id to the manager's shown items. Ice"
+        note "and Vanilla have the same idea under a different name."
         failures=$((failures + 1))
       fi
       ;;

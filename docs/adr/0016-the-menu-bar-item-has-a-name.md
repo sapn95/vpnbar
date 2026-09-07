@@ -1,6 +1,6 @@
-# 0016 — The menu-bar item has a name, and why that is only half the story
+# 0016 — The menu-bar item has a name, and that is what a menu bar manager can hold on to
 
-**Status:** accepted, 2026-09-03.
+**Status:** accepted, 2026-09-03. Corrected the same day, twice — see below.
 
 ## The decision
 
@@ -8,54 +8,55 @@
 hs.menubar.new(true, "vpnbar")
 ```
 
-The second argument is an autosave name. Hammerspoon's own documentation says
-what it is for: *so that macOS can restore the menubar position between
-restarts.* Without one, the status item gets a fresh identity every time the
-Spoon starts, and macOS has nothing to restore a position from.
+The second argument is an autosave name. Hammerspoon documents it as what lets
+macOS restore the item's position between restarts. It does more than that, and
+the more is the point.
 
-## What it does not fix, and what actually went wrong
+## What was actually wrong
 
-The icon kept disappearing behind a menu bar manager, and this was blamed on
-the manager several times before anybody looked. Bartender's own preferences
-say otherwise:
+The icon kept disappearing behind Bartender. Bartender addresses status items
+by an id, and **the id depends on whether the item has an autosave name**:
 
-```text
-org.hammerspoon.Hammerspoon-Item-0   ->  Hide
-org.hammerspoon.Hammerspoon-Item-1   ->  Show
+| | Bartender's id for it |
+| --- | --- |
+| without a name | `org.hammerspoon.Hammerspoon-Item-0` |
+| with `"vpnbar"` | `org.hammerspoon.Hammerspoon-vpnbar` |
+
+The first is an **ordinal**. Hammerspoon owns two status items here — its own
+and this one — so which of them is `Item-0` depends on which was created
+first, which is a race between a Spoon starting and the application it starts
+in. Bartender's rule for `Item-0` therefore landed on this icon one reload and
+on the other one the next, and no amount of moving `Item-0` between its Show
+and Hide lists could fix something whose identity changed underneath it.
+
+The second is a **name**. It is the same string every time, so the manager has
+something durable to attach a decision to. Adding
+`org.hammerspoon.Hammerspoon-vpnbar` to Bartender's shown items makes the icon
+stay, across Bartender restarts and across Hammerspoon reloads. Measured:
+`x=1441` before and after two of each.
+
+Bartender is scriptable, which is how the id was found rather than guessed:
+
+```applescript
+tell application "Bartender 6" to list menu bar items
+tell application "Bartender 6" to show "org.hammerspoon.Hammerspoon-vpnbar"
 ```
 
-It addresses status items as `<bundle-id>-Item-<n>` — **by ordinal, not by
-identity**. Hammerspoon owns two of them here: its own icon and this one. Which
-of the pair is `Item-0` depends on which was created first, and that is a race
-between a Spoon starting and the application it starts in. One reload the
-manager's rule lands on this icon, the next it lands on the other.
+## Two corrections, both worth keeping
 
-Nothing a Spoon can set changes that, autosave name included.
+The first three explanations offered for this were versions of *a menu bar
+manager is hiding it*: true, and useless, because it does not say why it comes
+back or why it changes between reloads.
 
-Nor is the ordinal the whole answer. With **both** ordinals moved into `Show`
-and `Hide` left empty, the icon is still parked off-screen — so those lists are
-not the control either. What is measurable is this:
+The fourth was worse, because it sounded like evidence. Having moved both
+ordinals into the shown list and seen the icon stay hidden, this file concluded
+that the autosave name "is not what was breaking" and that only the manager's
+own layout editor could fix it. Both halves were wrong, and for the same
+reason: the ordinals were no longer this item's id at all. The name was — and
+nobody had asked the manager what it thought the id was, which is one
+AppleScript command it has always answered.
 
-| Bartender | icon |
-| --- | --- |
-| quit | `x=1477`, in the menu bar |
-| running | `x=-9151`, off-screen |
+## What follows from it
 
-Its live layout lives somewhere its preferences file does not expose, and it
-rewrites that state itself. The only reliable lever is its own layout editor,
-by hand. This is recorded here so the next person spends five seconds on it
-rather than an evening.
-
-## Why keep the name then
-
-Because it is right on its own terms — the position survives a reload, which it
-did not before — and because it costs one argument. It is simply not the thing
-that was breaking.
-
-## What was rejected
-
-**Guessing again.** The first three explanations offered for this were versions
-of "a menu bar manager is hiding it", which is true and useless: it does not say
-why it comes back, or why it changes between reloads. The preferences file
-answers both in two lines, and reading it took less time than any of the
-guesses.
+`vpnbar doctor` now prints the Bartender id and the command that fixes it,
+rather than telling anybody to go and drag something.
