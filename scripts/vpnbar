@@ -165,9 +165,12 @@ cmd_doctor() {
         # hide an item by parking it at a large negative x. The item is running
         # and drawing; it is simply not where anyone can see it.
         bad "icon is parked off-screen at x=${x}"
-        note "A menu bar manager is hiding it. In Bartender: Settings →"
-        note "Menu Bar Items → Hammerspoon → Show. Ice and Vanilla have the"
-        note "same idea under a different name."
+        note "A menu bar manager is holding it there. In Bartender:"
+        note "Settings → Menu Bar Items → Hammerspoon → Show. Ice and"
+        note "Vanilla have the same idea under a different name."
+        note "It should stay where you put it now: the status item carries"
+        note "an autosave name, so macOS and the manager both recognise it"
+        note "again after a reload."
         failures=$((failures + 1))
       fi
       ;;

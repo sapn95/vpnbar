@@ -21,3 +21,4 @@ whether their idea was considered or simply missed.
 | [0013](0013-autoconnect-is-a-plan-not-a-timer.md) | Autoconnect is a plan, not a timer |
 | [0014](0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md) | Homebrew installs it, and `vpnbar link` puts it in place |
 | [0015](0015-one-at-a-time-is-a-setting-not-a-rule.md) | One connection at a time is a setting, and it never closes yours |
+| [0016](0016-the-menu-bar-item-has-a-name.md) | The menu-bar item has a name, and why that is only half the story |

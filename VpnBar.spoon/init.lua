@@ -734,7 +734,17 @@ end
 
 function obj:start()
   self:load()
-  self.menubar = self.menubar or hs.menubar.new()
+  -- The second argument is an autosave name. Without one, macOS gives the
+  -- status item a fresh identity on every reload and cannot restore its
+  -- position.
+  --
+  -- It is only half the story of why this icon kept vanishing, and the smaller
+  -- half. Bartender addresses items as `<bundle-id>-Item-<n>` — by *ordinal*,
+  -- not by identity — so with Hammerspoon owning two status items, which one
+  -- is Item-0 depends on which was created first. Its rules then land on
+  -- whichever happened to be there. Nothing this Spoon can set changes that;
+  -- see docs/adr/0016-the-menu-bar-item-has-a-name.md.
+  self.menubar = self.menubar or hs.menubar.new(true, "vpnbar")
   self.menubar:setMenu(function()
     -- Built on every open, so a config edited by hand shows up without a
     -- reload and a state read on the timer is never the reason a menu is stale.
