@@ -165,9 +165,13 @@ cmd_doctor() {
         # hide an item by parking it at a large negative x. The item is running
         # and drawing; it is simply not where anyone can see it.
         bad "icon is parked off-screen at x=${x}"
-        note "A menu bar manager is hiding it. In Bartender: Settings →"
-        note "Menu Bar Items → Hammerspoon → Show. Ice and Vanilla have the"
-        note "same idea under a different name."
+        note "A menu bar manager is holding it there. In Bartender:"
+        note "Settings → Menu Bar Items → Hammerspoon → Show. Ice and"
+        note "Vanilla have the same idea under a different name."
+        note "Measured, not guessed: quit the manager and this icon sits"
+        note "at the right of the menu bar. Its show/hide lists are not"
+        note "the lever — dragging the icon out of the hidden area in its"
+        note "layout editor is."
         failures=$((failures + 1))
       fi
       ;;
