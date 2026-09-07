@@ -168,9 +168,10 @@ cmd_doctor() {
         note "A menu bar manager is holding it there. In Bartender:"
         note "Settings → Menu Bar Items → Hammerspoon → Show. Ice and"
         note "Vanilla have the same idea under a different name."
-        note "It should stay where you put it now: the status item carries"
-        note "an autosave name, so macOS and the manager both recognise it"
-        note "again after a reload."
+        note "Measured, not guessed: quit the manager and this icon sits"
+        note "at the right of the menu bar. Its show/hide lists are not"
+        note "the lever — dragging the icon out of the hidden area in its"
+        note "layout editor is."
         failures=$((failures + 1))
       fi
       ;;

@@ -30,9 +30,21 @@ of the pair is `Item-0` depends on which was created first, and that is a race
 between a Spoon starting and the application it starts in. One reload the
 manager's rule lands on this icon, the next it lands on the other.
 
-Nothing a Spoon can set changes that, autosave name included. The stable fixes
-are outside this repository: give the manager a single Hammerspoon item to
-reason about, or tell it that both are wanted.
+Nothing a Spoon can set changes that, autosave name included.
+
+Nor is the ordinal the whole answer. With **both** ordinals moved into `Show`
+and `Hide` left empty, the icon is still parked off-screen — so those lists are
+not the control either. What is measurable is this:
+
+| Bartender | icon |
+| --- | --- |
+| quit | `x=1477`, in the menu bar |
+| running | `x=-9151`, off-screen |
+
+Its live layout lives somewhere its preferences file does not expose, and it
+rewrites that state itself. The only reliable lever is its own layout editor,
+by hand. This is recorded here so the next person spends five seconds on it
+rather than an evening.
 
 ## Why keep the name then
 
