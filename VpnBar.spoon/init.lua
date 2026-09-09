@@ -684,6 +684,59 @@ function obj:act(id, verb)
   end)
 end
 
+--- Take down everything the menu just said it would take down.
+---
+--- The list comes from `menu.disconnectAll`, the same call the menu item used to
+--- name them, so the confirmation and what happens cannot disagree. Protected
+--- connections are not in it and are not asked about.
+function obj:disconnectAll()
+  local plan = menu.disconnectAll(self.config, self.states)
+  if #plan == 0 then
+    return
+  end
+  local names = {}
+  for _, entry in ipairs(plan) do
+    names[#names + 1] = entry.name
+  end
+  if
+    hs.dialog.blockAlert(
+      ("Disconnect %d connection%s?"):format(#plan, #plan == 1 and "" or "s"),
+      table.concat(names, ", ") .. ". Protected connections are left alone.",
+      "Disconnect",
+      "Cancel"
+    ) ~= "Disconnect"
+  then
+    return
+  end
+  -- One mark for the whole run rather than one per connection: a `force` waits
+  -- on a management interface and then on an app quitting, so this is seconds of
+  -- work, and it is all the same click.
+  work.begin(self.work, os.time())
+  self:paint()
+  hs.timer.doAfter(0, function()
+    if not self.running then
+      work.finish(self.work)
+      return
+    end
+    local runtime = self:runtime(true)
+    for _, entry in ipairs(plan) do
+      local profile = store.get(self.config, entry.id)
+      if profile then
+        local called, ok, err = pcall(backends.act, profile, entry.verb, runtime)
+        if not called then
+          self:complain(("%s: %s"):format(entry.name, tostring(ok)))
+        elseif not ok then
+          -- Reported and carried on. One connection refusing to close is no
+          -- reason to leave the others up.
+          self:complain(("%s: %s"):format(entry.name, err or "the command failed"))
+        end
+      end
+    end
+    self:refreshSoon(nil, 2)
+    work.finish(self.work)
+  end)
+end
+
 function obj:dispatch(action)
   local kinds = {
     connect = function()
@@ -719,6 +772,30 @@ function obj:dispatch(action)
     end,
     force = function()
       self:act(action.id, "force")
+    end,
+    disconnectAll = function()
+      self:disconnectAll()
+    end,
+    restart = function()
+      local profile = store.get(self.config, action.id)
+      if not profile then
+        return
+      end
+      local app = profile.app or profile.name
+      local safety = profile.autoconnect and " If the connection does drop, autoconnect brings it back." or ""
+      if
+        hs.dialog.blockAlert(
+          ("Restart %s?"):format(app),
+          ("%s quits and opens again. Its tunnel is held by the agent's own system service rather than by "):format(app)
+            .. "the app, so this is not a disconnect."
+            .. safety,
+          "Restart",
+          "Cancel"
+        ) ~= "Restart"
+      then
+        return
+      end
+      self:act(action.id, "restart")
     end,
     toggleAutoconnect = function()
       local profile = store.get(self.config, action.id)

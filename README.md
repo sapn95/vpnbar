@@ -32,12 +32,15 @@ from login to shutdown
 ├─ ○  Gateway VPN         → click to connect
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
 ├─ ────────────
+├─ Disconnect everything  → all of them that are not protected
+├─ ────────────
 ├─ Connections ▸
 │    Add a connection ▸  scutil · GlobalProtect · AWS VPN · Shell
 │    Import from scutil…
 │    ────────────
 │    Work VPN ▸  Rename… · Edit… · Move up · Move down
 │                Hide · Protect from disconnecting · Remove…
+│                Force disconnect, Restart <app> — only where they apply
 │    ────────────
 │    Settings ▸  Only one connection at a time · Use fallbacks
 │    ────────────
@@ -142,6 +145,31 @@ GlobalProtect, where it would run the identical command under a stronger name
 
 The AWS helper's version is the shape to copy: ask through the management
 interface, wait, and only then quit the client — the tunnel goes with it.
+
+## Disconnect everything
+
+One row, above **Connections**, once anything is up: it closes every connection
+that is up or on its way up and is not protected, taking the harder path wherever
+a config gives one. The confirmation names them.
+
+Where everything up is protected it stays, greyed out, and says which connection
+is holding it. That is deliberately the opposite of what **Force disconnect**
+does when it does not apply, and
+[ADR 0020](docs/adr/0020-disconnect-everything-leaves-the-protected-ones-alone.md)
+says why: here there is a feature and a reason, and the reason is a setting two
+submenus away.
+
+## Restarting the agent
+
+A `globalprotect` connection's submenu offers **Restart GlobalProtect**. It
+quits the agent, insists if it does not go, and opens it again.
+
+Offered on a **protected** connection too, which no other write is. Everything
+this backend does goes through the agent's panel, so an agent that has stopped
+answering is a connection with nothing left to click, and the tunnel itself is
+held by a root service rather than by the app that was just closed
+([ADR 0021](docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Not
+offered for the AWS client, which is the tunnel's own parent process.
 
 ## The probe
 
