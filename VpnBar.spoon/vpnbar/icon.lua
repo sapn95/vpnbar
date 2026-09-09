@@ -88,11 +88,31 @@ local function tickElement(size)
   }
 end
 
-local function dot(size, colour)
+-- While something is running the dot breathes: out and back over four frames,
+-- which reads as work in progress. Two frames alternating reads as a fault
+-- light, and a mark that does not move at all is what this answers — a
+-- permanently connected tunnel meant the icon looked identical whether the
+-- Spoon was mid-read, mid-click or idle. The first frame is the resting radius,
+-- so a caller that never advances the phase gets the mark unchanged.
+local PULSE = { 0.13, 0.19, 0.13, 0.07 }
+
+--- How many frames the busy mark has.
+icon.PHASES = #PULSE
+
+--- Which frame of the pulse a phase number means. Any integer works, so the
+--- adapter can keep counting up and never has to wrap.
+--- @param phase number|nil
+--- @return number 1..icon.PHASES
+function icon.frame(phase)
+  local index = math.floor(tonumber(phase) or 1)
+  return ((index - 1) % icon.PHASES) + 1
+end
+
+local function dot(size, colour, fraction)
   return {
     type = "circle",
     center = { x = size * 0.5, y = size * 0.44 },
-    radius = size * 0.13,
+    radius = size * fraction,
     action = "fill",
     fillColor = colour,
   }
@@ -102,20 +122,22 @@ end
 ---
 --- - connected: the shield is filled, with a tick cut out of it. Filled alone
 ---   is a blob at this size; the cut-out gives it something to be.
---- - connecting: the outline, with the middle filling in. Halfway, visibly.
+--- - connecting: the outline, with the middle filling in. Halfway, visibly, and
+---   the dot breathes as `phase` advances.
 --- - disconnected: the outline alone.
 --- - unknown: the outline, faint. Not knowing is not the same as being down,
 ---   and the icon should not claim otherwise.
 ---
 --- @param state string|nil one of the four states, anything else is unknown
 --- @param size number|nil defaults to icon.SIZE
+--- @param phase number|nil which frame of the busy pulse, ignored by the rest
 --- @return table list of hs.canvas element descriptors
-function icon.elements(state, size)
+function icon.elements(state, size, phase)
   size = size or icon.SIZE
   if state == "connected" then
     return { shieldElement(size, "fill", INK), tickElement(size) }
   elseif state == "connecting" then
-    return { shieldElement(size, "stroke", INK), dot(size, INK) }
+    return { shieldElement(size, "stroke", INK), dot(size, INK, PULSE[icon.frame(phase)]) }
   elseif state == "disconnected" then
     return { shieldElement(size, "stroke", INK) }
   end

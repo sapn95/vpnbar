@@ -18,6 +18,14 @@ read. It is a template image, so macOS tints it to the bar it is sitting on and
 the state is carried by the fill rather than by a colour that would be wrong in
 two of the three tints ([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template-image.md)).
 
+The mark also says when it is busy. The first read after login, the minute after a
+wake, and a click that has to open an app's window and press a row in it all turn
+the shield into an outline with a dot that breathes, and it goes back to reporting
+the state once the work is done. On a machine with an always-on tunnel that is the
+difference between an icon that means something and one that reads `connected`
+from login to shutdown
+([ADR 0017](docs/adr/0017-the-mark-says-when-it-is-working.md)).
+
 ```text
 ●2                        ← two tunnels up: the mark, plus a count
 ├─ ●  Work VPN            → click to disconnect
@@ -25,15 +33,19 @@ two of the three tints ([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
 ├─ ────────────
 ├─ Connections ▸
-│    Add a connection ▸  scutil · GlobalProtect · Shell
+│    Add a connection ▸  scutil · GlobalProtect · AWS VPN · Shell
 │    Import from scutil…
 │    ────────────
 │    Work VPN ▸  Rename… · Edit… · Move up · Move down
 │                Hide · Protect from disconnecting · Remove…
 │    ────────────
+│    Settings ▸  Only one connection at a time · Use fallbacks
+│    ────────────
 │    Open the config file
 │    Reload from disk
-└─ Refresh now
+├─ Refresh now
+├─ ────────────
+└─ Quit vpnbar            → the icon goes, nothing is disconnected
 ```
 
 ## What CRUD means here

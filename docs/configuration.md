@@ -230,6 +230,14 @@ left alone because asking an unreadable connection to connect is how a probe
 nobody configured turns into a login prompt every ten seconds. All of it is in
 [ADR 0013](adr/0013-autoconnect-is-a-plan-not-a-timer.md).
 
+A wake is a fresh start: the record of what has failed is dropped, because a
+portal that was unreachable behind a closed lid says nothing about the network in
+front of an open one. The state is then read at two, six and fifteen seconds, and
+only the last of the three may connect anything. Wi-Fi has not associated when
+the wake event fires, and an attempt spent then buys a minute of cooldown for a
+tunnel the machine could not possibly have built
+([ADR 0018](adr/0018-nothing-waits-for-a-read.md)).
+
 A `fallback` must name a connection that exists in the same file — vpnbar
 refuses the config otherwise, because a dead end at the moment it is needed is
 worse than having no fallback at all. A connection cannot fall back to itself,

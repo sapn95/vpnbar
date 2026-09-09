@@ -22,3 +22,6 @@ whether their idea was considered or simply missed.
 | [0014](0014-homebrew-installs-it-and-vpnbar-link-puts-it-in-place.md) | Homebrew installs it, and `vpnbar link` puts it in place |
 | [0015](0015-one-at-a-time-is-a-setting-not-a-rule.md) | One connection at a time is a setting, and it never closes yours |
 | [0016](0016-the-menu-bar-item-has-a-name.md) | The menu-bar item has a name, and why that is only half the story |
+| [0017](0017-the-mark-says-when-it-is-working.md) | The mark says when it is working, and the busy state is a count |
+| [0018](0018-nothing-waits-for-a-read.md) | Nothing waits for a read |
+| [0019](0019-quit-stops-the-spoon-and-nothing-else.md) | Quit stops the Spoon and nothing else |
