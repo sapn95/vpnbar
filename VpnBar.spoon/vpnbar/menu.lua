@@ -108,6 +108,94 @@ function menu.title(states, busy)
   return menu.glyph(indicator)
 end
 
+-- Up, or on its way up. What "everything" is counted from: a connection that is
+-- down needs nothing done to it, and one whose state could not be read is one
+-- nobody knows anything about — sending a disconnect at that is how an
+-- unconfigured probe turns into a panel opening by itself.
+local function isUp(state)
+  return state == "connected" or state == "connecting"
+end
+
+--- Everything a **Disconnect everything** would actually take down, in the order
+--- the config lists it.
+---
+--- Protected connections are never in it, and that is the whole reason this is a
+--- function rather than a loop inside the item: the menu says which connections
+--- it is about to close, the adapter closes exactly those, and neither can drift
+--- from the other. Hidden connections **are** in it — hiding is about the top
+--- level of the menu, not about the tunnel.
+--- @param cfg table
+--- @param states table map of profile id to state
+--- @return table list of { id, name, verb }
+function menu.disconnectAll(cfg, states)
+  states = states or {}
+  local plan = {}
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if not profile.protected and isUp(states[profile.id]) then
+      plan[#plan + 1] = {
+        id = profile.id,
+        name = profile.name,
+        -- The harder path wherever the config gives one. An item that says
+        -- everything is the wrong place to make somebody ask twice.
+        verb = backends.canForce(profile) and "force" or "disconnect",
+      }
+    end
+  end
+  return plan
+end
+
+-- The connections that are up and may not be touched. Not a plan, a reason: an
+-- item that says "everything" and does nothing has to be able to say why.
+local function heldOpen(cfg, states)
+  local names = {}
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if profile.protected and isUp(states[profile.id]) then
+      names[#names + 1] = profile.name
+    end
+  end
+  return names
+end
+
+local function namesOf(plan)
+  local names = {}
+  for _, entry in ipairs(plan) do
+    names[#names + 1] = entry.name
+  end
+  return names
+end
+
+local function usesForce(plan)
+  for _, entry in ipairs(plan) do
+    if entry.verb == "force" then
+      return true
+    end
+  end
+  return false
+end
+
+-- One row for "shut what can be shut". Greyed out rather than hidden when
+-- everything that is up is protected, which is the one case where a disabled
+-- item earns its place: on a machine whose only tunnel is an always-on one, an
+-- item that quietly did nothing would look broken, and one that was simply
+-- absent would look missing. So it stays, and it names what is holding it.
+local function disconnectAllItem(plan, held)
+  if #plan == 0 then
+    return {
+      title = "Disconnect everything",
+      disabled = true,
+      tooltip = "Nothing here may be disconnected. Protected from disconnecting: " .. table.concat(held, ", ") .. ".",
+    }
+  end
+  local tooltip = "Takes down: " .. table.concat(namesOf(plan), ", ") .. "."
+  if usesForce(plan) then
+    tooltip = tooltip .. " Each one the hard way where its config has one."
+  end
+  if #held > 0 then
+    tooltip = tooltip .. " Left alone, protected: " .. table.concat(held, ", ") .. "."
+  end
+  return { title = "Disconnect everything", tooltip = tooltip, action = { kind = "disconnectAll" } }
+end
+
 -- The backend chooser is a submenu and not a dialog: hs.dialog.blockAlert
 -- takes two buttons and reads a third argument as a *style*, so the version of
 -- this that offered three of them was quietly dropping one. A submenu also
@@ -134,6 +222,21 @@ local function forceItem(profile)
     return { separator = true }
   end
   return { title = "Force disconnect", action = { kind = "force", id = profile.id } }
+end
+
+-- Only for a backend where quitting the app leaves the tunnel alone, which today
+-- means GlobalProtect and nothing else. Same shape as forceItem: a separator
+-- where it does not apply, so the renderer collapses it away.
+local function restartItem(profile)
+  if not backends.canRestart(profile) then
+    return { separator = true }
+  end
+  return {
+    title = ("Restart %s"):format(profile.app),
+    tooltip = ("Quits %s and opens it again, for a panel that has stopped answering. "):format(profile.app)
+      .. "The tunnel is held by the agent's own system service rather than by this app, so it is not a disconnect.",
+    action = { kind = "restart", id = profile.id },
+  }
 end
 
 local function toggleAction(state)
@@ -188,6 +291,15 @@ function menu.build(cfg, states)
     end
   end
 
+  -- Only once there is something up to talk about. On an idle machine every
+  -- connection is already down, and a row offering to close nothing is noise.
+  local plan = menu.disconnectAll(cfg, states)
+  local held = heldOpen(cfg, states)
+  if #plan > 0 or #held > 0 then
+    items[#items + 1] = { separator = true }
+    items[#items + 1] = disconnectAllItem(plan, held)
+  end
+
   items[#items + 1] = { separator = true }
 
   local manage = {
@@ -224,6 +336,7 @@ function menu.build(cfg, states)
         },
         { separator = true },
         forceItem(profile),
+        restartItem(profile),
         { title = "Remove…", action = { kind = "remove", id = profile.id } },
       },
     }

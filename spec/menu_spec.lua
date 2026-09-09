@@ -339,6 +339,178 @@ describe("menu.build, force disconnect", function()
   end)
 end)
 
+describe("menu.disconnectAll", function()
+  -- One of each kind of answer: protected, forceable, plain, and hidden.
+  local function mixed()
+    return assert(store.normalise({
+      profiles = {
+        { id = "gp", name = "Always-on VPN", backend = "globalprotect", protected = true },
+        {
+          id = "aws",
+          name = "AWS VPN",
+          backend = "shell",
+          commands = { connect = "up", disconnect = "down", force = "kill" },
+        },
+        { id = "work", name = "Work VPN", backend = "scutil", service = "Work VPN" },
+        { id = "old", name = "Old VPN", backend = "scutil", service = "Old VPN", hidden = true },
+      },
+    }))
+  end
+
+  local function plan(states)
+    local out = {}
+    for _, entry in ipairs(menu.disconnectAll(mixed(), states)) do
+      out[#out + 1] = entry.id .. ":" .. entry.verb
+    end
+    return out
+  end
+
+  it("takes everything that is up, in the order the config lists it", function()
+    -- The hidden one is in it: hiding is about the top level of the menu, and a
+    -- tunnel you cannot see is not a tunnel that is allowed to survive
+    -- "everything".
+    assert.same(
+      { "aws:force", "work:disconnect", "old:disconnect" },
+      plan({ gp = "connected", aws = "connected", work = "connected", old = "connected" })
+    )
+  end)
+
+  it("uses the harder path only where the config gives one", function()
+    assert.same({ "aws:force" }, plan({ aws = "connected" }))
+    assert.same({ "work:disconnect" }, plan({ work = "connected" }))
+  end)
+
+  it("never includes a protected connection", function()
+    assert.same({}, plan({ gp = "connected" }))
+    assert.same({}, plan({ gp = "connecting" }))
+  end)
+
+  it("counts a connection on its way up, which is a thing you want stopped", function()
+    assert.same({ "work:disconnect" }, plan({ work = "connecting" }))
+  end)
+
+  it("leaves alone what is down, and what nobody could read", function()
+    -- A disconnect aimed at an unreadable connection is how a profile with no
+    -- probe turns a menu click into a panel opening by itself.
+    assert.same({}, plan({ work = "disconnected", aws = "unknown" }))
+    assert.same({}, plan({}))
+    assert.same({}, plan(nil))
+  end)
+
+  it("carries the name, so the confirmation can list what it is about to close", function()
+    local entries = menu.disconnectAll(mixed(), { work = "connected" })
+    assert.equals("Work VPN", entries[1].name)
+  end)
+end)
+
+describe("menu.build, disconnect everything", function()
+  local function cfg(profiles)
+    return assert(store.normalise({ profiles = profiles }))
+  end
+
+  local plain = { id = "a", name = "A", backend = "scutil", service = "a" }
+  local locked = { id = "gp", name = "Always-on VPN", backend = "globalprotect", protected = true }
+
+  it("offers it above Connections once something is up", function()
+    local items = menu.build(cfg({ plain }), { a = "connected" })
+    local item = find(items, "Disconnect everything")
+    assert.same({ kind = "disconnectAll" }, item.action)
+    assert.matches("Takes down: A", item.tooltip)
+    local at, connections = 0, 0
+    for index, entry in ipairs(items) do
+      at = entry.title == "Disconnect everything" and index or at
+      connections = entry.title == "Connections" and index or connections
+    end
+    assert.is_true(at < connections)
+  end)
+
+  it("is not there at all when everything is already down", function()
+    assert.is_nil(find(menu.build(cfg({ plain }), { a = "disconnected" }), "Disconnect everything"))
+    assert.is_nil(find(menu.build(cfg({ plain }), {}), "Disconnect everything"))
+  end)
+
+  it("stays, greyed out, and names what is holding it when the only tunnel up is protected", function()
+    -- The case this was written for. Hiding the row would read as a missing
+    -- feature and a row that quietly did nothing would read as a broken one, so
+    -- it says which connection it is not allowed to close.
+    local item = find(menu.build(cfg({ locked }), { gp = "connected" }), "Disconnect everything")
+    assert.is_true(item.disabled)
+    assert.is_nil(item.action)
+    assert.matches("Nothing here may be disconnected", item.tooltip)
+    assert.matches("Always%-on VPN", item.tooltip)
+  end)
+
+  it("says both halves when some may go and some may not", function()
+    local item =
+      find(menu.build(cfg({ plain, locked }), { a = "connected", gp = "connected" }), "Disconnect everything")
+    assert.same({ kind = "disconnectAll" }, item.action)
+    assert.matches("Takes down: A", item.tooltip)
+    assert.matches("Left alone, protected: Always%-on VPN", item.tooltip)
+  end)
+
+  it("says when it will use a force, because that is more than the row above does", function()
+    local forceable = {
+      id = "s",
+      name = "Shell VPN",
+      backend = "shell",
+      commands = { connect = "up", disconnect = "down", force = "kill" },
+    }
+    local item = find(menu.build(cfg({ forceable }), { s = "connected" }), "Disconnect everything")
+    assert.matches("the hard way", item.tooltip)
+    assert.is_nil(
+      find(menu.build(cfg({ plain }), { a = "connected" }), "Disconnect everything").tooltip:find("hard way")
+    )
+  end)
+end)
+
+describe("menu.build, restarting the agent", function()
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  local function only(profile)
+    return assert(store.normalise({ profiles = { profile } }))
+  end
+
+  it("is offered for GlobalProtect, whose tunnel does not live in the app", function()
+    local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GlobalProtect" })
+    local item = deep(menu.build(cfg, {}), "Restart GlobalProtect")
+    assert.same({ kind = "restart", id = "gp" }, item.action)
+    assert.matches("not a disconnect", item.tooltip)
+  end)
+
+  it("is offered on a protected connection, which is the one that needs it", function()
+    -- Protection is about the tunnel. A panel that has stopped answering is the
+    -- app, and the connection that may not be disconnected is exactly the one
+    -- whose only repair this is.
+    local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", protected = true })
+    assert.is_table(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
+  end)
+
+  it("is not offered where quitting the app would take the tunnel with it", function()
+    -- The AWS client *is* the tunnel's parent process, which is why its `force`
+    -- quits it. Calling that a restart would be the same click under a name that
+    -- promises the opposite.
+    local aws = only({ id = "aws", name = "AWS VPN", backend = "awsvpn", app = "AWS VPN Client", row = "work" })
+    assert.is_nil(deep(menu.build(aws, {}), "Restart"))
+    local scutil = only({ id = "a", name = "A", backend = "scutil", service = "a" })
+    assert.is_nil(deep(menu.build(scutil, {}), "Restart"))
+    local shell = only({ id = "s", name = "S", backend = "shell", commands = { connect = "up", disconnect = "down" } })
+    assert.is_nil(deep(menu.build(shell, {}), "Restart"))
+  end)
+end)
+
 describe("menu.build, the autoconnect toggle", function()
   local function cfg(fields)
     local profile = { id = "a", name = "A", backend = "scutil", service = "a" }

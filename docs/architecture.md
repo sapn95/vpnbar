@@ -67,6 +67,12 @@ config go through `store`, and `store` returns a *new* config or an error: a
 rejected edit cannot leave a partly-applied one behind, and the result is
 written atomically or not at all.
 
+One click can mean several connections. **Disconnect everything** is
+`menu.disconnectAll(cfg, states)`, a plan of `{ id, name, verb }` asked for twice:
+once by the menu, to name what the row is about to close, and once by the adapter,
+to close exactly those. Protected connections are in neither
+([ADR 0020](adr/0020-disconnect-everything-leaves-the-protected-ones-alone.md)).
+
 ## One edit
 
 `form.fields(backend)` is an ordered list of what to ask; the adapter walks it
@@ -117,3 +123,10 @@ Only `globalprotect` uses it, and only because there is nothing else
 Matching on text rather than on a remembered position is what makes this
 survive an agent update that moves a control, and it is why nothing here needs
 to know whether Disconnect is a button on the panel or an item in the menu.
+
+All of it depends on an agent that answers, and the repair for one that does not
+is `globalprotect.restart`: `SIGTERM`, a wait, `SIGKILL`, `open -a`. It is allowed
+on a protected connection because it closes an application and not a tunnel
+([ADR 0021](adr/0021-restarting-the-agent-is-not-a-disconnect.md)), and
+`backends.canRestart` keeps it away from the backend where those two are the same
+thing.

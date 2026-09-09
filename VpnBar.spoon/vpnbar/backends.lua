@@ -64,6 +64,47 @@ function globalprotect.disconnect(profile, runtime)
   return runtime.press(profile.app, globalprotect.DISCONNECT_VERBS)
 end
 
+-- Seconds given to the agent to go away by itself, and to settle once it is
+-- gone. Both are spent inside one blocking `exec`, which is why the caller runs
+-- this off the run loop like every other press.
+globalprotect.RESTART_GRACE = 2
+globalprotect.RESTART_SETTLE = 1
+
+--- Quit the agent and open it again.
+---
+--- The whole panel path depends on an app that answers. When it stops — a
+--- GlobalProtect agent that shows no window, or one whose Disconnect never
+--- responds — there is nothing left for `press` to find, and the only way back is
+--- to restart the app. That is not a disconnect: this agent's tunnel is held by
+--- its own root service and system extension, not by the process in the menu bar
+--- (ADR 0001), which is why no other backend has this. The AWS client is the
+--- opposite case, and quitting it is precisely what its `force` is for.
+---
+--- `pkill -x` matches on the process name, which for this agent is also the
+--- application name the config already carries. TERM first and KILL after the
+--- grace period: the second one is a no-op when the first worked, and this is
+--- asked for exactly when the app has stopped answering, which is when TERM
+--- alone is least likely to land. The exit status has to come from `open`,
+--- because `pkill` reports "nothing matched" as a failure and an agent that had
+--- already crashed would then look like an error.
+--- @param app string
+--- @return string command
+function globalprotect.restartCommand(app)
+  local quoted = backends.shellQuote(app)
+  return table.concat({
+    "/usr/bin/pkill -x " .. quoted,
+    "/bin/sleep " .. tostring(globalprotect.RESTART_GRACE),
+    "/usr/bin/pkill -9 -x " .. quoted,
+    "/bin/sleep " .. tostring(globalprotect.RESTART_SETTLE),
+    "/usr/bin/open -a " .. quoted,
+  }, " ; ")
+end
+
+function globalprotect.restart(profile, runtime)
+  local _, ok = runtime.exec(globalprotect.restartCommand(profile.app))
+  return ok and true or false, ok and nil or ("could not open " .. tostring(profile.app) .. " again")
+end
+
 local shell = {}
 
 function shell.status(profile, runtime)
@@ -127,6 +168,29 @@ function backends.canForce(profile)
   return type(profile.commands) == "table" and profile.commands.force ~= nil
 end
 
+--- Can this connection's app be restarted from the menu?
+---
+--- A question about the backend, not about the config: only where quitting the
+--- app leaves the tunnel where it is. Deliberately not gated on `protected` —
+--- restarting the agent is the repair for a panel that has stopped answering, and
+--- the connection that must stay up is the one that needs it most
+--- ([ADR 0021](../../docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
+--- @param profile table
+--- @return boolean
+function backends.canRestart(profile)
+  if type(profile) ~= "table" then
+    return false
+  end
+  local backend = backends.byName[profile.backend]
+  return backend ~= nil and backend.restart ~= nil and profile.app ~= nil
+end
+
+-- What a protected connection still allows. Connecting is the direction its
+-- protection points in. Restarting the agent does not reach the tunnel at all,
+-- and a rule that refused it would leave the one connection that may not be
+-- disconnected as the one whose stuck panel cannot be repaired either.
+backends.PROTECTED_VERBS = { connect = true, restart = true }
+
 --- The state of one connection.
 ---
 --- A configured probe wins over the backend's own answer, always. Reading an
@@ -162,8 +226,9 @@ function backends.act(profile, verb, runtime)
   --
   -- Protected means protected from being *brought down*. Connecting one is
   -- always allowed — a tunnel that must stay up is exactly the one worth
-  -- bringing up automatically.
-  if profile.protected and verb ~= "connect" then
+  -- bringing up automatically — and so is restarting the app that reports it,
+  -- which is a different thing from the tunnel. See `backends.PROTECTED_VERBS`.
+  if profile.protected and not backends.PROTECTED_VERBS[verb] then
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end
   local backend = backends.byName[profile.backend]

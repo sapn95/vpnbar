@@ -95,6 +95,15 @@ see [ADR 0001](adr/0001-globalprotect-is-not-a-scutil-vpn.md). Give it a
 `probe`: without one its state is only read when you ask for it, since reading
 it means opening the agent's panel on screen.
 
+Because every read and every click goes through that panel, an agent that stops
+answering leaves the connection with nothing to click. **Connections → the
+connection → Restart `<app>`** quits it and opens it again: `SIGTERM`, a couple of
+seconds, `SIGKILL` if it is still there, then `open -a`. Offered on a `protected`
+connection as well, since the tunnel is held by GlobalProtect's own root service
+rather than by the app being closed
+([ADR 0021](adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Not offered
+for `awsvpn`, where quitting the client is what `commands.force` is for.
+
 ### `backend: "awsvpn"`
 
 | Field | Required | Meaning |
@@ -189,6 +198,11 @@ The protection points **one way**: this connection can never be disconnected or
 force-disconnected from the menu, and can always be connected. Up or on its way
 up, the row reports and is greyed out (`protected from disconnecting`); down,
 it offers a single click to bring it back (`protected once it is up`).
+
+**Disconnect everything** obeys it too: that row closes what is up and not
+protected, and where everything up is protected it stays in the menu, greyed out,
+naming the connection that is holding it
+([ADR 0020](adr/0020-disconnect-everything-leaves-the-protected-ones-alone.md)).
 
 Use it where staying connected is a requirement rather than a choice — the
 state is still the most useful thing in the menu, and the button that would

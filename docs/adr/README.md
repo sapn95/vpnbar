@@ -25,3 +25,5 @@ whether their idea was considered or simply missed.
 | [0017](0017-the-mark-says-when-it-is-working.md) | The mark says when it is working, and the busy state is a count |
 | [0018](0018-nothing-waits-for-a-read.md) | Nothing waits for a read |
 | [0019](0019-quit-stops-the-spoon-and-nothing-else.md) | Quit stops the Spoon and nothing else |
+| [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone |
+| [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect |
