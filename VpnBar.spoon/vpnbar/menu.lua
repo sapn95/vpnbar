@@ -54,6 +54,31 @@ function menu.overall(states)
   return best
 end
 
+--- What the menu-bar mark shows, which is not quite the same question as
+--- `overall`.
+---
+--- Work in flight wins over every settled state. Two reasons: a state table
+--- cannot say "a read is running", and `PRECEDENCE` deliberately lets anything
+--- connected outrank anything mid-flight — so on a machine with an always-on
+--- tunnel the busy mark existed and was never once reachable. Starting up,
+--- waking, and a click that takes seconds to land all looked exactly like
+--- nothing happening.
+---
+--- @param states table map of profile id to state
+--- @param busy boolean|nil whether the adapter has a job running
+--- @return string
+function menu.indicator(states, busy)
+  if busy then
+    return "connecting"
+  end
+  for _, state in pairs(states or {}) do
+    if state == "connecting" then
+      return "connecting"
+    end
+  end
+  return menu.overall(states)
+end
+
 --- How many tunnels are up. Shown beside the icon once it is more than one,
 --- because two at once is worth noticing and one is the normal case.
 --- @param states table map of profile id to state
@@ -72,13 +97,15 @@ end
 --- is what a build without a canvas falls back to, and it is what the tests
 --- read.
 --- @param states table map of profile id to state
+--- @param busy boolean|nil whether the adapter has a job running
 --- @return string
-function menu.title(states)
+function menu.title(states, busy)
+  local indicator = menu.indicator(states, busy)
   local connected = menu.connectedCount(states)
-  if connected > 1 then
+  if indicator == "connected" and connected > 1 then
     return GLYPHS.connected .. tostring(connected)
   end
-  return menu.glyph(menu.overall(states))
+  return menu.glyph(indicator)
 end
 
 -- The backend chooser is a submenu and not a dialog: hs.dialog.blockAlert
@@ -227,6 +254,16 @@ function menu.build(cfg, states)
 
   items[#items + 1] = { title = "Connections", menu = manage }
   items[#items + 1] = { title = "Refresh now", action = { kind = "refresh" } }
+  items[#items + 1] = { separator = true }
+  -- Last, and its own item rather than something under Connections: a menu-bar
+  -- app with no way out of its own menu is one you have to know about
+  -- Hammerspoon to get rid of.
+  items[#items + 1] = {
+    title = "Quit vpnbar",
+    tooltip = "Takes the icon out of the menu bar and stops watching. "
+      .. "Nothing is disconnected. Reload Hammerspoon to bring it back.",
+    action = { kind = "quit" },
+  }
 
   return items
 end

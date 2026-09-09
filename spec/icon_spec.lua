@@ -89,6 +89,41 @@ describe("icon.elements", function()
     assert.equals("circle", elements[2].type)
   end)
 
+  it("breathes while it works, out and back", function()
+    -- A mark that moves is the difference between "it is doing something" and
+    -- "it looks the same as it did before the click". Out and back rather than
+    -- two frames alternating, which reads as a fault light.
+    local radii = {}
+    for phase = 1, icon.PHASES do
+      radii[phase] = icon.elements("connecting", 16, phase)[2].radius
+    end
+    assert.is_true(icon.PHASES >= 3)
+    local largest, smallest = math.max(table.unpack(radii)), math.min(table.unpack(radii))
+    assert.is_true(largest > smallest)
+    -- It returns to where it started, so the loop has no jump in it.
+    assert.equals(radii[1], icon.elements("connecting", 16, icon.PHASES + 1)[2].radius)
+  end)
+
+  it("rests where it always rested when nobody advances the phase", function()
+    local resting = icon.elements("connecting", 16)[2].radius
+    assert.equals(resting, icon.elements("connecting", 16, 1)[2].radius)
+  end)
+
+  it("takes any integer as a phase, so the adapter can just count up", function()
+    for _, phase in ipairs({ -3, 0, 1, 7, 400 }) do
+      assert.is_true(icon.frame(phase) >= 1)
+      assert.is_true(icon.frame(phase) <= icon.PHASES)
+    end
+    assert.equals(icon.frame(1), icon.frame(1 + icon.PHASES))
+    assert.equals(1, icon.frame(nil))
+  end)
+
+  it("ignores the phase in every state that is not working", function()
+    for _, state in ipairs({ "connected", "disconnected", "unknown" }) do
+      assert.same(icon.elements(state, 16, 1), icon.elements(state, 16, 3))
+    end
+  end)
+
   it("draws an unreadable state faintly rather than as down", function()
     local unknown = icon.elements("unknown")[1]
     local down = icon.elements("disconnected")[1]
@@ -119,8 +154,10 @@ describe("icon.elements", function()
     local elements = {}
     for _, size in ipairs({ 12, 16, 22 }) do
       for _, state in ipairs(STATES) do
-        for _, element in ipairs(icon.elements(state, size)) do
-          elements[#elements + 1] = { size = size, element = element }
+        for phase = 1, icon.PHASES do
+          for _, element in ipairs(icon.elements(state, size, phase)) do
+            elements[#elements + 1] = { size = size, element = element }
+          end
         end
       end
     end

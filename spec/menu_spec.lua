@@ -34,6 +34,31 @@ describe("menu.title", function()
     assert.equals("◌", menu.title({}))
     assert.equals("◌", menu.title(nil))
   end)
+
+  it("says it is working while a job is running, whatever the states say", function()
+    assert.equals("◐", menu.title({ a = "connected", b = "connected" }, true))
+    assert.equals("◐", menu.title({}, true))
+  end)
+end)
+
+describe("menu.indicator", function()
+  it("is the overall state when nothing is running", function()
+    assert.equals("connected", menu.indicator({ a = "connected", b = "disconnected" }, false))
+    assert.equals("disconnected", menu.indicator({ a = "disconnected" }))
+    assert.equals("unknown", menu.indicator({}))
+  end)
+
+  it("shows work in flight over anything already settled", function()
+    -- The whole point: on a machine with an always-on tunnel, `overall` is
+    -- `connected` for ever, so nothing the adapter does could ever be seen.
+    assert.equals("connecting", menu.indicator({ a = "connected" }, true))
+  end)
+
+  it("counts a connection reported as connecting as work in flight", function()
+    -- Same blind spot from the other side: PRECEDENCE lets connected outrank
+    -- connecting, so a tunnel coming up beside one that is up was invisible.
+    assert.equals("connecting", menu.indicator({ a = "connected", b = "connecting" }))
+  end)
 end)
 
 describe("menu.build", function()
@@ -54,6 +79,19 @@ describe("menu.build", function()
     local items = menu.build(store.empty(), {})
     assert.is_true(items[1].disabled)
     assert.matches("No connections", items[1].title)
+  end)
+
+  it("offers a way out of itself, last, and says what that costs", function()
+    for _, cfg in ipairs({ config("a"), store.empty() }) do
+      local items = menu.build(cfg, {})
+      local quit = items[#items]
+      assert.same({ kind = "quit" }, quit.action)
+      assert.matches("Quit", quit.title)
+      -- The way back is a Hammerspoon reload, which a menu that has just
+      -- vanished cannot tell anybody. So the item says it while it is still there.
+      assert.matches("Reload Hammerspoon", quit.tooltip)
+      assert.matches("Nothing is disconnected", quit.tooltip)
+    end
   end)
 
   it("leaves hidden profiles out of the top level but manageable below it", function()

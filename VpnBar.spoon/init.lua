@@ -25,6 +25,7 @@ local autoconnect = require("vpnbar.autoconnect")
 local backends = require("vpnbar.backends")
 local form = require("vpnbar.form")
 local icon = require("vpnbar.icon")
+local work = require("vpnbar.work")
 
 --- VpnBar.configPath
 --- Variable
@@ -383,20 +384,22 @@ end
 
 -- ---------------------------------------------------------------------- icon
 
--- Four images, drawn once and kept. The alternative is a canvas per refresh,
--- which is a new bitmap every ten seconds for a picture that has four possible
--- values.
+-- Drawn once each and kept: three settled states plus the frames of the busy
+-- pulse. The alternative is a canvas per refresh — a new bitmap every ten
+-- seconds, and one every third of a second while the mark is moving, for a
+-- picture with a handful of possible values.
 local iconCache = {}
 
-local function menubarIcon(state)
-  if iconCache[state] then
-    return iconCache[state]
+local function menubarIcon(state, phase)
+  local key = state .. "/" .. icon.frame(phase)
+  if iconCache[key] then
+    return iconCache[key]
   end
   local canvas = hs.canvas.new({ x = 0, y = 0, w = icon.SIZE, h = icon.SIZE })
   if not canvas then
     return nil
   end
-  canvas:replaceElements(icon.elements(state))
+  canvas:replaceElements(icon.elements(state, icon.SIZE, phase))
   local image = canvas:imageFromCanvas()
   canvas:delete()
   if image then
@@ -404,9 +407,82 @@ local function menubarIcon(state)
     -- a light one, inverted again while the menu is open. Anything drawn in a
     -- colour of its own would be right in one of those and wrong in the others.
     image = image:template(true)
-    iconCache[state] = image
+    iconCache[key] = image
   end
   return image
+end
+
+--- Put the current state in the menu bar.
+---
+--- The only place that touches the icon. The mark depends on two things now —
+--- what was last read, and whether a job is running — and two places deciding
+--- that would drift apart within a release.
+function obj:paint()
+  if not self.menubar then
+    return
+  end
+  local busy = work.busy(self.work, os.time())
+  local state = menu.indicator(self.states, busy)
+  local image = menubarIcon(state, self.phase)
+  if image then
+    self.menubar:setIcon(image)
+    -- The count sits beside the icon only when it says something: one tunnel
+    -- up is the normal case and the icon already reports it.
+    local connected = menu.connectedCount(self.states)
+    self.menubar:setTitle(connected > 1 and tostring(connected) or "")
+  else
+    self.menubar:setTitle(menu.title(self.states, busy))
+  end
+  self:pulsate(state == "connecting")
+end
+
+--- Run the pulse while there is something to pulse about, and not a moment
+--- longer. A timer redrawing a settled icon three times a second is a timer
+--- that turns up in a battery report.
+--- @param wanted boolean
+function obj:pulsate(wanted)
+  if wanted and not self.pulse then
+    self.pulse = hs.timer.doEvery(0.3, function()
+      self.phase = (self.phase or 1) + 1
+      self:paint()
+    end)
+  elseif not wanted and self.pulse then
+    self.pulse:stop()
+    self.pulse = nil
+    self.phase = 1
+  end
+end
+
+--- Read the state, but let the menu bar draw first.
+---
+--- Everything a refresh does is synchronous — `ifconfig`, a shell helper,
+--- sometimes an accessibility tree that sleeps waiting for a window. Called
+--- inline at start-up or on a wake, the icon appears only once all of that is
+--- over, which is the lag this removes: claim the mark, hand the run loop back
+--- so it gets drawn, then read.
+---
+--- `pcall`, so a read that throws still releases the mark. The deadline in
+--- `work` is the backstop for everything that manages to escape even that.
+--- @param options table|nil passed to `refresh`
+--- @param delay number|nil seconds, default none
+function obj:refreshSoon(options, delay)
+  work.begin(self.work, os.time())
+  self:paint()
+  hs.timer.doAfter(delay or 0, function()
+    if not self.running then
+      -- Quit while this was waiting. A read after that would run commands for a
+      -- menu that is no longer there, and the wake schedule queues three of them
+      -- at a time.
+      work.finish(self.work)
+      return
+    end
+    local ok, err = pcall(self.refresh, self, options)
+    work.finish(self.work)
+    self:paint()
+    if not ok then
+      self.logger.e("refresh failed: " .. tostring(err))
+    end
+  end)
 end
 
 -- --------------------------------------------------------------------- state
@@ -449,18 +525,7 @@ function obj:refresh(options)
     end
   end
 
-  if self.menubar then
-    local image = menubarIcon(menu.overall(states))
-    if image then
-      self.menubar:setIcon(image)
-      -- The count sits beside the icon only when it says something: one tunnel
-      -- up is the normal case and the icon already reports it.
-      local connected = menu.connectedCount(states)
-      self.menubar:setTitle(connected > 1 and tostring(connected) or "")
-    else
-      self.menubar:setTitle(menu.title(states))
-    end
-  end
+  self:paint()
   return states
 end
 
@@ -591,13 +656,31 @@ function obj:act(id, verb)
   if not profile then
     return
   end
-  local ok, err = backends.act(profile, verb, self:runtime(true))
-  if not ok then
-    self:complain(("%s: %s"):format(profile.name, err or "the command failed"))
-  end
-  -- The agent needs a moment before its state is worth reading again.
-  hs.timer.doAfter(2, function()
-    self:refresh()
+  -- Under the mark from the click to the state that comes back, because the
+  -- gap between the two is where this used to look broken: connecting the AWS
+  -- client means bringing its window up and pressing a row in it, several
+  -- seconds during which the old icon said whatever it said before.
+  --
+  -- Deferred for the same reason `refreshSoon` is — the pressing blocks, so an
+  -- icon set just before it would not reach the screen until it was over.
+  work.begin(self.work, os.time())
+  self:paint()
+  hs.timer.doAfter(0, function()
+    if not self.running then
+      work.finish(self.work)
+      return
+    end
+    local called, ok, err = pcall(backends.act, profile, verb, self:runtime(true))
+    if not called then
+      self:complain(("%s: %s"):format(profile.name, tostring(ok)))
+    elseif not ok then
+      self:complain(("%s: %s"):format(profile.name, err or "the command failed"))
+    end
+    -- The agent needs a moment before its state is worth reading again. Queued
+    -- before this job is released, so the mark stays up across the two rather
+    -- than blinking off in between.
+    self:refreshSoon(nil, 2)
+    work.finish(self.work)
   end)
 end
 
@@ -678,8 +761,24 @@ function obj:dispatch(action)
     end,
     refresh = function()
       -- Explicitly asked for, so a panel read is fair; still no autoconnect,
-      -- because what was asked for is a look and not a change.
-      self:refresh({ panelReads = true })
+      -- because what was asked for is a look and not a change. A panel read
+      -- opens a window and waits for it, so this is the one refresh that is
+      -- always worth marking as work.
+      self:refreshSoon({ panelReads = true })
+    end,
+    quit = function()
+      -- Confirmed, because the way back is a Hammerspoon reload and that is not
+      -- something a menu which has just vanished can tell you.
+      local answer = hs.dialog.blockAlert(
+        "Quit vpnbar?",
+        "The icon leaves the menu bar and nothing is watched any more. "
+          .. "No connection is closed. Reload Hammerspoon to bring it back.",
+        "Quit",
+        "Cancel"
+      )
+      if answer == "Quit" then
+        self:stop()
+      end
     end,
   }
   local handler = kinds[action.kind]
@@ -729,10 +828,16 @@ function obj:init()
   -- What autoconnect has already tried, and when. Owned here, reasoned about
   -- in vpnbar/autoconnect.lua.
   self.attempts = {}
+  -- What is running, so the mark can say so. Owned here, reasoned about in
+  -- vpnbar/work.lua.
+  self.work = work.new()
+  self.phase = 1
+  self.running = false
   return self
 end
 
 function obj:start()
+  self.running = true
   self:load()
   -- The second argument is an autosave name. Without one, macOS gives the
   -- status item a fresh identity on every reload and cannot restore its
@@ -746,15 +851,28 @@ function obj:start()
   -- see docs/adr/0016-the-menu-bar-item-has-a-name.md.
   self.menubar = self.menubar or hs.menubar.new(true, "vpnbar")
   self.menubar:setMenu(function()
-    -- Built on every open, so a config edited by hand shows up without a
-    -- reload and a state read on the timer is never the reason a menu is stale.
+    -- The config is re-read on every open, so an edit by hand shows up without
+    -- a reload. The states are not: they come from the last read, and a fresh
+    -- one is queued behind the menu instead of in front of it.
+    --
+    -- Reading here is what made the menu itself feel slow — the click waited on
+    -- `ifconfig` and a shell helper before a single row appeared. The timer
+    -- keeps this at most `interval` old, Refresh now is there for the impatient,
+    -- and the queued read has the icon right by the time the menu closes.
     self:load()
-    self:refresh()
+    self:refreshSoon()
     return self:hammerspoonMenu(menu.build(self.config, self.states))
   end)
-  self:refresh()
+  -- Deferred, so the icon is in the bar before anything is read. Hammerspoon
+  -- loads this Spoon while it is still starting up, and a synchronous first
+  -- read there is a gap between login and an icon with nothing on screen to
+  -- explain it.
+  self:refreshSoon({ autoconnect = true })
 
   self.timer = hs.timer.doEvery(self.interval, function()
+    -- Not `refreshSoon`: the timer's reads are cheap and unattended, and
+    -- flashing the busy mark every ten seconds would spend the one signal that
+    -- is supposed to mean something.
     self:refresh({ autoconnect = true })
   end)
   -- A tunnel does not survive sleep, and the title should not claim otherwise.
@@ -763,7 +881,13 @@ function obj:start()
       -- Failures from before the lid closed say nothing about the network on
       -- the other side of it, so autoconnect starts again from nothing.
       autoconnect.forget(self.attempts)
-      self:refresh({ autoconnect = true })
+      -- Several looks over the first quarter minute rather than one at the
+      -- instant of the wake, when there is no route yet — see work.WAKE_READS.
+      -- All of them are claimed now, which is what keeps the mark moving from
+      -- the moment the screen comes back until the state has settled.
+      for _, read in ipairs(work.WAKE_READS) do
+        self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
+      end
     end
   end)
   self.wake:start()
@@ -771,14 +895,23 @@ function obj:start()
 end
 
 function obj:stop()
+  self.running = false
   if self.timer then
     self.timer:stop()
     self.timer = nil
+  end
+  if self.pulse then
+    self.pulse:stop()
+    self.pulse = nil
   end
   if self.wake then
     self.wake:stop()
     self.wake = nil
   end
+  -- Anything already queued finds the mark idle and no menu bar to paint, which
+  -- is what stops a read in flight from bringing the icon back.
+  self.work = work.new()
+  self.phase = 1
   if self.menubar then
     self.menubar:delete()
     self.menubar = nil
