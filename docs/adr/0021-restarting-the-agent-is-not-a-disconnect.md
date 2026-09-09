@@ -63,6 +63,13 @@ worked.
 `pkill` reports "nothing matched" as a failure, and an agent that had already
 crashed would otherwise be reported as an error at the moment it was being fixed.
 
+The waits are `/bin/sleep` inside the command, so this blocks Hammerspoon for
+three seconds, and Hammerspoon here also runs the lock and sleep policy. Accepted
+rather than solved: it is a deliberate click on an app that is already broken, it
+happens under the busy mark, and three seconds of that beats the two async
+callbacks and the intermediate state a chained version would need. The same
+reasoning is why `force` may quit an app in one blocking call.
+
 ## What was rejected
 
 - **`killall` instead of `pkill -x`.** Same effect, no exact-match flag, and a
