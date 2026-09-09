@@ -44,10 +44,10 @@ after it.
 ## Why it moves
 
 A still picture answers "is it working?" with a picture you have to remember the
-previous value of. So the busy dot breathes instead, out and back over the four
-frames of `icon.PULSE`, redrawn three times a second, and the timer that does it
-runs only while there is something to say. Two frames alternating was tried
-first and reads as a fault light rather than as progress.
+previous value of. So the busy dot breathes instead, out and back over the
+`icon.PHASES` frames of the pulse, redrawn three times a second, and the timer
+that does it runs only while there is something to say. Two frames alternating
+was tried first and reads as a fault light rather than as progress.
 
 The frames are cached like the settled marks, so the animation costs a `setIcon`
 and not a new bitmap.
