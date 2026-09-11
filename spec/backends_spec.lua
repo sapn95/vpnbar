@@ -129,7 +129,11 @@ describe("the shell backend", function()
 end)
 
 describe("backends.status", function()
-  local ifconfig = "utun4: flags=8051<UP> mtu 1400\n\tinet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff"
+  -- 0x8051 really does spell out UP, POINTOPOINT, RUNNING and MULTICAST. The
+  -- short version of this fixture disagreed with its own hex, which went
+  -- unnoticed for as long as nothing read the flags.
+  local ifconfig = "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n"
+    .. "\tinet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff"
 
   it("prefers the probe over the backend, because it costs nothing", function()
     local profile = {
