@@ -70,6 +70,23 @@ end
 --- Forget a connection's history. Called when it comes up, and when something
 --- happened that makes the old failures meaningless: a wake, a new network.
 --- @param memory table
+--- Forget what has failed, without forgetting who started it.
+---
+--- A connection that is up has no failures worth remembering: whatever stopped
+--- it connecting is over. `started` survives, because that is not a failure
+--- record, it is the answer to "may this menu close this tunnel again", and
+--- [ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)
+--- turns on it.
+--- @param memory table
+--- @param id string
+function autoconnect.succeeded(memory, id)
+  local entry = memory[id]
+  if entry == nil then
+    return
+  end
+  memory[id] = { attempts = 0, lastTry = nil, started = entry.started }
+end
+
 --- @param id string|nil nil forgets everything
 function autoconnect.forget(memory, id)
   if id == nil then
@@ -129,13 +146,22 @@ function autoconnect.plan(cfg, states, memory, now)
     end
   end
 
+  -- Anything that is up has arrived, so its failures are history. Deliberately
+  -- not gated on `autoconnect`: a fallback is connected *by* autoconnect without
+  -- being marked for it itself, and a record that was never cleared would only
+  -- ever grow, until the stand-in nobody configured was the slowest thing on the
+  -- machine to come back.
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if states[profile.id] == "connected" then
+      autoconnect.succeeded(memory, profile.id)
+    end
+  end
+
   for _, profile in ipairs(store.list(cfg, true)) do
     if profile.autoconnect then
       local state = states[profile.id] or "unknown"
 
-      if state == "connected" then
-        autoconnect.forget(memory, profile.id)
-      elseif state == "disconnected" then
+      if state == "disconnected" then
         local blocked = false
         if settings.exclusive then
           -- Somebody else is already up, or on the way: leave it at one.

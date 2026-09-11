@@ -67,7 +67,36 @@ describe("autoconnect, the cooldown", function()
     local memory = {}
     autoconnect.remember(memory, "aws", 1000)
     autoconnect.plan(config(), { aws = "connected" }, memory, 2000)
-    assert.is_nil(memory.aws)
+    assert.equals(0, memory.aws.attempts)
+    assert.is_nil(memory.aws.lastTry)
+  end)
+
+  -- `started` is not a failure record. It is the answer to whether this menu is
+  -- allowed to close the tunnel again, and clearing it would leave a stand-in
+  -- running with nothing willing to take it down.
+  it("remembers that it started it, even after it has arrived", function()
+    local memory = {}
+    autoconnect.remember(memory, "aws", 1000)
+    autoconnect.plan(config(), { aws = "connected" }, memory, 2000)
+    assert.is_true(memory.aws.started)
+  end)
+
+  -- The fallback is connected *by* autoconnect without being marked for it, so
+  -- a rule that only cleared profiles carrying the flag never cleared the one
+  -- connection whose record was guaranteed to keep growing.
+  it("clears the record of a fallback that came up, though it autoconnects nothing", function()
+    local cfg = assert(store.normalise({
+      profiles = {
+        { id = "aws", name = "AWS", backend = "scutil", service = "a", autoconnect = true, fallback = "alt" },
+        { id = "alt", name = "Alt", backend = "scutil", service = "b" },
+      },
+    }))
+    local memory = {}
+    for _ = 1, 5 do
+      autoconnect.remember(memory, "alt", 1000)
+    end
+    autoconnect.plan(cfg, { aws = "disconnected", alt = "connected" }, memory, 2000)
+    assert.equals(0, memory.alt.attempts, "a fallback that arrived starts its next backoff from the bottom")
   end)
 
   it("can be told to forget everything, for a wake or a new network", function()

@@ -56,7 +56,15 @@ function work.freshStart(lastAt, now)
   if type(lastAt) ~= "number" or type(now) ~= "number" then
     return true
   end
-  return (now - lastAt) >= work.FRESH_START_DEBOUNCE
+  local since = now - lastAt
+  -- A clock that has gone backwards is not twenty seconds of quiet. `os.time`
+  -- is wall clock, and a correction across a wake is exactly the moment this is
+  -- asked, so a negative reading answers yes rather than suppressing a wake for
+  -- however far back the clock jumped.
+  if since < 0 then
+    return true
+  end
+  return since >= work.FRESH_START_DEBOUNCE
 end
 
 --- @return table owned by the caller, passed back to every function here

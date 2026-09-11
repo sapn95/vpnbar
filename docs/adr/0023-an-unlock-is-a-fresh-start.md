@@ -57,9 +57,11 @@ trying and saying so, instead of sitting on a stale verdict in silence.
 
 ## What was rejected
 
-- **Dropping the stop-after-six rule.** It is the rule that keeps this from
-  hammering a portal with an expired session, which is how an account gets
-  locked. The problem was never the budget, it was that nothing was resetting it.
+- **Leaving the stop-after-six rule alone.** Rejected the same evening, and the
+  reasoning is in [ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md).
+  An unlock handler makes the reset happen when somebody arrives; it does
+  nothing for the hours before they do. Both were needed, and neither is the
+  other's substitute.
 - **A timer that forgets failures every so often.** It reintroduces the retry
   loop through the back door, on a schedule nobody asked for, at a moment nobody
   is watching. The reset should be tied to something that actually happened.

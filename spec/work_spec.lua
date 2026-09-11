@@ -118,4 +118,12 @@ describe("work.freshStart", function()
     assert.is_true(work.freshStart("nonsense", 1000))
     assert.is_true(work.freshStart(1000, nil))
   end)
+
+  -- os.time is wall clock, and a correction lands across a wake, which is the
+  -- moment this gets asked. Reading a jump backwards as quiet would suppress
+  -- every wake and unlock for as far back as the clock went.
+  it("treats a clock that went backwards as a fresh start, not as quiet", function()
+    assert.is_true(work.freshStart(1000, 990))
+    assert.is_true(work.freshStart(1000, 1000 - 86400))
+  end)
 end)
