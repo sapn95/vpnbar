@@ -12,19 +12,44 @@ local store = require("vpnbar.store")
 
 local autoconnect = {}
 
---- Seconds before the same connection is tried again. A VPN that failed
---- because there is no network yet will fail again in one second, and a menu
---- that retries at the refresh interval is a menu that hammers a portal.
+--- Seconds before the same connection is tried again the first time. A VPN that
+--- failed because there is no network yet will fail again in one second, and a
+--- menu that retries at the refresh interval is a menu that hammers a portal.
 autoconnect.COOLDOWN = 60
+
+--- The longest that gap is ever allowed to grow to.
+---
+--- A connection that will not come up is usually one whose session has ended
+--- rather than one whose tunnel dropped, and no amount of asking connects that:
+--- it wants a person and a browser. Fifteen minutes is slow enough that failing
+--- all night costs four attempts an hour, and quick enough that a connection
+--- which becomes possible again is picked up without anybody doing anything.
+autoconnect.COOLDOWN_CEILING = 900
 
 --- How many times to ask for the connection somebody actually chose before
 --- accepting that it is not coming and trying its fallback.
 autoconnect.ATTEMPTS_BEFORE_FALLBACK = 2
 
---- Give up on a connection that has failed this many times until something
---- changes — a wake, a network change, a click. Retrying forever is how a
---- laptop on a train spends its battery on a portal that is not reachable.
-autoconnect.ATTEMPTS_BEFORE_GIVING_UP = 6
+--- How long to wait before the next attempt, given how many have already
+--- failed. Doubles from `COOLDOWN`, then stops at `COOLDOWN_CEILING` and stays
+--- there: 1, 2, 4, 8 minutes, then every 15 for as long as it takes.
+---
+--- It never returns nil, because there is no attempt count at which the right
+--- answer is to stop. An always-on VPN that has given up is the case this whole
+--- project exists to remove
+--- ([ADR 0024](../../docs/adr/0024-autoconnect-backs-off-it-does-not-give-up.md)).
+--- @param attempts number|nil how many have failed so far
+--- @return number seconds
+function autoconnect.cooldown(attempts)
+  if type(attempts) ~= "number" or attempts < 1 then
+    return autoconnect.COOLDOWN
+  end
+  local wait = autoconnect.COOLDOWN * (2 ^ (attempts - 1))
+  if wait > autoconnect.COOLDOWN_CEILING then
+    return autoconnect.COOLDOWN_CEILING
+  end
+  return wait
+end
 
 local function attemptsFor(memory, id)
   return (memory[id] and memory[id].attempts) or 0
@@ -45,6 +70,23 @@ end
 --- Forget a connection's history. Called when it comes up, and when something
 --- happened that makes the old failures meaningless: a wake, a new network.
 --- @param memory table
+--- Forget what has failed, without forgetting who started it.
+---
+--- A connection that is up has no failures worth remembering: whatever stopped
+--- it connecting is over. `started` survives, because that is not a failure
+--- record, it is the answer to "may this menu close this tunnel again", and
+--- [ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)
+--- turns on it.
+--- @param memory table
+--- @param id string
+function autoconnect.succeeded(memory, id)
+  local entry = memory[id]
+  if entry == nil then
+    return
+  end
+  memory[id] = { attempts = 0, lastTry = nil, started = entry.started }
+end
+
 --- @param id string|nil nil forgets everything
 function autoconnect.forget(memory, id)
   if id == nil then
@@ -104,13 +146,22 @@ function autoconnect.plan(cfg, states, memory, now)
     end
   end
 
+  -- Anything that is up has arrived, so its failures are history. Deliberately
+  -- not gated on `autoconnect`: a fallback is connected *by* autoconnect without
+  -- being marked for it itself, and a record that was never cleared would only
+  -- ever grow, until the stand-in nobody configured was the slowest thing on the
+  -- machine to come back.
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if states[profile.id] == "connected" then
+      autoconnect.succeeded(memory, profile.id)
+    end
+  end
+
   for _, profile in ipairs(store.list(cfg, true)) do
     if profile.autoconnect then
       local state = states[profile.id] or "unknown"
 
-      if state == "connected" then
-        autoconnect.forget(memory, profile.id)
-      elseif state == "disconnected" then
+      if state == "disconnected" then
         local blocked = false
         if settings.exclusive then
           -- Somebody else is already up, or on the way: leave it at one.
@@ -123,9 +174,9 @@ function autoconnect.plan(cfg, states, memory, now)
 
         local attempts = attemptsFor(memory, profile.id)
         local last = lastTryFor(memory, profile.id)
-        local ready = last == nil or (now - last) >= autoconnect.COOLDOWN
+        local ready = last == nil or (now - last) >= autoconnect.cooldown(attempts)
 
-        if not blocked and ready and attempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
+        if not blocked and ready then
           local wantsFallback = settings.fallback and profile.fallback ~= nil
           if attempts < autoconnect.ATTEMPTS_BEFORE_FALLBACK or not wantsFallback then
             return { id = profile.id, verb = "connect", reason = "wanted" }
@@ -136,8 +187,8 @@ function autoconnect.plan(cfg, states, memory, now)
           if fallback and not isUp(fallbackState) then
             local fallbackAttempts = attemptsFor(memory, profile.fallback)
             local fallbackLast = lastTryFor(memory, profile.fallback)
-            local fallbackReady = fallbackLast == nil or (now - fallbackLast) >= autoconnect.COOLDOWN
-            if fallbackReady and fallbackAttempts < autoconnect.ATTEMPTS_BEFORE_GIVING_UP then
+            local fallbackReady = fallbackLast == nil or (now - fallbackLast) >= autoconnect.cooldown(fallbackAttempts)
+            if fallbackReady then
               return { id = profile.fallback, verb = "connect", reason = "fallback" }
             end
           end

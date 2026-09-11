@@ -28,3 +28,5 @@ whether their idea was considered or simply missed.
 | [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone |
 | [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect |
 | [0022](0022-a-probe-reads-the-interface-not-just-the-address.md) | A probe reads the interface, not just the address |
+| [0023](0023-an-unlock-is-a-fresh-start.md) | An unlock is a fresh start, the same as a wake |
+| [0024](0024-autoconnect-backs-off-it-does-not-give-up.md) | Autoconnect backs off, it does not give up |

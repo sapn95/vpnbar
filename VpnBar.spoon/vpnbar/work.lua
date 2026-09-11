@@ -35,6 +35,38 @@ work.WAKE_READS = {
   { after = 15, autoconnect = true },
 }
 
+--- How long after one fresh start the next one is treated as the same event.
+---
+--- Long enough to cover `WAKE_READS`, so a wake and the unlock that follows it
+--- cannot both run the schedule and both clear the failure record. A second
+--- clearing would drop the cooldown that had just been spent, and hand the same
+--- connection a second attempt inside the minute it is supposed to wait.
+work.FRESH_START_DEBOUNCE = 20
+
+--- Is this wake or unlock far enough from the last one to count as its own
+--- fresh start?
+---
+--- Waking a locked Mac produces both events, seconds apart, in whichever order
+--- the person types their password. They are one arrival and are worth one
+--- schedule.
+--- @param lastAt number|nil when the last fresh start was handled
+--- @param now number seconds
+--- @return boolean
+function work.freshStart(lastAt, now)
+  if type(lastAt) ~= "number" or type(now) ~= "number" then
+    return true
+  end
+  local since = now - lastAt
+  -- A clock that has gone backwards is not twenty seconds of quiet. `os.time`
+  -- is wall clock, and a correction across a wake is exactly the moment this is
+  -- asked, so a negative reading answers yes rather than suppressing a wake for
+  -- however far back the clock jumped.
+  if since < 0 then
+    return true
+  end
+  return since >= work.FRESH_START_DEBOUNCE
+end
+
 --- @return table owned by the caller, passed back to every function here
 function work.new()
   return { count = 0 }

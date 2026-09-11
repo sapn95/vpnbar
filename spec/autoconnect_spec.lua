@@ -67,7 +67,36 @@ describe("autoconnect, the cooldown", function()
     local memory = {}
     autoconnect.remember(memory, "aws", 1000)
     autoconnect.plan(config(), { aws = "connected" }, memory, 2000)
-    assert.is_nil(memory.aws)
+    assert.equals(0, memory.aws.attempts)
+    assert.is_nil(memory.aws.lastTry)
+  end)
+
+  -- `started` is not a failure record. It is the answer to whether this menu is
+  -- allowed to close the tunnel again, and clearing it would leave a stand-in
+  -- running with nothing willing to take it down.
+  it("remembers that it started it, even after it has arrived", function()
+    local memory = {}
+    autoconnect.remember(memory, "aws", 1000)
+    autoconnect.plan(config(), { aws = "connected" }, memory, 2000)
+    assert.is_true(memory.aws.started)
+  end)
+
+  -- The fallback is connected *by* autoconnect without being marked for it, so
+  -- a rule that only cleared profiles carrying the flag never cleared the one
+  -- connection whose record was guaranteed to keep growing.
+  it("clears the record of a fallback that came up, though it autoconnects nothing", function()
+    local cfg = assert(store.normalise({
+      profiles = {
+        { id = "aws", name = "AWS", backend = "scutil", service = "a", autoconnect = true, fallback = "alt" },
+        { id = "alt", name = "Alt", backend = "scutil", service = "b" },
+      },
+    }))
+    local memory = {}
+    for _ = 1, 5 do
+      autoconnect.remember(memory, "alt", 1000)
+    end
+    autoconnect.plan(cfg, { aws = "disconnected", alt = "connected" }, memory, 2000)
+    assert.equals(0, memory.alt.attempts, "a fallback that arrived starts its next backoff from the bottom")
   end)
 
   it("can be told to forget everything, for a wake or a new network", function()
@@ -142,19 +171,60 @@ describe("autoconnect, the fallback", function()
   end)
 end)
 
-describe("autoconnect, giving up", function()
-  it("stops after enough failures rather than retrying on a train forever", function()
+describe("autoconnect.cooldown", function()
+  it("waits the plain cooldown before the first retry", function()
+    assert.equals(autoconnect.COOLDOWN, autoconnect.cooldown(0))
+    assert.equals(autoconnect.COOLDOWN, autoconnect.cooldown(nil))
+    assert.equals(autoconnect.COOLDOWN, autoconnect.cooldown(1))
+  end)
+
+  it("doubles the gap for each failure after that", function()
+    assert.equals(autoconnect.COOLDOWN * 2, autoconnect.cooldown(2))
+    assert.equals(autoconnect.COOLDOWN * 4, autoconnect.cooldown(3))
+    assert.equals(autoconnect.COOLDOWN * 8, autoconnect.cooldown(4))
+  end)
+
+  it("stops growing at the ceiling and stays there", function()
+    assert.equals(autoconnect.COOLDOWN_CEILING, autoconnect.cooldown(50))
+    assert.equals(autoconnect.COOLDOWN_CEILING, autoconnect.cooldown(5000))
+  end)
+
+  it("never answers 'stop', because there is no such answer", function()
+    for _, attempts in ipairs({ 0, 1, 7, 100, 10000 }) do
+      local wait = autoconnect.cooldown(attempts)
+      assert.is_number(wait)
+      assert.is_true(wait <= autoconnect.COOLDOWN_CEILING)
+    end
+  end)
+end)
+
+describe("autoconnect, backing off", function()
+  -- The rule this replaced stopped after six failures and stayed stopped until
+  -- a wake, a click or the connection coming up. A locked screen is none of
+  -- those, so an always-on VPN stayed down with nothing trying to fix it.
+  it("keeps asking however many times it has failed, given long enough", function()
     local memory = {}
-    for _ = 1, autoconnect.ATTEMPTS_BEFORE_GIVING_UP do
+    for _ = 1, 40 do
       autoconnect.remember(memory, "aws", 0)
       autoconnect.remember(memory, "alt", 0)
     end
-    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected" }, memory, 100000))
+    assert.is_truthy(autoconnect.plan(config(), { aws = "disconnected" }, memory, 100000))
   end)
 
-  it("starts again after being told to forget", function()
+  it("holds off inside the backed-off gap rather than hammering", function()
     local memory = {}
-    for _ = 1, autoconnect.ATTEMPTS_BEFORE_GIVING_UP do
+    for _ = 1, 40 do
+      autoconnect.remember(memory, "aws", 1000)
+      autoconnect.remember(memory, "alt", 1000)
+    end
+    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000 + autoconnect.COOLDOWN))
+    local ready = 1000 + autoconnect.COOLDOWN_CEILING
+    assert.is_truthy(autoconnect.plan(config(), { aws = "disconnected" }, memory, ready))
+  end)
+
+  it("starts again at once after being told to forget", function()
+    local memory = {}
+    for _ = 1, 40 do
       autoconnect.remember(memory, "aws", 0)
     end
     autoconnect.forget(memory)
@@ -303,7 +373,7 @@ describe("autoconnect, fallbacks switched off", function()
 
   it("never reaches for the fallback, however many times it has failed", function()
     local memory = {}
-    for _ = 1, autoconnect.ATTEMPTS_BEFORE_GIVING_UP - 1 do
+    for _ = 1, 20 do
       autoconnect.remember(memory, "aws", 0)
     end
     local plan = autoconnect.plan(noFallbacks(config()), { aws = "disconnected" }, memory, 1000)

@@ -953,18 +953,29 @@ function obj:start()
     self:refresh({ autoconnect = true })
   end)
   -- A tunnel does not survive sleep, and the title should not claim otherwise.
+  -- An unlock counts for the same reason: a Mac that has been sitting locked
+  -- has had no chance to notice the network change in front of it, and the
+  -- person who just typed their password is about to want a VPN.
   self.wake = hs.caffeinate.watcher.new(function(event)
-    if event == hs.caffeinate.watcher.systemDidWake then
-      -- Failures from before the lid closed say nothing about the network on
-      -- the other side of it, so autoconnect starts again from nothing.
-      autoconnect.forget(self.attempts)
-      -- Several looks over the first quarter minute rather than one at the
-      -- instant of the wake, when there is no route yet — see work.WAKE_READS.
-      -- All of them are claimed now, which is what keeps the mark moving from
-      -- the moment the screen comes back until the state has settled.
-      for _, read in ipairs(work.WAKE_READS) do
-        self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
-      end
+    local watcher = hs.caffeinate.watcher
+    if event ~= watcher.systemDidWake and event ~= watcher.screensDidUnlock then
+      return
+    end
+    local now = os.time()
+    -- Waking a locked Mac fires both, so the second one is the same arrival.
+    if not work.freshStart(self.lastFreshStart, now) then
+      return
+    end
+    self.lastFreshStart = now
+    -- Failures from before the lid closed say nothing about the network on
+    -- the other side of it, so autoconnect starts again from nothing.
+    autoconnect.forget(self.attempts)
+    -- Several looks over the first quarter minute rather than one at the
+    -- instant of the wake, when there is no route yet — see work.WAKE_READS.
+    -- All of them are claimed now, which is what keeps the mark moving from
+    -- the moment the screen comes back until the state has settled.
+    for _, read in ipairs(work.WAKE_READS) do
+      self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
     end
   end)
   self.wake:start()

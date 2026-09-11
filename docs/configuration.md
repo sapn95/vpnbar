@@ -232,8 +232,14 @@ automatically**, and the fallback is the last question **Edit…** asks.
 What then happens, on the refresh that already runs every ten seconds: a
 connection that is `disconnected` is asked to connect, at most one per refresh,
 never more often than once a minute. After two tries it moves to its
-`fallback` — if that one is not itself up or on its way up. After six it stops,
-until the connection comes up, the Mac wakes, or you toggle it.
+`fallback` — if that one is not itself up or on its way up.
+
+It does not stop. The gap doubles with each failure, from one minute to a
+ceiling of fifteen, and stays there
+([ADR 0024](adr/0024-autoconnect-backs-off-it-does-not-give-up.md)). A session
+the gateway has *ended* still needs a person and a browser, and no amount of
+retrying substitutes for that; what comes back on its own is the commoner case,
+a tunnel that dropped while the session is still good.
 
 When the wanted connection comes up, a fallback that autoconnect started is
 disconnected again: two tunnels to the same place is one routing table with an
@@ -244,9 +250,12 @@ left alone because asking an unreadable connection to connect is how a probe
 nobody configured turns into a login prompt every ten seconds. All of it is in
 [ADR 0013](adr/0013-autoconnect-is-a-plan-not-a-timer.md).
 
-A wake is a fresh start: the record of what has failed is dropped, because a
-portal that was unreachable behind a closed lid says nothing about the network in
-front of an open one. The state is then read at two, six and fifteen seconds, and
+A wake **or an unlock** is a fresh start: the record of what has failed is
+dropped, because a portal that was unreachable behind a closed lid says nothing
+about the network in front of an open one, and a screen that has been sitting
+locked says the same. Waking a locked Mac fires both events, so the second one
+inside twenty seconds is ignored rather than clearing the record twice
+([ADR 0023](adr/0023-an-unlock-is-a-fresh-start.md)). The state is then read at two, six and fifteen seconds, and
 only the last of the three may connect anything. Wi-Fi has not associated when
 the wake event fires, and an attempt spent then buys a minute of cooldown for a
 tunnel the machine could not possibly have built

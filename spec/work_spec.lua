@@ -94,3 +94,36 @@ describe("work", function()
     end)
   end)
 end)
+describe("work.freshStart", function()
+  it("is a fresh start when nothing has happened yet", function()
+    assert.is_true(work.freshStart(nil, 1000))
+  end)
+
+  it("swallows the unlock that follows a wake, because they are one arrival", function()
+    assert.is_false(work.freshStart(1000, 1003), "three seconds later is the same person waking up")
+    assert.is_false(work.freshStart(1000, 1000 + work.FRESH_START_DEBOUNCE - 1))
+  end)
+
+  it("lets the next real one through once the schedule has had its time", function()
+    assert.is_true(work.freshStart(1000, 1000 + work.FRESH_START_DEBOUNCE))
+    assert.is_true(work.freshStart(1000, 5000))
+  end)
+
+  it("covers the whole wake schedule, so both events cannot run it twice", function()
+    local last = work.WAKE_READS[#work.WAKE_READS].after
+    assert.is_true(work.FRESH_START_DEBOUNCE >= last, "debounce outlasts the last wake read")
+  end)
+
+  it("says yes rather than swallowing one when the clock makes no sense", function()
+    assert.is_true(work.freshStart("nonsense", 1000))
+    assert.is_true(work.freshStart(1000, nil))
+  end)
+
+  -- os.time is wall clock, and a correction lands across a wake, which is the
+  -- moment this gets asked. Reading a jump backwards as quiet would suppress
+  -- every wake and unlock for as far back as the clock went.
+  it("treats a clock that went backwards as a fresh start, not as quiet", function()
+    assert.is_true(work.freshStart(1000, 990))
+    assert.is_true(work.freshStart(1000, 1000 - 86400))
+  end)
+end)
