@@ -109,8 +109,18 @@ route reaches it either
 A connection set to **Connect automatically** is asked to come up whenever it
 is down — at most one per refresh, never more than once a minute. After two
 tries it moves to its **fallback**, if that one is not already up or on its way
-up. After six it stops until something happens that makes the old failures
-meaningless: the connection comes up, the Mac wakes, or you toggle it.
+up. It never stops. The gap between attempts doubles instead, from one minute up to
+fifteen, and stays there for as long as it takes
+([ADR 0024](docs/adr/0024-autoconnect-backs-off-it-does-not-give-up.md)). An
+always-on VPN that is down while the thing meant to bring it up has decided not
+to is the state this is here to remove.
+
+Anything that makes the old failures meaningless puts it back on the fast path:
+the connection comes up, the Mac wakes, somebody unlocks it, or you toggle the
+setting. An unlock counts because a machine that has been sitting locked has had
+no reason to notice that the network in front of it changed, and because
+somebody is now there to finish a login if one is needed
+([ADR 0023](docs/adr/0023-an-unlock-is-a-fresh-start.md)).
 
 And when the wanted one does come up, the stand-in is taken back down. Two
 tunnels to the same place is not twice the connectivity, it is one routing
