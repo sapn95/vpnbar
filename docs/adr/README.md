@@ -27,3 +27,4 @@ whether their idea was considered or simply missed.
 | [0019](0019-quit-stops-the-spoon-and-nothing-else.md) | Quit stops the Spoon and nothing else |
 | [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone |
 | [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect |
+| [0022](0022-a-probe-reads-the-interface-not-just-the-address.md) | A probe reads the interface, not just the address |

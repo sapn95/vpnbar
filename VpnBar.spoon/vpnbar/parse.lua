@@ -85,25 +85,49 @@ function parse.scutilList(output)
   return services
 end
 
---- Addresses per interface, out of `ifconfig`. Interface lines start in column
---- one; everything belonging to them is indented.
+-- `ifconfig` prints its flags as a comma-separated list inside angle brackets.
+-- Matched whole rather than as a substring, so nothing here can be fooled by a
+-- longer flag that happens to contain a shorter one.
+local function hasFlag(flags, wanted)
+  if type(flags) ~= "string" then
+    return false
+  end
+  for flag in flags:gmatch("[^,]+") do
+    if flag == wanted then
+      return true
+    end
+  end
+  return false
+end
+
+--- Interfaces out of `ifconfig`: what each carries, and whether the kernel says
+--- it is actually running. Interface lines start in column one and carry the
+--- flags; everything belonging to them is indented.
+---
+--- `up` wants **UP and RUNNING**, not either one. An interface line with no
+--- flags at all reads as down, because guessing in the other direction is the
+--- mistake this function exists to stop making.
 --- @param output string|nil
---- @return table map of interface name to a list of IPv4 addresses
-function parse.ifconfigAddresses(output)
+--- @return table map of interface name to { up = boolean, addresses = string[] }
+function parse.ifconfigInterfaces(output)
   local interfaces = {}
   if type(output) ~= "string" then
     return interfaces
   end
   local current
   for line in output:gmatch("[^\n]+") do
-    local name = line:match("^([%w%.%-]+):")
+    local name, flags = line:match("^([%w%.%-]+):%s*flags=%x+<([^>]*)>")
+    if not name then
+      name = line:match("^([%w%.%-]+):")
+    end
     if name then
       current = name
-      interfaces[current] = interfaces[current] or {}
+      interfaces[current] = interfaces[current]
+        or { up = hasFlag(flags, "UP") and hasFlag(flags, "RUNNING"), addresses = {} }
     elseif current then
       local address = line:match("^%s+inet%s+([%d%.]+)")
       if address then
-        table.insert(interfaces[current], address)
+        table.insert(interfaces[current].addresses, address)
       end
     end
   end
@@ -156,10 +180,17 @@ function parse.inCidr(cidr, address)
   return (networkValue & mask) == (addressValue & mask)
 end
 
---- The interface probe: connected if any interface the probe accepts carries
---- an address inside its CIDR. This is the only state read that costs nothing
---- and touches no user interface, which is why it wins over a backend's own
---- answer wherever it is configured.
+--- The interface probe: connected if any **live** interface the probe accepts
+--- carries an address inside its CIDR. This is the only state read that costs
+--- nothing and touches no user interface, which is why it wins over a backend's
+--- own answer wherever it is configured.
+---
+--- The interface has to be up. An address outlives the tunnel that was given it:
+--- GlobalProtect answers a keep-alive timeout by taking its routes away and
+--- bringing the interface down, and it leaves the address sitting on it, so for
+--- as long as the agent keeps trying there is a dead interface wearing the
+--- number of a live one
+--- ([ADR 0022](../../docs/adr/0022-a-probe-reads-the-interface-not-just-the-address.md)).
 --- @param output string ifconfig output
 --- @param probe table { cidr = string, interface = string|nil }
 --- @return string state, string|nil the address that matched
@@ -168,9 +199,9 @@ function parse.probeState(output, probe)
     return "unknown", nil
   end
   local wanted = probe.interface
-  for name, addresses in pairs(parse.ifconfigAddresses(output)) do
-    if not wanted or name:sub(1, #wanted) == wanted then
-      for _, address in ipairs(addresses) do
+  for name, interface in pairs(parse.ifconfigInterfaces(output)) do
+    if interface.up and (not wanted or name:sub(1, #wanted) == wanted) then
+      for _, address in ipairs(interface.addresses) do
         if parse.inCidr(probe.cidr, address) then
           return "connected", address
         end

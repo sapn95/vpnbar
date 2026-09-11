@@ -181,7 +181,10 @@ A probe says "this VPN, and only this VPN, hands out an address in this range":
 
 With one, the state comes from `ifconfig` — no panel, no shell per connection,
 nothing on screen — which is why a probe wins over whatever the backend would
-have said. Without one, a `scutil` or `shell` connection still answers cheaply
+have said. The interface must be up and running, not just present: a VPN agent
+that loses its tunnel can leave the address behind on a dead interface, and
+matching the address alone turns that into a menu reporting a VPN that is not
+there ([ADR 0022](docs/adr/0022-a-probe-reads-the-interface-not-just-the-address.md)). Without one, a `scutil` or `shell` connection still answers cheaply
 enough, and a `globalprotect` connection reads `unknown` until you click
 **Refresh now**. That asymmetry is deliberate, and
 [ADR 0003](docs/adr/0003-a-probe-beats-asking-the-app.md) says why.

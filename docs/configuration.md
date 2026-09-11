@@ -271,6 +271,15 @@ block. It costs nothing, touches nothing on screen, and therefore wins over
 whatever the backend would have answered —
 [ADR 0003](adr/0003-a-probe-beats-asking-the-app.md).
 
+The interface has to be **up and running**, not merely present. An address
+outlives the tunnel that was given it: GlobalProtect answers a keep-alive
+timeout by pulling its routes, bringing the interface down and leaving the
+address on it for the retry, so for as long as the agent keeps trying there is a
+dead interface wearing the number of a live one. Matching on the address alone
+read that as `connected` for four hours, and a connection that reads
+`connected` is one autoconnect leaves alone
+([ADR 0022](adr/0022-a-probe-reads-the-interface-not-just-the-address.md)).
+
 Find the range by connecting once and looking:
 
 ```bash

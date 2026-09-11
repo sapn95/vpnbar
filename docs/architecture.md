@@ -40,7 +40,9 @@ runtime.press(app, verbs)  --> ok, err               (clicks a control in a pane
 2. `obj:runtime(allowPanelReads)` is built. On the timer, `allowPanelReads` is
    false and `runtime.panel` answers `unknown` without touching anything.
 3. For every profile, `backends.status`:
-   - a configured `probe` reads the cached `ifconfig` and answers, or
+   - a configured `probe` reads the cached `ifconfig` and answers, counting only
+     interfaces that are up and running
+     ([ADR 0022](adr/0022-a-probe-reads-the-interface-not-just-the-address.md)), or
    - the backend answers, wrapped in `pcall` so a broken profile costs one
      `unknown` and not the whole menu.
 4. `obj:paint` asks `menu.indicator(states, busy)` for the one state to draw —

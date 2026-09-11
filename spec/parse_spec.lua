@@ -19,6 +19,25 @@ utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400
 	inet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff
 ]]
 
+-- The same machine four hours after a keep-alive timeout: the tunnel is gone,
+-- its routes have been uninstalled, the interface has been brought down, and the
+-- address is still sitting on it. This is the shape that read as `connected` for
+-- four hours on 11.09.2026. Addresses invented, as everywhere in this file.
+local IFCONFIG_STALE = [[
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+	inet 127.0.0.1 netmask 0xff000000
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.1.24 netmask 0xffffff00 broadcast 192.168.1.255
+utun4: flags=8010<POINTOPOINT,MULTICAST> mtu 1400
+	inet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff
+]]
+
+-- An interface that is up but whose driver has not attached. Not a tunnel.
+local IFCONFIG_NOT_RUNNING = [[
+utun4: flags=8011<UP,POINTOPOINT,MULTICAST> mtu 1400
+	inet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff
+]]
+
 describe("parse.state", function()
   it("knows the four words", function()
     assert.equals("connected", parse.state("Connected"))
@@ -70,16 +89,31 @@ describe("parse.scutilList", function()
   end)
 end)
 
-describe("parse.ifconfigAddresses", function()
+describe("parse.ifconfigInterfaces", function()
   it("groups addresses under their interface", function()
-    local interfaces = parse.ifconfigAddresses(IFCONFIG)
-    assert.same({ "127.0.0.1" }, interfaces.lo0)
-    assert.same({ "10.11.12.13" }, interfaces.utun4)
-    assert.same({}, interfaces.utun3, "an interface with no address is still an interface")
+    local interfaces = parse.ifconfigInterfaces(IFCONFIG)
+    assert.same({ "127.0.0.1" }, interfaces.lo0.addresses)
+    assert.same({ "10.11.12.13" }, interfaces.utun4.addresses)
+    assert.same({}, interfaces.utun3.addresses, "an interface with no address is still an interface")
+  end)
+
+  it("reads the flags, which is the half that used to be thrown away", function()
+    assert.is_true(parse.ifconfigInterfaces(IFCONFIG).utun4.up)
+    assert.is_false(parse.ifconfigInterfaces(IFCONFIG_STALE).utun4.up)
+  end)
+
+  it("wants RUNNING as well as UP", function()
+    assert.is_false(parse.ifconfigInterfaces(IFCONFIG_NOT_RUNNING).utun4.up)
+  end)
+
+  it("reads an interface with no flags at all as down, never as up", function()
+    local interfaces = parse.ifconfigInterfaces("weird0:\n\tinet 10.11.12.13 netmask 0xffffffff")
+    assert.is_false(interfaces.weird0.up)
+    assert.same({ "10.11.12.13" }, interfaces.weird0.addresses)
   end)
 
   it("survives nothing at all", function()
-    assert.same({}, parse.ifconfigAddresses(nil))
+    assert.same({}, parse.ifconfigInterfaces(nil))
   end)
 end)
 
@@ -127,5 +161,26 @@ describe("parse.probeState", function()
   it("is unknown, not disconnected, without a usable probe", function()
     assert.equals("unknown", parse.probeState(IFCONFIG, nil))
     assert.equals("unknown", parse.probeState(IFCONFIG, {}))
+  end)
+
+  -- The regression. An address outlives the tunnel it belonged to, so matching
+  -- on the address alone reported a live VPN for four hours after it had gone,
+  -- and kept autoconnect and its fallback asleep the whole time.
+  it("is disconnected when the address is left behind on an interface that is down", function()
+    local state, address = parse.probeState(IFCONFIG_STALE, { cidr = "10.0.0.0/8", interface = "utun" })
+    assert.equals("disconnected", state)
+    assert.is_nil(address)
+  end)
+
+  it("is disconnected when the interface is up but not running", function()
+    assert.equals("disconnected", parse.probeState(IFCONFIG_NOT_RUNNING, { cidr = "10.0.0.0/8", interface = "utun" }))
+  end)
+
+  it("still reports the live one when a dead interface carries the same range", function()
+    local both = IFCONFIG
+      .. "utun9: flags=8010<POINTOPOINT,MULTICAST> mtu 1400\n\tinet 10.11.12.99 netmask 0xffffffff\n"
+    local state, address = parse.probeState(both, { cidr = "10.0.0.0/8", interface = "utun" })
+    assert.equals("connected", state)
+    assert.equals("10.11.12.13", address, "the address from the interface that is actually up")
   end)
 end)
