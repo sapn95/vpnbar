@@ -914,6 +914,15 @@ function obj:init()
 end
 
 function obj:start()
+  -- Starting twice used to leave the first timer and the first wake watcher
+  -- running: the fields were overwritten, the objects were not stopped, and
+  -- Hammerspoon went on firing both. Two timers means two reads and two
+  -- autoconnect attempts per interval, each unaware of the other. `stop` is the
+  -- one place that takes everything down, so starting goes through it rather
+  -- than trying to remember the list a second time.
+  if self.running then
+    self:stop()
+  end
   self.running = true
   self:load()
   -- The second argument is an autosave name. Without one, macOS gives the

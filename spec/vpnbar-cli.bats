@@ -13,6 +13,7 @@ setup() {
   export HOME="${TMP}/home"
   mkdir -p "${HOME}/.hammerspoon"
 
+  export VPNBAR_APP_DIR="${TMP}/Applications"
   export VPNBAR_HAMMERSPOON_APP="${TMP}/Hammerspoon.app"
   mkdir -p "${VPNBAR_HAMMERSPOON_APP}"
 
@@ -27,6 +28,8 @@ EOF
 exit "${STUB_PGREP_EXIT:-0}"
 EOF
   chmod +x "${STUB}/hs" "${STUB}/pgrep"
+  # Never let a search reach the real Hammerspoon on this machine.
+  export VPNBAR_HS="${STUB}/hs"
   export PATH="${STUB}:${PATH}"
   export STUB_HS_ANSWER="900 32"
 }
@@ -164,4 +167,170 @@ EOF
   run "${SCRIPT}" doctor
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"points at nothing"* ]]
+}
+
+# ---------------------------------------------------------------- starting it
+
+@test "start asks Hammerspoon to start the Spoon" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"started"* ]]
+}
+
+@test "start says so rather than starting a second one" {
+  export STUB_HS_ANSWER="already running"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"already running"* ]]
+}
+
+@test "start fails loudly when the Spoon will not load" {
+  export STUB_HS_ANSWER="FAIL could not load the Spoon: nope"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"could not load the Spoon"* ]]
+  [[ "${output}" != *"FAIL "* ]]
+}
+
+@test "start opens Hammerspoon when it is not running" {
+  export STUB_PGREP_EXIT=1
+  export OPENED="${TMP}/opened"
+  cat >"${STUB}/open" <<'SH'
+#!/usr/bin/env bash
+echo "opened $*" >>"${OPENED}"
+SH
+  chmod +x "${STUB}/open"
+  # pgrep never succeeds, so this gives up rather than hanging forever.
+  cat >"${STUB}/sleep" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "${STUB}/sleep"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"did not come up"* ]]
+  [[ "$(cat "${OPENED}")" == *"Hammerspoon.app"* ]]
+}
+
+@test "stop says so when there is nothing to stop" {
+  export STUB_HS_ANSWER="not running"
+  run "${SCRIPT}" stop
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"not running"* ]]
+}
+
+@test "the doctor points at start, not at a reload" {
+  export STUB_HS_ANSWER="none"
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"vpnbar start"* ]]
+}
+
+# ------------------------------------------------- a copy is not a link
+
+@test "link replaces a real directory instead of linking inside it" {
+  mkdir -p "${HOME}/.hammerspoon/Spoons/VpnBar.spoon/vpnbar"
+  echo stale >"${HOME}/.hammerspoon/Spoons/VpnBar.spoon/init.lua"
+  run "${SCRIPT}" link
+  [ "${status}" -eq 0 ]
+  [ -L "${HOME}/.hammerspoon/Spoons/VpnBar.spoon" ]
+  [ ! -e "${HOME}/.hammerspoon/Spoons/VpnBar.spoon/VpnBar.spoon" ]
+  [[ "${output}" == *"replacing the copy"* ]]
+}
+
+@test "the doctor tells a copy apart from a link" {
+  mkdir -p "${HOME}/.hammerspoon/Spoons/VpnBar.spoon"
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"a copy, not a link"* ]]
+}
+
+@test "unlink removes a copy, which -f alone could not" {
+  mkdir -p "${HOME}/.hammerspoon/Spoons/VpnBar.spoon/vpnbar"
+  run "${SCRIPT}" unlink
+  [ "${status}" -eq 0 ]
+  [ ! -e "${HOME}/.hammerspoon/Spoons/VpnBar.spoon" ]
+}
+
+# --------------------------------------------------------- something to click
+
+@test "app writes a bundle that launches start" {
+  run "${SCRIPT}" app
+  [ "${status}" -eq 0 ]
+  [ -x "${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar" ]
+  [ -f "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist" ]
+  [[ "$(cat "${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar")" == *" start"* ]]
+}
+
+# The Finder launches a bundle from a working directory of its own choosing, so
+# a relative path is an app that works from the checkout and nowhere else.
+@test "the launcher holds an absolute path" {
+  cd "${BATS_TEST_DIRNAME}/.." && run ./scripts/vpnbar app
+  [ "${status}" -eq 0 ]
+  local launcher="${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar"
+  [[ "$(grep exec "${launcher}")" == *'exec "/'* ]]
+  [[ "$(grep exec "${launcher}")" != *'"./'* ]]
+}
+
+@test "the bundle stays out of the Dock, being a launcher" {
+  run "${SCRIPT}" app
+  [[ "$(cat "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist")" == *"LSUIElement"* ]]
+}
+
+@test "the plist is well formed" {
+  run "${SCRIPT}" app
+  run plutil -lint "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
+  [ "${status}" -eq 0 ]
+}
+
+@test "app is idempotent" {
+  "${SCRIPT}" app
+  run "${SCRIPT}" app
+  [ "${status}" -eq 0 ]
+  [ -x "${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar" ]
+}
+
+@test "unlink takes the bundle away as well" {
+  "${SCRIPT}" link
+  "${SCRIPT}" app
+  run "${SCRIPT}" unlink
+  [ "${status}" -eq 0 ]
+  [ ! -e "${VPNBAR_APP_DIR}/vpnbar.app" ]
+}
+
+@test "link points at the app command" {
+  run "${SCRIPT}" link
+  [[ "${output}" == *"app"* ]]
+}
+
+# ------------------------------------------- a GUI launch has almost no PATH
+
+@test "start finds hs inside the Hammerspoon bundle, not on PATH" {
+  mkdir -p "${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs"
+  cat >"${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs/hs" <<'SH'
+#!/usr/bin/env bash
+echo "started"
+SH
+  chmod +x "${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs/hs"
+  rm -f "${STUB}/hs"
+  unset VPNBAR_HS
+  # Exactly what launchd hands a double-clicked bundle.
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin:${STUB}" run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"started"* ]]
+}
+
+@test "start fails when Hammerspoon's command line is nowhere" {
+  export VPNBAR_HS="${TMP}/no-such-hs"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"hs.ipc.cliInstall()"* ]]
+}
+
+@test "a FAIL answer is an error, not a success with a message" {
+  export STUB_HS_ANSWER="FAIL start did not take"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 1 ]
+  [[ "${output}" != *"no answer"* ]]
 }
