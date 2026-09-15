@@ -224,7 +224,25 @@ Then in `~/.hammerspoon/init.lua`:
 hs.loadSpoon("VpnBar"):start()
 ```
 
+Then there is something to start:
+
+```bash
+vpnbar start      # start it inside a running Hammerspoon
+vpnbar stop       # the same as Quit in the menu
+vpnbar restart
+vpnbar app        # an icon in Launchpad and Spotlight that runs start
+```
+
+**Quit** in the menu stops the Spoon and leaves Hammerspoon running, which is
+the point of it. Until these existed the only way back was reloading
+Hammerspoon and every other config with it, so the menu had a documented way out
+and no way in ([ADR 0025](docs/adr/0025-there-is-a-way-in-not-only-a-way-out.md)).
+
 The installer symlinks rather than copies, so `git pull` is the whole update.
+A **copy** where that link belongs is the quiet failure: everything keeps
+working and nothing updates, so `brew upgrade` refreshes code that nothing is
+loading. `vpnbar doctor` tells the two apart and `vpnbar link` replaces a copy
+with a link.
 Hammerspoon needs Accessibility permission for the `globalprotect` backend; it
 already has it here for other reasons, and without it the other two backends
 still work.

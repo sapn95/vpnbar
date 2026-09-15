@@ -11,7 +11,13 @@ lint:
 	luacheck .
 	./scripts/leak-lint.sh
 
+# luacov *adds to* luacov.stats.out rather than replacing it, so a second run in
+# the same checkout counts every line the first run hit as well. Left alone, the
+# reported percentage climbs with the number of times anybody has run the tests,
+# and the figure quoted in a commit message is whatever that count happened to
+# be. CI never saw it, because a fresh checkout has no stats file to inherit.
 test:
+	rm -f luacov.stats.out luacov.report.out
 	busted --coverage
 	luacov
 	lua scripts/coverage-floor.lua

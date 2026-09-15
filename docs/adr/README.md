@@ -30,3 +30,4 @@ whether their idea was considered or simply missed.
 | [0022](0022-a-probe-reads-the-interface-not-just-the-address.md) | A probe reads the interface, not just the address |
 | [0023](0023-an-unlock-is-a-fresh-start.md) | An unlock is a fresh start, the same as a wake |
 | [0024](0024-autoconnect-backs-off-it-does-not-give-up.md) | Autoconnect backs off, it does not give up |
+| [0025](0025-there-is-a-way-in-not-only-a-way-out.md) | There is a way in, not only a way out |

@@ -13,6 +13,7 @@ readonly SPOONS="${HOME}/.hammerspoon/Spoons"
 # Overridable for the tests, which have no Hammerspoon to find.
 readonly HAMMERSPOON_APP="${VPNBAR_HAMMERSPOON_APP:-/Applications/Hammerspoon.app}"
 readonly INIT="${HOME}/.hammerspoon/init.lua"
+readonly APP_DIR="${VPNBAR_APP_DIR:-${HOME}/Applications}"
 readonly LOAD_LINE='hs.loadSpoon("VpnBar"):start()'
 # What counts as "init.lua loads it". Matching the whole suggested line would
 # call a config that keeps a handle on the Spoon — the two-line form — broken.
@@ -77,10 +78,16 @@ spoon_source() {
   fi
 }
 
-# A link that points at nothing is the failure this guards against, so the
-# doctor checks the target and not just the link.
+# A link that points at nothing is one failure; a real directory sitting where
+# the link belongs is the other, and it is the quieter one. A copy keeps working
+# and stops tracking, so `brew upgrade` updates something nobody is running.
+# Both are told apart here rather than by "is there a directory".
 spoon_link_is_live() {
-  [ -d "${SPOONS}/VpnBar.spoon" ]
+  [ -L "${SPOONS}/VpnBar.spoon" ] && [ -d "${SPOONS}/VpnBar.spoon/" ]
+}
+
+spoon_is_stale_copy() {
+  [ ! -L "${SPOONS}/VpnBar.spoon" ] && [ -d "${SPOONS}/VpnBar.spoon" ]
 }
 
 ok() { printf '  ok    %s\n' "$1"; }
@@ -95,6 +102,13 @@ cmd_link() {
     exit 1
   }
   mkdir -p "${SPOONS}"
+  # `ln -sfn` onto a real directory puts the link *inside* it, which is how a
+  # copy survives being "relinked" and goes on being the code that runs. Take it
+  # out first, and say so, because deleting a directory should never be silent.
+  if spoon_is_stale_copy; then
+    echo "replacing the copy at ${SPOONS}/VpnBar.spoon with a link"
+    rm -rf "${SPOONS}/VpnBar.spoon"
+  fi
   ln -sfn "${source}" "${SPOONS}/VpnBar.spoon"
   echo "linked ${SPOONS}/VpnBar.spoon -> ${source}"
   if [ -f "${INIT}" ] && grep -qF "${LOAD_MARK}" "${INIT}"; then
@@ -105,12 +119,197 @@ cmd_link() {
     echo
     echo "    ${LOAD_LINE}"
   fi
+  echo
+  echo "For an icon in Launchpad and Spotlight: ${0##*/} app"
+}
+
+# Something to click. vpnbar is a Hammerspoon Spoon, so there has never been an
+# icon in Launchpad or a name Spotlight could find, and when the menu bar item
+# is gone there is nothing on the whole machine that looks like a way back in.
+# This is the smallest bundle macOS will treat as an application: a launcher
+# that runs `vpnbar start` and gets out of the way.
+#
+# LSUIElement, because it starts something else and exits. Without it the Dock
+# shows a bouncing icon for a program that is already finished.
+cmd_app() {
+  local me app invoked
+  invoked="${BASH_SOURCE[0]}"
+  # Absolute, always: the Finder launches a bundle from a working directory that
+  # has nothing to do with where this was invoked from, so a relative path here
+  # produces an app that works when tested from the checkout and nowhere else.
+  #
+  # Absolute, but *not* resolved through its last symlink. /opt/homebrew/bin/vpnbar
+  # points into the Cellar at a path carrying the version, and following it would
+  # bake that version into the launcher; the next `brew upgrade` removes that keg
+  # and leaves an app pointing at nothing. The same trap as linking the Spoon to
+  # the Cellar instead of to opt.
+  case "${invoked}" in
+    /*) me="${invoked}" ;;
+    */*) me="$(cd "$(dirname "${invoked}")" && pwd)/$(basename "${invoked}")" ;;
+    *) me="$(command -v "${invoked}")" ;;
+  esac
+  app="${APP_DIR}/vpnbar.app"
+  mkdir -p "${app}/Contents/MacOS"
+  cat >"${app}/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>vpnbar</string>
+  <key>CFBundleDisplayName</key><string>vpnbar</string>
+  <key>CFBundleIdentifier</key><string>ch.sapn.vpnbar.launcher</string>
+  <key>CFBundleExecutable</key><string>vpnbar</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+  cat >"${app}/Contents/MacOS/vpnbar" <<LAUNCHER
+#!/usr/bin/env bash
+# Written by \`vpnbar app\`. Starts the Spoon inside Hammerspoon and exits.
+exec "${me}" start
+LAUNCHER
+  chmod +x "${app}/Contents/MacOS/vpnbar"
+  # Without this the Finder can go on showing a bundle it has already cached.
+  touch "${app}"
+  echo "installed ${app}"
+  echo "It runs: ${me} start"
 }
 
 cmd_unlink() {
-  rm -f "${SPOONS}/VpnBar.spoon"
+  # -f alone cannot remove a directory, so a stale copy survived `unlink` and
+  # went on being loaded by Hammerspoon.
+  rm -rf "${SPOONS}/VpnBar.spoon"
   echo "removed ${SPOONS}/VpnBar.spoon"
+  if [ -d "${APP_DIR}/vpnbar.app" ]; then
+    rm -rf "${APP_DIR}/vpnbar.app"
+    echo "removed ${APP_DIR}/vpnbar.app"
+  fi
   echo "The line in ${INIT} is left alone; take it out by hand."
+}
+
+# `hs` lives inside the Hammerspoon bundle and is only on PATH because something
+# put a symlink there. An app launched from the Finder gets
+# /usr/bin:/bin:/usr/sbin:/sbin and nothing else, so looking it up on PATH alone
+# is a launcher that works from a terminal and silently does nothing when
+# double-clicked. The bundle is the location that does not depend on a shell
+# profile, so it is asked first.
+find_hs() {
+  local candidate
+  # An explicit answer wins over any search. The tests set it, because a search
+  # that reaches an absolute path finds the real Hammerspoon on a developer's
+  # machine and a "test" then starts the menu somebody is actually using.
+  if [ -n "${VPNBAR_HS:-}" ]; then
+    [ -x "${VPNBAR_HS}" ] || return 1
+    printf '%s\n' "${VPNBAR_HS}"
+    return 0
+  fi
+  for candidate in \
+    "${HAMMERSPOON_APP}/Contents/Frameworks/hs/hs" \
+    /opt/homebrew/bin/hs \
+    /usr/local/bin/hs; do
+    [ -x "${candidate}" ] && {
+      printf '%s\n' "${candidate}"
+      return 0
+    }
+  done
+  command -v hs 2>/dev/null && return 0
+  return 1
+}
+
+# Asking Hammerspoon to do something, with the same timeout the doctor uses: a
+# wedged Hammerspoon must not hang a command somebody typed to fix it.
+#
+# The answer comes back in a variable rather than down a pipe. Through a pipe
+# the reporting half runs in a subshell, so its `exit 1` ends the subshell and
+# the script carries on as if the command had worked.
+ask_hammerspoon() {
+  local hs_bin answer
+  hs_bin="$(find_hs)" || {
+    echo "Hammerspoon's command line is missing. Run this in the" >&2
+    echo "Hammerspoon console:" >&2
+    echo >&2
+    echo "    hs.ipc.cliInstall()" >&2
+    return 1
+  }
+  answer="$(run_with_timeout 10 "${hs_bin}" -c "$1" 2>/dev/null | tail -1)"
+  case "${answer}" in
+    FAIL*)
+      echo "${answer#FAIL }" >&2
+      return 1
+      ;;
+    "")
+      echo "no answer from Hammerspoon" >&2
+      return 1
+      ;;
+    *)
+      printf '%s\n' "${answer}"
+      ;;
+  esac
+}
+
+# Does Hammerspoon's command line answer *right now*? The process existing is
+# not the same question: after `open`, Hammerspoon is in the process table well
+# before ipc is listening, so waiting on pgrep alone returns a moment too early
+# and the first real request comes back empty — "no answer from Hammerspoon" on
+# an ordinary cold start.
+hammerspoon_answers() {
+  local hs_bin
+  hs_bin="$(find_hs)" || return 1
+  [ -n "$(run_with_timeout 3 "${hs_bin}" -c 'return "up"' 2>/dev/null | tail -1)" ]
+}
+
+# Hammerspoon has to be up *and answering* before it can be asked anything.
+ensure_hammerspoon() {
+  hammerspoon_answers && return 0
+  if ! pgrep -f 'Hammerspoon.app/Contents/MacOS' >/dev/null 2>&1; then
+    [ -d "${HAMMERSPOON_APP}" ] || {
+      echo "Hammerspoon is not installed — brew install --cask hammerspoon" >&2
+      return 1
+    }
+    echo "starting Hammerspoon"
+    open -a "${HAMMERSPOON_APP}"
+  fi
+  local waited=0
+  while [ "${waited}" -lt 20 ]; do
+    hammerspoon_answers && return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "Hammerspoon did not come up within 20 seconds" >&2
+  echo "If it is running, its command line may be off — in the console:" >&2
+  echo >&2
+  echo "    hs.ipc.cliInstall()" >&2
+  return 1
+}
+
+# `Quit vpnbar` stops the Spoon and leaves Hammerspoon running, which is the
+# whole point of it — Hammerspoon is doing other jobs on this machine. Until
+# these verbs existed the only way back was reloading Hammerspoon and every
+# other config with it, so the menu had a way out and no way in.
+cmd_start() {
+  ensure_hammerspoon || exit 1
+  ask_hammerspoon '
+    local ok, spoon = pcall(hs.loadSpoon, "VpnBar")
+    if not ok or not spoon then return "FAIL could not load the Spoon: " .. tostring(spoon) end
+    if _G.vpnbar and _G.vpnbar.running then return "already running" end
+    _G.vpnbar = spoon:start()
+    return _G.vpnbar.running and "started" or "FAIL start did not take"
+  '
+}
+
+cmd_stop() {
+  ask_hammerspoon '
+    if not (_G.vpnbar and _G.vpnbar.running) then return "not running" end
+    _G.vpnbar:stop()
+    return "stopped"
+  '
+}
+
+cmd_restart() {
+  cmd_stop >/dev/null || true
+  cmd_start
 }
 
 cmd_doctor() {
@@ -133,6 +332,13 @@ cmd_doctor() {
   echo "The Spoon"
   if spoon_link_is_live; then
     ok "linked into ${SPOONS}"
+  elif spoon_is_stale_copy; then
+    # Frozen at whatever it was when it was copied. Everything works and
+    # nothing updates, which is worse than a clean break.
+    bad "a copy, not a link — run: vpnbar link"
+    note "${SPOONS}/VpnBar.spoon is a real directory, so brew upgrade"
+    note "updates a copy of vpnbar that nothing is loading."
+    failures=$((failures + 1))
   elif [ -L "${SPOONS}/VpnBar.spoon" ]; then
     bad "the link points at nothing — run: vpnbar link"
     note "$(printf '%s -> %s' "${SPOONS}/VpnBar.spoon" "$(readlink "${SPOONS}/VpnBar.spoon")")"
@@ -149,16 +355,16 @@ cmd_doctor() {
   fi
 
   echo "The menu bar"
-  local frame=""
-  if command -v hs >/dev/null 2>&1; then
-    frame="$(run_with_timeout 6 hs -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d", f.x, f.w)' 2>/dev/null | tail -1 || true)"
+  local frame="" hs_bin=""
+  if hs_bin="$(find_hs)"; then
+    frame="$(run_with_timeout 6 "${hs_bin}" -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d", f.x, f.w)' 2>/dev/null | tail -1 || true)"
   fi
   case "${frame}" in
     "")
       note "cannot ask Hammerspoon — enable its command line with hs.ipc"
       ;;
     none)
-      bad "vpnbar is not running inside Hammerspoon"
+      bad "not running inside Hammerspoon — run: vpnbar start"
       failures=$((failures + 1))
       ;;
     *)
@@ -206,9 +412,13 @@ cmd_doctor() {
 case "${1:-}" in
   link) cmd_link ;;
   unlink) cmd_unlink ;;
+  app) cmd_app ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
   doctor) cmd_doctor ;;
   *)
-    echo "usage: ${0##*/} link|unlink|doctor" >&2
+    echo "usage: ${0##*/} start|stop|restart|link|unlink|app|doctor" >&2
     exit 2
     ;;
 esac
