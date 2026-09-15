@@ -117,12 +117,40 @@ describe("autoconnect, the fallback", function()
     return memory
   end
 
-  it("keeps asking for the wanted one until the attempts run out", function()
-    local memory = afterAttempts(1, 0)
+  it("asks for the wanted one first, before it has failed at all", function()
     assert.same(
       { id = "aws", verb = "connect", reason = "wanted" },
-      autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000)
+      autoconnect.plan(config(), { aws = "disconnected" }, {}, 1000)
     )
+  end)
+
+  -- One failure is enough to try the other one. A second identical attempt a
+  -- minute later says nothing the first did not, and the point of a fallback is
+  -- to be on something while the preferred one is unavailable.
+  it("reaches for the fallback after a single failure", function()
+    local plan = autoconnect.plan(config(), { aws = "disconnected" }, afterAttempts(1, 0), 1000)
+    assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
+  end)
+
+  -- "Keep testing back and forth until one of them works again."
+  it("alternates between the two for as long as both keep failing", function()
+    local memory, asked, now = {}, {}, 1000
+    for _ = 1, 8 do
+      local plan = autoconnect.plan(config(), { aws = "disconnected", alt = "disconnected" }, memory, now)
+      if plan then
+        asked[#asked + 1] = plan.id
+        autoconnect.remember(memory, plan.id, now)
+      end
+      now = now + autoconnect.COOLDOWN_CEILING
+    end
+    assert.is_true(#asked >= 6, "it never stops asking")
+    local sawAws, sawAlt = false, false
+    for _, id in ipairs(asked) do
+      sawAws = sawAws or id == "aws"
+      sawAlt = sawAlt or id == "alt"
+    end
+    assert.is_true(sawAws, "the one that was chosen")
+    assert.is_true(sawAlt, "and the stand-in")
   end)
 
   it("moves to the fallback once it has asked enough times", function()
@@ -333,17 +361,61 @@ describe("autoconnect, only one connection at a time", function()
     assert.equals("b", plan.id)
   end)
 
-  it("takes down any extra it started, not only a fallback", function()
+  it("takes down any extra, not only a fallback", function()
     local cfg = exclusive(config())
     local memory = {}
     autoconnect.remember(memory, "alt", 500)
     local plan = autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, memory, 1000)
-    assert.same({ id = "alt", verb = "disconnect", reason = "superseded" }, plan)
+    assert.equals("alt", plan.id)
+    assert.equals("supersede", plan.verb)
   end)
 
-  it("still leaves alone what it did not start", function()
+  -- Reversed deliberately. One at a time that makes an exception for a tunnel
+  -- somebody opened by hand is not one at a time.
+  it("takes down an extra nobody's autoconnect started", function()
     local cfg = exclusive(config())
-    assert.is_nil(autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, {}, 1000))
+    local plan = autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, {}, 1000)
+    assert.equals("alt", plan.id)
+    assert.equals("supersede", plan.verb)
+  end)
+
+  it("keeps the one ranked highest, and rank is the order in the menu", function()
+    local cfg = exclusive(config())
+    local plan = autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, {}, 1000)
+    assert.equals("alt", plan.id, "aws is ordered first, so alt is the one that goes")
+
+    -- Move the stand-in above it and the answer swaps: this is what Move up does.
+    local moved = assert(store.move(cfg, "alt", -1))
+    local after = autoconnect.plan(moved, { aws = "connected", alt = "connected" }, {}, 1000)
+    assert.equals("aws", after.id, "now aws is the extra one")
+  end)
+
+  it("takes down a protected extra, under its own verb", function()
+    local cfg = exclusive(assert(store.normalise({
+      settings = { exclusive = true },
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10, autoconnect = true },
+        { id = "b", name = "B", backend = "scutil", service = "b", order = 20, protected = true },
+      },
+    })))
+    local plan = autoconnect.plan(cfg, { a = "connected", b = "connected" }, {}, 1000)
+    assert.equals("b", plan.id)
+    assert.equals("supersede", plan.verb, "never plain disconnect, which protection refuses")
+  end)
+
+  it("leaves a protected one alone when it is the one ranked highest", function()
+    local cfg = exclusive(assert(store.normalise({
+      settings = { exclusive = true },
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10, protected = true },
+      },
+    })))
+    assert.is_nil(autoconnect.plan(cfg, { a = "connected" }, {}, 1000))
+  end)
+
+  it("with exclusive off, a hand-opened tunnel is still nobody's to close", function()
+    local plan = autoconnect.plan(config(), { aws = "connected", alt = "connected" }, {}, 1000)
+    assert.is_nil(plan)
   end)
 
   it("is off by default, so an unconfigured menu behaves as before", function()

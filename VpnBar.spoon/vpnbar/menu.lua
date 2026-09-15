@@ -317,8 +317,22 @@ function menu.build(cfg, states)
         { title = "Rename…", action = { kind = "rename", id = profile.id } },
         { title = "Edit…", action = { kind = "edit", id = profile.id } },
         { separator = true },
-        { title = "Move up", disabled = index == 1, action = { kind = "move", id = profile.id, delta = -1 } },
-        { title = "Move down", disabled = index == #all, action = { kind = "move", id = profile.id, delta = 1 } },
+        -- The order is not only cosmetic and used to look it. It is the
+        -- priority: autoconnect asks the highest one first, and with one at a
+        -- time switched on the highest is the one that stays up. Saying so here
+        -- is the difference between a list and a setting.
+        {
+          title = ("Move up (%d of %d)"):format(index, #all),
+          tooltip = "Higher means tried first, and kept when only one may be up at a time.",
+          disabled = index == 1,
+          action = { kind = "move", id = profile.id, delta = -1 },
+        },
+        {
+          title = "Move down",
+          tooltip = "Lower means tried later, and taken down first when only one may be up at a time.",
+          disabled = index == #all,
+          action = { kind = "move", id = profile.id, delta = 1 },
+        },
         {
           title = profile.hidden and "Show in the menu" or "Hide from the menu",
           action = { kind = "toggleHidden", id = profile.id },

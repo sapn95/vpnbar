@@ -31,14 +31,26 @@ function scutil.status(profile, runtime)
   return parse.scutilStatus(out)
 end
 
+-- `ok and nil or "..."` reads like a ternary and is not one: `true and nil` is
+-- `nil`, which is falsy, so the `or` branch runs and the message came back on
+-- success as well as on failure. Nothing acted on it, because every caller
+-- tests the boolean first, so it sat in six places until a test asked one of
+-- them what it returned.
+local function outcome(ok, message)
+  if ok then
+    return true, nil
+  end
+  return false, message
+end
+
 function scutil.connect(profile, runtime)
   local _, ok = runtime.exec("/usr/sbin/scutil --nc start " .. backends.shellQuote(profile.service))
-  return ok and true or false, ok and nil or "scutil refused to start the connection"
+  return outcome(ok, "scutil refused to start the connection")
 end
 
 function scutil.disconnect(profile, runtime)
   local _, ok = runtime.exec("/usr/sbin/scutil --nc stop " .. backends.shellQuote(profile.service))
-  return ok and true or false, ok and nil or "scutil refused to stop the connection"
+  return outcome(ok, "scutil refused to stop the connection")
 end
 
 local globalprotect = {}
@@ -102,7 +114,7 @@ end
 
 function globalprotect.restart(profile, runtime)
   local _, ok = runtime.exec(globalprotect.restartCommand(profile.app))
-  return ok and true or false, ok and nil or ("could not open " .. tostring(profile.app) .. " again")
+  return outcome(ok, "could not open " .. tostring(profile.app) .. " again")
 end
 
 local shell = {}
@@ -117,17 +129,17 @@ end
 
 function shell.connect(profile, runtime)
   local _, ok = runtime.exec(profile.commands.connect)
-  return ok and true or false, ok and nil or "the connect command failed"
+  return outcome(ok, "the connect command failed")
 end
 
 function shell.disconnect(profile, runtime)
   local _, ok = runtime.exec(profile.commands.disconnect)
-  return ok and true or false, ok and nil or "the disconnect command failed"
+  return outcome(ok, "the disconnect command failed")
 end
 
 function shell.force(profile, runtime)
   local _, ok = runtime.exec(profile.commands.force)
-  return ok and true or false, ok and nil or "the force command failed"
+  return outcome(ok, "the force command failed")
 end
 
 -- The AWS VPN Client. Its window lists one row per profile, and the management
@@ -189,7 +201,18 @@ end
 -- protection points in. Restarting the agent does not reach the tunnel at all,
 -- and a rule that refused it would leave the one connection that may not be
 -- disconnected as the one whose stuck panel cannot be repaired either.
-backends.PROTECTED_VERBS = { connect = true, restart = true }
+--- Verbs a `protected` connection still allows.
+---
+--- `connect`, because protection points one way. `restart`, because it closes an
+--- application and not a tunnel
+--- ([ADR 0021](../../docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
+--- And `supersede`, which is a disconnect asked for by the one-at-a-time rule
+--- when a connection ranked above this one is already up
+--- ([ADR 0026](../../docs/adr/0026-one-at-a-time-outranks-protection.md)).
+---
+--- `supersede` is deliberately not a verb any menu item produces. Every button
+--- goes on being refused, so protection still means what the menu says it means.
+backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true }
 
 --- The state of one connection.
 ---
@@ -232,10 +255,14 @@ function backends.act(profile, verb, runtime)
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end
   local backend = backends.byName[profile.backend]
-  if not backend or not backend[verb] then
+  -- `supersede` is a disconnect wearing a different name so the protection
+  -- check above can tell them apart. No backend implements it; every backend
+  -- already knows how to close its own connection.
+  local action = verb == "supersede" and "disconnect" or verb
+  if not backend or not backend[action] then
     return false, ("no %s for a %s connection"):format(verb, tostring(profile.backend))
   end
-  local called, ok, err = pcall(backend[verb], profile, runtime)
+  local called, ok, err = pcall(backend[action], profile, runtime)
   if not called then
     return false, tostring(ok)
   end

@@ -32,11 +32,14 @@ whole. Toggle them from **Connections → Settings**.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `exclusive` | `false` | Autoconnect never starts a second tunnel while one is up or on its way up, and takes down any extra **it started**. |
+| `exclusive` | `false` | Only one tunnel at a time. The one ranked highest in the menu stays up; every other one is taken down, whoever opened it and whether or not it is `protected`. |
 | `fallback` | `true` | Whether autoconnect may try a connection's `fallback` at all. Off, it keeps asking for the one you chose. |
 
-`exclusive` is a rule about what **autoconnect** does. A tunnel you opened
-yourself is reported and never closed — the menu does not overrule a person
+`exclusive` outranks `protected`, which nothing else does
+([ADR 0026](adr/0026-one-at-a-time-outranks-protection.md)). It is asked for
+under a verb no menu item can produce, so every button still refuses a protected
+connection. Switched off, the older narrower rule applies: only the stand-in
+autoconnect started for this very connection, and never a protected one
 ([ADR 0015](adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)). Changing
 either setting clears autoconnect's memory of what has failed, because those
 failures happened under the old rules.

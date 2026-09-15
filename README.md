@@ -142,8 +142,17 @@ stops autoconnect starting a second tunnel while one is up, and takes down any
 extra it started. *Use fallbacks* turns the fallback step off, so the loop
 keeps asking for the connection you actually chose.
 
-Both are rules about what **autoconnect** does. A tunnel you opened yourself is
-reported and never closed: the menu does not overrule a person
+*Only one connection at a time* means it. The connection ranked highest stays
+up and every other tunnel is taken down, whoever opened it and whether or not it
+is `protected`. Rank is the order in the menu, so **Move up** and **Move down**
+decide which one survives, and both rows now say so
+([ADR 0026](docs/adr/0026-one-at-a-time-outranks-protection.md)).
+
+Protection is narrowed rather than removed. The closing is asked for under its
+own verb that no menu item can produce, so **Disconnect**, **Force disconnect**
+and **Disconnect everything** go on refusing a protected connection exactly as
+before. Switched off, the older and narrower rule stands: only the stand-in
+autoconnect started for this very connection
 ([ADR 0015](docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
 
 ## Force disconnect
