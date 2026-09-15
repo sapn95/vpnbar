@@ -1,6 +1,11 @@
 # 0013 — Autoconnect is a plan, not a timer
 
-**Status:** accepted, 2026-09-01.
+**Status:** accepted, 2026-09-01. Two of its numbers have since changed:
+the fallback comes after one failure rather than two
+([ADR 0026](0026-one-at-a-time-outranks-protection.md)), and there is no longer
+a point at which it gives up
+([ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md)). The shape of the
+decision — one pure function, at most one action per refresh — is unchanged.
 
 ## The decision
 

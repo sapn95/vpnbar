@@ -132,7 +132,7 @@ set to connect automatically, with the AWS client as its `fallback`. AWS then
 only ever comes up when the first one would not.
 
 All of that is one pure function returning at most one action, so the policy is
-nineteen fast tests rather than an afternoon of waiting
+a few dozen fast tests rather than an afternoon of waiting
 ([ADR 0013](docs/adr/0013-autoconnect-is-a-plan-not-a-timer.md)).
 
 ## Only one at a time
@@ -322,7 +322,7 @@ menu:
 - **Proved for the AWS VPN Client.** No `scutil` entry, no accessibility tree,
   no command line; OpenVPN's management interface on `127.0.0.1:35001` with a
   session password file, taken from a real session's own logs. The helper is
-  covered by ten tests against a stubbed socket.
+  covered by a suite of its own against a stubbed socket.
 - **Not yet exercised against a live tunnel.** Two write paths: the click that
   disconnects GlobalProtect, and `signal SIGTERM` to the AWS management
   interface. The GlobalProtect panel was read while it was *connecting*, and
