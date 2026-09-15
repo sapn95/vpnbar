@@ -19,9 +19,9 @@ The policy that lives there:
 | | |
 | --- | --- |
 | cooldown | 60 s before the same connection is asked again |
-| attempts before the fallback | 2 |
-| attempts before giving up | 6, until something clears the memory |
-| cleared by | the connection coming up, a wake, switching autoconnect on |
+| attempts before the fallback | 2 — **now 1**, see [ADR 0026](0026-one-at-a-time-outranks-protection.md) |
+| attempts before giving up | 6 — **there is no longer such a point**, see [ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md) |
+| cleared by | the connection coming up, a wake, **an unlock** ([ADR 0023](0023-an-unlock-is-a-fresh-start.md)), switching autoconnect on |
 | never touched | `connecting` (already on its way), `unknown` (nothing is known) |
 | tidied up | the fallback is disconnected once the wanted one is up |
 
@@ -45,20 +45,32 @@ ten seconds later, by which time the first has an answer.
 ## Why a fallback is tried second and not in parallel
 
 The connection somebody configured is the one they want. Falling back is an
-admission that it is not available, and making that admission after two tries
+admission that it is not available, and making that admission after a failure
 rather than immediately is the difference between "the split-tunnel endpoint is
 down" and "the wifi had not come up yet".
 
-## Why it gives up
+This said *two* tries when it was written. One turned out to be enough for that
+distinction, and a second identical attempt a minute later bought nothing but a
+minute off the network ([ADR 0026](0026-one-at-a-time-outranks-protection.md)).
+
+## Why it gave up
+
+**Superseded by [ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md).
+It no longer gives up; the gap between attempts grows to a ceiling instead.** The
+original reasoning, and what was wrong with it:
 
 A laptop on a train would otherwise ask a portal it cannot reach every ten
 seconds until the battery is flat. Six failures buys the state a wake, a
 network change or a click to clear it — all three of which are events that make
 the old failures meaningless anyway.
 
+What that missed is that a locked screen is none of those three, so an always-on
+VPN could sit down all night with nothing trying to bring it back. A ceiling
+answers the battery just as well without the stopping.
+
 ## Why the policy is not in the adapter
 
 Because every one of those numbers, and the order the rules run in, is a
 decision, and a decision inside a timer
-callback can only be checked by waiting. In a module it is nineteen tests that
-run in a hundredth of a second.
+callback can only be checked by waiting. In a module they are tests that run in a
+hundredth of a second.
