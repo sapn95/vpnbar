@@ -392,3 +392,23 @@ SH
   [[ "${output}" == *"started"* ]]
   [[ "${output}" != *"starting Hammerspoon"* ]]
 }
+
+# ---------------------------------------------------------------- cycles
+
+# An unbounded loop in a helper. Not reachable through the front door — the only
+# caller passes ${BASH_SOURCE[0]}, and a cyclic path cannot be executed at all,
+# because the kernel answers ELOOP before the script runs. Bounded anyway: the
+# Lua half is depth-limited for exactly this reason, and a loop with no ceiling
+# is not a thing to leave in a command somebody types.
+#
+# The function is lifted out rather than sourced: the script dispatches on its
+# arguments at the bottom, so sourcing it runs that instead.
+@test "a symlink cycle is given up on rather than followed forever" {
+  ln -s "${TMP}/b" "${TMP}/a"
+  ln -s "${TMP}/a" "${TMP}/b"
+  sed -n '/^resolve_symlinks()/,/^}/p' "${SCRIPT}" >"${TMP}/fn.sh"
+  echo "resolve_symlinks '${TMP}/a'" >>"${TMP}/fn.sh"
+  run timeout 10 bash "${TMP}/fn.sh"
+  [ "${status}" -ne 124 ]
+  [[ "${output}" == *"too many symlinks"* ]]
+}

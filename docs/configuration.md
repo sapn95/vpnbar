@@ -234,8 +234,10 @@ automatically**, and the fallback is the last question **Edit…** asks.
 
 What then happens, on the refresh that already runs every ten seconds: a
 connection that is `disconnected` is asked to connect, at most one per refresh,
-never more often than once a minute. After two tries it moves to its
-`fallback` — if that one is not itself up or on its way up.
+never more often than once a minute. After a single failure it moves to its
+`fallback` — if that one is not itself up or on its way up. One failed attempt
+is enough, because a second identical one a minute later says nothing the first
+did not ([ADR 0026](adr/0026-one-at-a-time-outranks-protection.md)).
 
 It does not stop. The gap doubles with each failure, from one minute to a
 ceiling of fifteen, and stays there
