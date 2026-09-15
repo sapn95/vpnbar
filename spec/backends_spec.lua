@@ -419,3 +419,43 @@ describe("the awsvpn backend", function()
     assert.is_true(backends.canForce(profile))
   end)
 end)
+
+describe("backends.act, superseding", function()
+  local function scutilProfile(overrides)
+    local p = { id = "s", name = "S", backend = "scutil", service = "Work VPN" }
+    for k, v in pairs(overrides or {}) do
+      p[k] = v
+    end
+    return p
+  end
+
+  it("closes a protected connection, which disconnect and force may not", function()
+    local locked = scutilProfile({ protected = true })
+    local runtime = fakeRuntime()
+    assert.is_true((backends.act(locked, "supersede", runtime)))
+    for _, verb in ipairs({ "disconnect", "force" }) do
+      assert.is_false((backends.act(locked, verb, runtime)))
+    end
+  end)
+
+  it("runs the backend's own disconnect, not a second code path", function()
+    local runtime = fakeRuntime()
+    backends.act(scutilProfile(), "supersede", runtime)
+    local ran = table.concat(runtime.calls.exec, " ")
+    assert.is_truthy(ran:find("stop", 1, true), "scutil --nc stop: " .. ran)
+  end)
+
+  it("is refused by a backend with nothing to disconnect with", function()
+    local ok, err = backends.act({ id = "x", name = "X", backend = "nosuch" }, "supersede", fakeRuntime())
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("supersede", 1, true), "says the verb asked for")
+  end)
+
+  -- `ok and nil or "..."` is not a ternary: `true and nil` is nil, which is
+  -- falsy, so the message came back on success too.
+  it("says nothing went wrong when nothing went wrong", function()
+    local ok, err = backends.act(scutilProfile(), "supersede", fakeRuntime())
+    assert.is_true(ok)
+    assert.is_nil(err, "a successful call carried an error message: " .. tostring(err))
+  end)
+end)

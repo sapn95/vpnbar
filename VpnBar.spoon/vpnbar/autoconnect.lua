@@ -28,7 +28,13 @@ autoconnect.COOLDOWN_CEILING = 900
 
 --- How many times to ask for the connection somebody actually chose before
 --- accepting that it is not coming and trying its fallback.
-autoconnect.ATTEMPTS_BEFORE_FALLBACK = 2
+---
+--- One. A second identical attempt a minute later tells you nothing the first
+--- did not, and the point of having a fallback is to be on *something* while the
+--- preferred one is unavailable. After this the two are tried alternately, each
+--- on its own backoff, for as long as both keep failing
+--- ([ADR 0026](../../docs/adr/0026-one-at-a-time-outranks-protection.md)).
+autoconnect.ATTEMPTS_BEFORE_FALLBACK = 1
 
 --- How long to wait before the next attempt, given how many have already
 --- failed. Doubles from `COOLDOWN`, then stops at `COOLDOWN_CEILING` and stays
@@ -131,16 +137,37 @@ function autoconnect.plan(cfg, states, memory, now)
   -- Only ever what autoconnect itself started, and never something protected.
   -- A tunnel somebody opened by hand is not this function's to close, which is
   -- the same line the rest of the menu draws.
-  for _, profile in ipairs(store.list(cfg, true)) do
-    if profile.autoconnect and states[profile.id] == "connected" then
-      for _, other in ipairs(store.list(cfg, true)) do
-        local extra = other.id ~= profile.id and states[other.id] == "connected" and not other.protected
-        -- Without `exclusive` this only applies to the stand-in that was
-        -- started for this very connection; with it, to any second tunnel
-        -- autoconnect is responsible for.
-        local ours = settings.exclusive or other.id == profile.fallback
-        if extra and ours and startedByUs(other.id) then
-          return { id = other.id, verb = "disconnect", reason = "superseded" }
+  -- With `exclusive` on, the rule is the plain one: the connection ranked
+  -- highest wins and every other tunnel goes down. Rank is the order in the
+  -- menu, which is what Move up and Move down change, so the question "which one
+  -- survives" has an answer somebody can see and move.
+  --
+  -- This is the one place that may close a `protected` connection, and it asks
+  -- for it under its own verb
+  -- ([ADR 0026](../../docs/adr/0026-one-at-a-time-outranks-protection.md)). It
+  -- does not care who opened the extra tunnel either: "one at a time" that makes
+  -- an exception for a tunnel opened by hand is not one at a time.
+  if settings.exclusive then
+    local best
+    for _, profile in ipairs(store.list(cfg, true)) do
+      if isUp(states[profile.id]) then
+        best = best or profile
+        if profile.id ~= best.id then
+          return { id = profile.id, verb = "supersede", reason = "outranked by " .. best.id }
+        end
+      end
+    end
+  else
+    -- Off, the old and narrower rule stands: only the stand-in started for this
+    -- very connection, only if autoconnect started it, never a protected one
+    -- ([ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
+    for _, profile in ipairs(store.list(cfg, true)) do
+      if profile.autoconnect and states[profile.id] == "connected" then
+        for _, other in ipairs(store.list(cfg, true)) do
+          local extra = other.id ~= profile.id and states[other.id] == "connected" and not other.protected
+          if extra and other.id == profile.fallback and startedByUs(other.id) then
+            return { id = other.id, verb = "disconnect", reason = "superseded" }
+          end
         end
       end
     end

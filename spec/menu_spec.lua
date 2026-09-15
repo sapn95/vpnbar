@@ -127,11 +127,19 @@ describe("menu.build", function()
   end)
 
   it("does not offer a move that would fall off the end", function()
+    -- "Move up" now carries the position, because the order is the priority.
+    local function moveRow(items, word)
+      for _, item in ipairs(items) do
+        if tostring(item.title):find(word, 1, true) then
+          return item
+        end
+      end
+    end
     local manage = find(menu.build(config("a", "b"), {}), "Connections").menu
     local first, last = find(manage, "A").menu, find(manage, "B").menu
-    assert.is_true(find(first, "Move up").disabled)
-    assert.is_false(find(first, "Move down").disabled or false)
-    assert.is_true(find(last, "Move down").disabled)
+    assert.is_true(moveRow(first, "Move up").disabled)
+    assert.is_false(moveRow(first, "Move down").disabled or false)
+    assert.is_true(moveRow(last, "Move down").disabled)
   end)
 end)
 
@@ -586,5 +594,78 @@ describe("menu.build, the settings submenu", function()
       assert.is_string(item.tooltip)
       assert.is_true(#item.tooltip > 40)
     end
+  end)
+end)
+
+describe("menu.build, what it never offers", function()
+  -- `supersede` is the one verb allowed to close a protected connection. It
+  -- belongs to the one-at-a-time rule and to nothing a person can click, so if
+  -- it ever reaches a menu item, protection has stopped meaning what the menu
+  -- says it means.
+  it("has no item anywhere that supersedes a connection", function()
+    local cfg = assert(store.normalise({
+      settings = { exclusive = true },
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10, protected = true },
+        { id = "b", name = "B", backend = "scutil", service = "b", order = 20 },
+      },
+    }))
+    local states = { a = "connected", b = "connected" }
+    local seen = {}
+    local function walk(items)
+      for _, item in ipairs(items) do
+        if item.action then
+          seen[#seen + 1] = item.action.kind .. "/" .. tostring(item.action.verb)
+        end
+        if item.menu then
+          walk(item.menu)
+        end
+      end
+    end
+    walk(menu.build(cfg, states))
+    for _, kind in ipairs(seen) do
+      assert.is_nil(kind:find("supersede", 1, true), "a menu item asks for " .. kind)
+    end
+  end)
+end)
+
+describe("menu.build, the order is the priority", function()
+  local function twoProfiles()
+    return assert(store.normalise({
+      profiles = {
+        { id = "a", name = "A", backend = "scutil", service = "a", order = 10 },
+        { id = "b", name = "B", backend = "scutil", service = "b", order = 20 },
+      },
+    }))
+  end
+
+  local function moveItems(cfg, name)
+    for _, item in ipairs(menu.build(cfg, {})) do
+      if item.title == "Connections" then
+        for _, entry in ipairs(item.menu) do
+          if entry.title == name and entry.menu then
+            local out = {}
+            for _, row in ipairs(entry.menu) do
+              if tostring(row.title):find("Move", 1, true) then
+                out[#out + 1] = row
+              end
+            end
+            return out
+          end
+        end
+      end
+    end
+    return {}
+  end
+
+  it("says where a connection sits, so moving it means something", function()
+    local rows = moveItems(twoProfiles(), "A")
+    assert.equals("Move up (1 of 2)", rows[1].title)
+  end)
+
+  it("says what the order decides, which nothing used to", function()
+    local rows = moveItems(twoProfiles(), "B")
+    assert.is_truthy(rows[1].tooltip:find("tried first", 1, true))
+    assert.is_truthy(rows[2].tooltip:find("taken down first", 1, true))
   end)
 end)
