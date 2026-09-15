@@ -132,12 +132,22 @@ cmd_link() {
 # LSUIElement, because it starts something else and exits. Without it the Dock
 # shows a bouncing icon for a program that is already finished.
 cmd_app() {
-  local me app resolved
-  resolved="$(resolve_symlinks "${BASH_SOURCE[0]}")"
-  # Absolute, always. The Finder launches a bundle from a working directory that
+  local me app invoked
+  invoked="${BASH_SOURCE[0]}"
+  # Absolute, always: the Finder launches a bundle from a working directory that
   # has nothing to do with where this was invoked from, so a relative path here
   # produces an app that works when tested from the checkout and nowhere else.
-  me="$(cd "$(dirname "${resolved}")" && pwd)/$(basename "${resolved}")"
+  #
+  # Absolute, but *not* resolved through its last symlink. /opt/homebrew/bin/vpnbar
+  # points into the Cellar at a path carrying the version, and following it would
+  # bake that version into the launcher; the next `brew upgrade` removes that keg
+  # and leaves an app pointing at nothing. The same trap as linking the Spoon to
+  # the Cellar instead of to opt.
+  case "${invoked}" in
+    /*) me="${invoked}" ;;
+    */*) me="$(cd "$(dirname "${invoked}")" && pwd)/$(basename "${invoked}")" ;;
+    *) me="$(command -v "${invoked}")" ;;
+  esac
   app="${APP_DIR}/vpnbar.app"
   mkdir -p "${app}/Contents/MacOS"
   cat >"${app}/Contents/Info.plist" <<PLIST
@@ -239,24 +249,39 @@ ask_hammerspoon() {
   esac
 }
 
-# Hammerspoon has to be up before it can be asked anything, and after `open` it
-# needs a moment before its command line answers.
+# Does Hammerspoon's command line answer *right now*? The process existing is
+# not the same question: after `open`, Hammerspoon is in the process table well
+# before ipc is listening, so waiting on pgrep alone returns a moment too early
+# and the first real request comes back empty — "no answer from Hammerspoon" on
+# an ordinary cold start.
+hammerspoon_answers() {
+  local hs_bin
+  hs_bin="$(find_hs)" || return 1
+  [ -n "$(run_with_timeout 3 "${hs_bin}" -c 'return "up"' 2>/dev/null | tail -1)" ]
+}
+
+# Hammerspoon has to be up *and answering* before it can be asked anything.
 ensure_hammerspoon() {
-  pgrep -f 'Hammerspoon.app/Contents/MacOS' >/dev/null 2>&1 && return 0
-  [ -d "${HAMMERSPOON_APP}" ] || {
-    echo "Hammerspoon is not installed — brew install --cask hammerspoon" >&2
-    exit 1
-  }
-  echo "starting Hammerspoon"
-  open -a "${HAMMERSPOON_APP}"
+  hammerspoon_answers && return 0
+  if ! pgrep -f 'Hammerspoon.app/Contents/MacOS' >/dev/null 2>&1; then
+    [ -d "${HAMMERSPOON_APP}" ] || {
+      echo "Hammerspoon is not installed — brew install --cask hammerspoon" >&2
+      return 1
+    }
+    echo "starting Hammerspoon"
+    open -a "${HAMMERSPOON_APP}"
+  fi
   local waited=0
   while [ "${waited}" -lt 20 ]; do
-    pgrep -f 'Hammerspoon.app/Contents/MacOS' >/dev/null 2>&1 && return 0
+    hammerspoon_answers && return 0
     sleep 1
     waited=$((waited + 1))
   done
   echo "Hammerspoon did not come up within 20 seconds" >&2
-  exit 1
+  echo "If it is running, its command line may be off — in the console:" >&2
+  echo >&2
+  echo "    hs.ipc.cliInstall()" >&2
+  return 1
 }
 
 # `Quit vpnbar` stops the Spoon and leaves Hammerspoon running, which is the
@@ -264,7 +289,7 @@ ensure_hammerspoon() {
 # these verbs existed the only way back was reloading Hammerspoon and every
 # other config with it, so the menu had a way out and no way in.
 cmd_start() {
-  ensure_hammerspoon
+  ensure_hammerspoon || exit 1
   ask_hammerspoon '
     local ok, spoon = pcall(hs.loadSpoon, "VpnBar")
     if not ok or not spoon then return "FAIL could not load the Spoon: " .. tostring(spoon) end

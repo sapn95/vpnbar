@@ -196,6 +196,11 @@ EOF
 @test "start opens Hammerspoon when it is not running" {
   export STUB_PGREP_EXIT=1
   export OPENED="${TMP}/opened"
+  # Silent, so "does the command line answer" is a no and the process has to be
+  # started. A talking stub would mean Hammerspoon was already up.
+  export VPNBAR_HS="${TMP}/quiet-hs"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${TMP}/quiet-hs"
+  chmod +x "${TMP}/quiet-hs"
   cat >"${STUB}/open" <<'SH'
 #!/usr/bin/env bash
 echo "opened $*" >>"${OPENED}"
@@ -278,9 +283,12 @@ SH
   [[ "$(cat "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist")" == *"LSUIElement"* ]]
 }
 
+# plutil is macOS only and CI is Linux. plistlib parses the file rather than
+# linting it, which is the stronger check anyway.
 @test "the plist is well formed" {
   run "${SCRIPT}" app
-  run plutil -lint "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
+  run python3 -c "import plistlib,sys; d=plistlib.load(open(sys.argv[1],'rb')); sys.exit(0 if d['CFBundleExecutable']=='vpnbar' else 1)" \
+    "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
   [ "${status}" -eq 0 ]
 }
 
@@ -306,19 +314,24 @@ SH
 
 # ------------------------------------------- a GUI launch has almost no PATH
 
+# The bug this guards: a double-clicked bundle gets
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin, so an `hs` that is only reachable through
+# PATH is not reachable at all. Rather than rebuilding that PATH here — which
+# decides what bash and env the test host has, and CI is not macOS — the stub is
+# taken off PATH entirely. Nothing but the bundle can answer, so a lookup that
+# consulted only PATH fails this.
 @test "start finds hs inside the Hammerspoon bundle, not on PATH" {
   mkdir -p "${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs"
   cat >"${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs/hs" <<'SH'
 #!/usr/bin/env bash
-echo "started"
+echo "started from the bundle"
 SH
   chmod +x "${VPNBAR_HAMMERSPOON_APP}/Contents/Frameworks/hs/hs"
   rm -f "${STUB}/hs"
   unset VPNBAR_HS
-  # Exactly what launchd hands a double-clicked bundle.
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin:${STUB}" run "${SCRIPT}" start
+  run "${SCRIPT}" start
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"started"* ]]
+  [[ "${output}" == *"started from the bundle"* ]]
 }
 
 @test "start fails when Hammerspoon's command line is nowhere" {
@@ -333,4 +346,49 @@ SH
   run "${SCRIPT}" start
   [ "${status}" -eq 1 ]
   [[ "${output}" != *"no answer"* ]]
+}
+
+# ------------------------------------------------ the two review findings
+
+# /opt/homebrew/bin/vpnbar points into the Cellar at a path carrying the
+# version. Following it bakes that version into the launcher, and the next
+# brew upgrade removes the keg and leaves an app pointing at nothing.
+@test "the launcher keeps the stable path, not the versioned one it resolves to" {
+  mkdir -p "${TMP}/Cellar/vpnbar/HEAD-abc123/bin" "${TMP}/opt/bin"
+  cp "${SCRIPT}" "${TMP}/Cellar/vpnbar/HEAD-abc123/bin/vpnbar"
+  ln -s "${TMP}/Cellar/vpnbar/HEAD-abc123/bin/vpnbar" "${TMP}/opt/bin/vpnbar"
+  run "${TMP}/opt/bin/vpnbar" app
+  [ "${status}" -eq 0 ]
+  local launcher="${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar"
+  [[ "$(cat "${launcher}")" == *"${TMP}/opt/bin/vpnbar"* ]]
+  [[ "$(cat "${launcher}")" != *"Cellar"* ]]
+}
+
+# The process is in the table before ipc is listening, so waiting on pgrep
+# alone returns early and the first real request comes back empty.
+@test "start waits for the command line, not just for the process" {
+  export STUB_PGREP_EXIT=0
+  export VPNBAR_HS="${TMP}/quiet-hs"
+  cat >"${TMP}/quiet-hs" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "${TMP}/quiet-hs"
+  cat >"${STUB}/sleep" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "${STUB}/sleep"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"did not come up"* ]]
+  [[ "${output}" == *"cliInstall"* ]]
+}
+
+@test "start goes ahead when the command line answers straight away" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"started"* ]]
+  [[ "${output}" != *"starting Hammerspoon"* ]]
 }
