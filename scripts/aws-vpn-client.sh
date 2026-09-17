@@ -39,11 +39,18 @@ readonly APP="AWS VPN Client"
 readonly MGMT_HOST="127.0.0.1"
 readonly MGMT_PORT="${AWS_VPN_MGMT_PORT:-35001}"
 readonly MGMT_DIR="${HOME}/.config/AWSVPNClient"
+# Where the client writes what it is doing. Version 6 ships no OpenVPN at all —
+# no binary in Contents/Helpers, nothing listening on the management port — so
+# the interface this script was built on is simply absent, and asking it said
+# "disconnected" about a tunnel that was up and carrying routes. The log is the
+# replacement, and it is a better source than the one it replaces: it names the
+# profile, which the management interface never could.
+readonly LOG_DIR="${AWS_VPN_LOG_DIR:-${HOME}/.config/AWSVPNClient/logs}"
 # Seconds to wait for a polite SIGTERM before closing the app out from under it.
 readonly FORCE_WAIT="${AWS_VPN_FORCE_WAIT:-5}"
 
 usage() {
-  echo "usage: ${0##*/} profiles|status|connect [profile]|disconnect [profile]|force" >&2
+  echo "usage: ${0##*/} profiles|status [profile]|connect [profile]|disconnect [profile]|force" >&2
   exit 2
 }
 
@@ -86,18 +93,118 @@ management() {
   } | nc -w 3 "${MGMT_HOST}" "${MGMT_PORT}" 2>/dev/null || true
 }
 
+# The newest of the client's own logs. One file per day, so the newest file is
+# the one being written to.
+newest_log() {
+  local candidate newest=""
+  # The name carries the date — aws_vpn_client_gui_YYYYMMDD.log — so the greatest
+  # name is the newest file, and no timestamp has to be read at all.
+  #
+  # Asking the file system was the first version and it does not travel: BSD
+  # `stat -f %m` prints the modification time, and GNU `stat -f %m` prints the
+  # mount point, succeeding while meaning something else entirely. Comparing a
+  # mount point as a number then failed every log-reading test on Linux.
+  for candidate in "${LOG_DIR}"/aws_vpn_client_gui_*.log; do
+    [ -f "${candidate}" ] || continue
+    if [ -z "${newest}" ] || [ "${candidate}" \> "${newest}" ]; then
+      newest="${candidate}"
+    fi
+  done
+  [ -n "${newest}" ] || return 1
+  printf '%s\n' "${newest}"
+}
+
+# The last thing the log says about the connection, in our four words.
+#
+# Every line that states a transition counts, and the last one wins, so the
+# three-minute "Profile connected" heartbeat cannot outvote a disconnection that
+# happened after it. A SAML line means the session ended and a person has to log
+# in again, which is a disconnection with a reason.
+# Named, when a name is given. The client lists several profiles and the
+# management interface could never say which of them was up — that is the whole
+# reason the row is clicked rather than asked about. The log can say, so a
+# profile named here is only "connected" when the log says it is that one that
+# connected.
+log_state() {
+  local log wanted="${1:-}"
+  log="$(newest_log)" || return 1
+  awk -v wanted="${wanted}" '
+    # A trailing carriage return or stray spaces would make an equal name
+    # unequal, so both ends are trimmed before comparing.
+    function trim(text) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", text)
+      return text
+    }
+    function set_named(name) {
+      name = trim(name)
+      if (wanted == "" || name == trim(wanted)) { s = "connected" } else { s = "disconnected" }
+    }
+    /Tray state changed to connected/          { if (wanted == "") s = "connected" }
+    /Tray state changed to connecting/         { s = "connecting" }
+    /Tray state changed to none/               { s = "disconnected" }
+    /Refresh state: connected/                 { if (wanted == "") s = "connected" }
+    /Refresh state: none/                      { s = "disconnected" }
+    # Everything after the marker, not the last word: an AWS profile name is
+    # free text and may contain spaces, and $NF would compare "VPN" with
+    # "Corp VPN".
+    /\[poll\] Profile connected:/ {
+      name = $0
+      sub(/^.*\[poll\] Profile connected:[[:space:]]*/, "", name)
+      set_named(name)
+    }
+    /Profile connect succeeded:/ {
+      name = $0
+      sub(/^.*Profile connect succeeded:[[:space:]]*/, "", name)
+      set_named(name)
+    }
+    /SAML authentication required/             { s = "disconnected" }
+    /Disconnecting all connections/            { s = "disconnected" }
+    END { if (s != "") print s }
+  ' "${log}"
+}
+
+app_running() {
+  pgrep -f "${APP}.app/Contents/MacOS" >/dev/null 2>&1
+}
+
 cmd_status() {
-  if ! listening; then
-    echo disconnected
+  local wanted="${1:-}"
+  # An older client still answers here, and its answer is about the session
+  # running now rather than about anything written down. It cannot say *which*
+  # profile, so a name is ignored on this path, exactly as it always was.
+  if listening; then
+    # >STATE:<time>,CONNECTED,SUCCESS,<ip>,… once the tunnel is up. Every other
+    # state OpenVPN reports — WAIT, AUTH, GET_CONFIG, ASSIGN_IP, ADD_ROUTES,
+    # RECONNECTING — is a session on its way somewhere, which is "working".
+    case "$(management state)" in
+      *,CONNECTED,*) echo connected ;;
+      *) echo connecting ;;
+    esac
     return
   fi
-  # >STATE:<time>,CONNECTED,SUCCESS,<ip>,… once the tunnel is up. Every other
-  # state OpenVPN reports — WAIT, AUTH, GET_CONFIG, ASSIGN_IP, ADD_ROUTES,
-  # RECONNECTING — is a session on its way somewhere, which is "working".
-  case "$(management state)" in
-    *,CONNECTED,*) echo connected ;;
-    *) echo connecting ;;
-  esac
+
+  local state
+  state="$(log_state "${wanted}" || true)"
+
+  if [ -z "${state}" ]; then
+    # No management interface and nothing written down. Saying "disconnected"
+    # here is what caused this rewrite: it is a guess, and it was wrong about a
+    # live tunnel. `unknown` is left alone by autoconnect, which is the right
+    # thing to do with a connection nobody can read.
+    echo unknown
+    return
+  fi
+
+  # A log is a record, not a live reading. With the client closed, its last word
+  # may be hours old, and the daemon that actually holds the tunnel is a
+  # different process. Only the negative answer survives that, because a client
+  # that wrote "none" and then quit is not about to have connected since.
+  if [ "${state}" != "disconnected" ] && ! app_running; then
+    echo unknown
+    return
+  fi
+
+  printf '%s\n' "${state}"
 }
 
 # Bring the window up. The client keeps running without one, and with no
@@ -242,7 +349,7 @@ cmd_force() {
 
 case "${1:-}" in
   profiles) cmd_profiles ;;
-  status) cmd_status ;;
+  status) cmd_status "${2:-}" ;;
   connect)
     shift
     cmd_connect "${1:-}"

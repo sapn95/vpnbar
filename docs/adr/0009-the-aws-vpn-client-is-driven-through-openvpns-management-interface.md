@@ -1,6 +1,12 @@
 # 0009 — The AWS VPN Client is driven through OpenVPN's management interface
 
-**Status:** accepted, 2026-09-01.
+**Status:** accepted, 2026-09-01. ⚠️ **The mechanism is gone.** Version 6
+of the client ships no OpenVPN and nothing listens on the management port; the
+state now comes from the client's own log, which also names the profile that this
+record calls unknowable. See
+[ADR 0027](0027-the-aws-client-stopped-having-a-management-interface.md). The
+reason the *row* is clicked rather than a profile asked for by name is unchanged
+for connecting and disconnecting.
 
 ## What was measured
 

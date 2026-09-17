@@ -113,7 +113,7 @@ for `awsvpn`, where quitting the client is what `commands.force` is for.
 | --- | --- | --- |
 | `app` | yes | The client's name. Defaults to `AWS VPN Client`. |
 | `row` | yes | The profile, exactly as the client's window lists it — `work`, `work-full`. That row's own button is the one clicked. |
-| `commands.status` | no | Something cheap that prints the state, so the menu never opens a window to read one. |
+| `commands.status` | no | Something cheap that prints the state, so the menu never opens a window to read one. Give it the profile name as an argument to get an answer about *that* profile: `aws-vpn-client status work`. |
 | `commands.force` | no | The harder way down. |
 
 ```json
@@ -124,17 +124,24 @@ for `awsvpn`, where quitting the client is what `commands.force` is for.
   "app": "AWS VPN Client",
   "row": "work",
   "commands": {
-    "status": "/opt/homebrew/bin/aws-vpn-client status",
+    "status": "/opt/homebrew/bin/aws-vpn-client status work",
     "force": "/opt/homebrew/bin/aws-vpn-client force"
   }
 }
 ```
 
-The client lists several profiles and its management interface cannot tell them
-apart — `state` reports that *a* session is up, not whose. So connecting and
-disconnecting click the named row, and the state comes from the command
-instead, which costs nothing and opens nothing
+The client lists several profiles. Connecting and disconnecting click the named
+row, because there is no way to ask for a profile by name
 ([ADR 0009](adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
+
+The **state** used to have the same limitation and no longer does. Version 6 of
+the client ships no OpenVPN and nothing listens on the management port, so the
+helper reads the client's own log, which names the connected profile. Pass the
+profile to `status` and the answer is about that one
+([ADR 0027](adr/0027-the-aws-client-stopped-having-a-management-interface.md)).
+Where nothing can be read at all the answer is `unknown`, not `disconnected`,
+because those are different things and guessing the second one reported a live
+tunnel as down.
 
 Connecting brings the client's window up if it is not showing: with no window
 the client exposes no accessibility tree at all, and there is nothing to click.
