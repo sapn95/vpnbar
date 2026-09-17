@@ -124,58 +124,82 @@ describe("autoconnect, the fallback", function()
     )
   end)
 
-  -- One failure is enough to try the other one. A second identical attempt a
-  -- minute later says nothing the first did not, and the point of a fallback is
-  -- to be on something while the preferred one is unavailable.
+  -- One failure is enough to try the other one, and the stand-in gets its turn
+  -- inside the gap the failure bought. `at = 1000` with `now = 1000` is the
+  -- wanted connection mid-cooldown, which is the only moment a fallback is the
+  -- right answer: while the preferred one is ready, the preferred one is asked.
   it("reaches for the fallback after a single failure", function()
-    local plan = autoconnect.plan(config(), { aws = "disconnected" }, afterAttempts(1, 0), 1000)
+    local plan =
+      autoconnect.plan(config(), { aws = "disconnected", alt = "disconnected" }, afterAttempts(1, 1000), 1000)
     assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
   end)
 
   -- "Keep testing back and forth until one of them works again."
+  --
+  -- The earlier version of this only checked that each id turned up somewhere,
+  -- which it did: the wanted one on the first pass and the stand-in ever after.
+  -- That is not alternating, and the weak assertion is what let the real
+  -- behaviour through — the preferred connection was abandoned for good the
+  -- moment it hit the fallback threshold.
   it("alternates between the two for as long as both keep failing", function()
     local memory, asked, now = {}, {}, 1000
-    for _ = 1, 8 do
+    for _ = 1, 12 do
       local plan = autoconnect.plan(config(), { aws = "disconnected", alt = "disconnected" }, memory, now)
       if plan then
         asked[#asked + 1] = plan.id
         autoconnect.remember(memory, plan.id, now)
       end
-      now = now + autoconnect.COOLDOWN_CEILING
+      now = now + 30
     end
     assert.is_true(#asked >= 6, "it never stops asking")
-    local sawAws, sawAlt = false, false
+
+    local wanted, stand_in = 0, 0
     for _, id in ipairs(asked) do
-      sawAws = sawAws or id == "aws"
-      sawAlt = sawAlt or id == "alt"
+      if id == "aws" then
+        wanted = wanted + 1
+      else
+        stand_in = stand_in + 1
+      end
     end
-    assert.is_true(sawAws, "the one that was chosen")
-    assert.is_true(sawAlt, "and the stand-in")
+    assert.is_true(wanted >= 2, "the chosen one is asked again, not abandoned: " .. table.concat(asked, " "))
+    assert.is_true(stand_in >= 2, "and so is the stand-in: " .. table.concat(asked, " "))
   end)
 
-  it("moves to the fallback once it has asked enough times", function()
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
-    local plan = autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000)
-    assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
+  it("goes on asking for the wanted one even while the stand-in is up", function()
+    local plan = autoconnect.plan(config(), { aws = "disconnected", alt = "connected" }, {}, 1e6)
+    assert.same({ id = "aws", verb = "connect", reason = "wanted" }, plan)
+  end)
+
+  it("asks the wanted one rather than the stand-in whenever it is ready", function()
+    local plan = autoconnect.plan(config(), { aws = "disconnected", alt = "disconnected" }, afterAttempts(5, 0), 1e6)
+    assert.equals("aws", plan.id, "ready beats any number of past failures")
   end)
 
   it("does not fall back to something that is already up", function()
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
+    local memory = afterAttempts(1, 1000)
     local states = { aws = "disconnected", alt = "connected" }
     assert.is_nil(autoconnect.plan(config(), states, memory, 1000))
   end)
 
   it("does not fall back to something that is already on its way", function()
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
+    local memory = afterAttempts(1, 1000)
     local states = { aws = "disconnected", alt = "connecting" }
     assert.is_nil(autoconnect.plan(config(), states, memory, 1000))
+  end)
+
+  -- The rule ADR 0013 states for the wanted connection, which was quietly not
+  -- applied to its stand-in: nobody could read it, so nobody should poke it.
+  it("does not fall back to something nobody could read", function()
+    local memory = afterAttempts(1, 1000)
+    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected", alt = "unknown" }, memory, 1000))
+    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected" }, memory, 1000))
   end)
 
   it("may fall back to a protected connection, since that only starts it", function()
     local cfg = config()
     cfg.profiles[2].protected = true
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
-    local plan = autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000)
+    local memory = afterAttempts(1, 1000)
+    local plan = autoconnect.plan(cfg, { aws = "disconnected", alt = "disconnected" }, memory, 1000)
     assert.same({ id = "alt", verb = "connect", reason = "fallback" }, plan)
   end)
 
@@ -185,17 +209,17 @@ describe("autoconnect, the fallback", function()
     local cfg = assert(store.normalise({
       profiles = { { id = "aws", name = "AWS", backend = "scutil", service = "AWS", autoconnect = true } },
     }))
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
+    local memory = afterAttempts(1, 0)
     assert.same(
       { id = "aws", verb = "connect", reason = "wanted" },
-      autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1000)
+      autoconnect.plan(cfg, { aws = "disconnected" }, memory, 1e6)
     )
   end)
 
   it("respects the fallback's own cooldown", function()
-    local memory = afterAttempts(autoconnect.ATTEMPTS_BEFORE_FALLBACK, 0)
+    local memory = afterAttempts(1, 1000)
     autoconnect.remember(memory, "alt", 1000)
-    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected" }, memory, 1010))
+    assert.is_nil(autoconnect.plan(config(), { aws = "disconnected", alt = "disconnected" }, memory, 1010))
   end)
 end)
 

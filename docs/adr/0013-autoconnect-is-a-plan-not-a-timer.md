@@ -19,7 +19,7 @@ The policy that lives there:
 | | |
 | --- | --- |
 | cooldown | 60 s before the same connection is asked again |
-| attempts before the fallback | 2 — **now 1**, see [ADR 0026](0026-one-at-a-time-outranks-protection.md) |
+| attempts before the fallback | 2 — **now 1**, and reaching it no longer ends the matter: the wanted connection goes on being asked for on its own backoff, see [ADR 0026](0026-one-at-a-time-outranks-protection.md) |
 | attempts before giving up | 6 — **there is no longer such a point**, see [ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md) |
 | cleared by | the connection coming up, a wake, **an unlock** ([ADR 0023](0023-an-unlock-is-a-fresh-start.md)), switching autoconnect on |
 | never touched | `connecting` (already on its way), `unknown` (nothing is known) |
