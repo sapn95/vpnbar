@@ -291,13 +291,14 @@ log_says() {
   [ "${output}" = "disconnected" ]
 }
 
+# The name carries the date, so the newest file is picked by name. Written in
+# the wrong order on purpose: modification time would give the opposite answer.
 @test "the newest log file is the one that counts" {
   export STUB_NC_LISTENING=0
-  printf '%s\n' "2026-09-16T09:00:00Z  INFO ThreadId(01) [poll] Tray state changed to none" \
-    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260916.log"
-  sleep 1
   printf '%s\n' "2026-09-17T09:00:00Z  INFO ThreadId(01) [poll] Tray state changed to connected" \
     >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260917.log"
+  printf '%s\n' "2026-09-16T09:00:00Z  INFO ThreadId(01) [poll] Tray state changed to none" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260916.log"
   run "${SCRIPT}" status
   [ "${output}" = "connected" ]
 }

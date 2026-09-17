@@ -96,14 +96,17 @@ management() {
 # The newest of the client's own logs. One file per day, so the newest file is
 # the one being written to.
 newest_log() {
-  local candidate newest="" newest_time=0 time
+  local candidate newest=""
+  # The name carries the date — aws_vpn_client_gui_YYYYMMDD.log — so the greatest
+  # name is the newest file, and no timestamp has to be read at all.
+  #
+  # Asking the file system was the first version and it does not travel: BSD
+  # `stat -f %m` prints the modification time, and GNU `stat -f %m` prints the
+  # mount point, succeeding while meaning something else entirely. Comparing a
+  # mount point as a number then failed every log-reading test on Linux.
   for candidate in "${LOG_DIR}"/aws_vpn_client_gui_*.log; do
     [ -f "${candidate}" ] || continue
-    # `ls -t` would be shorter and cannot be parsed safely for names with
-    # spaces. These names have none, but the habit is worth keeping.
-    time="$(stat -f %m "${candidate}" 2>/dev/null || stat -c %Y "${candidate}" 2>/dev/null || echo 0)"
-    if [ "${time}" -ge "${newest_time}" ]; then
-      newest_time="${time}"
+    if [ -z "${newest}" ] || [ "${candidate}" \> "${newest}" ]; then
       newest="${candidate}"
     fi
   done
