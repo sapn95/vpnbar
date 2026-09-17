@@ -60,6 +60,25 @@ like nothing but a sort. **Move up** now reads `Move up (1 of 2)` and both rows
 say what the order decides. A setting that reads as decoration is a setting
 nobody will use on purpose.
 
+## Why only a higher rank may block a start
+
+The first version of this blocked a connection from starting while **any** other
+tunnel was up. That turned the fallback into a one-way door: once the stand-in
+was up, the connection somebody actually chose could never be tried again, and
+the machine stayed on its second choice for as long as that kept working. Found
+in the wild the next day, with the preferred VPN down and nothing trying it.
+
+A lower-ranked tunnel that is up is not a reason to stay off the higher-ranked
+one. It is exactly what the supersede rule takes down once the higher one
+arrives. So a start is blocked only by something ranked above it, and the cycle
+closes:
+
+```text
+preferred down, stand-in up   ->  connect the preferred one
+both up                       ->  supersede the stand-in
+preferred up, stand-in down   ->  nothing left to do
+```
+
 ## What was rejected
 
 - **Leaving `protected` absolute and asking for a config change instead.** It
