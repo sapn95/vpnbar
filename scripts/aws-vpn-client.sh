@@ -126,16 +126,34 @@ log_state() {
   local log wanted="${1:-}"
   log="$(newest_log)" || return 1
   awk -v wanted="${wanted}" '
+    # A trailing carriage return or stray spaces would make an equal name
+    # unequal, so both ends are trimmed before comparing.
+    function trim(text) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", text)
+      return text
+    }
     function set_named(name) {
-      if (wanted == "" || name == wanted) { s = "connected" } else { s = "disconnected" }
+      name = trim(name)
+      if (wanted == "" || name == trim(wanted)) { s = "connected" } else { s = "disconnected" }
     }
     /Tray state changed to connected/          { if (wanted == "") s = "connected" }
     /Tray state changed to connecting/         { s = "connecting" }
     /Tray state changed to none/               { s = "disconnected" }
     /Refresh state: connected/                 { if (wanted == "") s = "connected" }
     /Refresh state: none/                      { s = "disconnected" }
-    /\[poll\] Profile connected:/               { set_named($NF) }
-    /Profile connect succeeded:/               { set_named($NF) }
+    # Everything after the marker, not the last word: an AWS profile name is
+    # free text and may contain spaces, and $NF would compare "VPN" with
+    # "Corp VPN".
+    /\[poll\] Profile connected:/ {
+      name = $0
+      sub(/^.*\[poll\] Profile connected:[[:space:]]*/, "", name)
+      set_named(name)
+    }
+    /Profile connect succeeded:/ {
+      name = $0
+      sub(/^.*Profile connect succeeded:[[:space:]]*/, "", name)
+      set_named(name)
+    }
     /SAML authentication required/             { s = "disconnected" }
     /Disconnecting all connections/            { s = "disconnected" }
     END { if (s != "") print s }

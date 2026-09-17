@@ -355,3 +355,26 @@ log_says() {
   run "${SCRIPT}" status work
   [ "${output}" = "disconnected" ]
 }
+
+# An AWS profile name is free text. $NF would have compared "VPN" with "Corp VPN".
+@test "a profile name with spaces is matched whole" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-09-17T10:50:00Z  INFO ThreadId(01) [renderer] [poll] Profile connected: Corp VPN"
+  run "${SCRIPT}" status "Corp VPN"
+  [ "${output}" = "connected" ]
+}
+
+@test "a name that is only the tail of the real one does not match" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-09-17T10:50:00Z  INFO ThreadId(01) [renderer] [poll] Profile connected: Corp VPN"
+  run "${SCRIPT}" status "VPN"
+  [ "${output}" = "disconnected" ]
+}
+
+@test "trailing whitespace in the log does not break the match" {
+  export STUB_NC_LISTENING=0
+  printf '%s\n' "2026-09-17T10:50:00Z  INFO ThreadId(01) [tray] Profile connect succeeded: work  " \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260917.log"
+  run "${SCRIPT}" status "work"
+  [ "${output}" = "connected" ]
+}
