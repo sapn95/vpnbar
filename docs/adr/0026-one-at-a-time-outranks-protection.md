@@ -79,6 +79,22 @@ both up                       ->  supersede the stand-in
 preferred up, stand-in down   ->  nothing left to do
 ```
 
+## Why the wanted connection is never abandoned
+
+The same door, one hinge further in. Past the fallback threshold the wanted
+connection stopped being asked for at all and only the stand-in was considered,
+so once the stand-in was up there was nothing left to plan and the preferred one
+was gone for good. It is asked for whenever its own backoff allows, however many
+times it has failed and whatever the stand-in is doing.
+
+The stand-in gets its turn in the gaps, which is where alternating actually
+comes from: with both failing, the sequence is the wanted one, the stand-in, the
+wanted one, the stand-in, for as long as neither answers.
+
+The test that was supposed to cover this asked only whether each name appeared
+somewhere. Both did — the wanted one on the first pass and the stand-in ever
+after. It now counts them.
+
 ## What was rejected
 
 - **Leaving `protected` absolute and asking for a config change instead.** It

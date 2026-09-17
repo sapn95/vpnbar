@@ -215,20 +215,38 @@ function autoconnect.plan(cfg, states, memory, now)
         local last = lastTryFor(memory, profile.id)
         local ready = last == nil or (now - last) >= autoconnect.cooldown(attempts)
 
-        if not blocked and ready then
-          local wantsFallback = settings.fallback and profile.fallback ~= nil
-          if attempts < autoconnect.ATTEMPTS_BEFORE_FALLBACK or not wantsFallback then
+        if not blocked then
+          -- The one somebody chose is asked for whenever its own backoff allows
+          -- it, however many times it has failed and whatever the stand-in is
+          -- doing. Reaching the fallback threshold used to end the matter: past
+          -- it, only the fallback was ever considered, so once the stand-in was
+          -- up the preferred connection was never tried again and the machine
+          -- stayed on second best. A fallback is there to carry traffic while
+          -- the preferred one is unavailable, not to replace the preference.
+          if ready then
             return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
-          local fallback = store.get(cfg, profile.fallback)
-          local fallbackState = states[profile.fallback] or "unknown"
-          if fallback and not isUp(fallbackState) then
-            local fallbackAttempts = attemptsFor(memory, profile.fallback)
-            local fallbackLast = lastTryFor(memory, profile.fallback)
-            local fallbackReady = fallbackLast == nil or (now - fallbackLast) >= autoconnect.cooldown(fallbackAttempts)
-            if fallbackReady then
-              return { id = profile.fallback, verb = "connect", reason = "fallback" }
+          -- Not ready means this one is inside its cooldown, and that gap is
+          -- where the stand-in gets its turn. The two therefore alternate, each
+          -- on its own backoff, which is what "keep testing back and forth"
+          -- amounts to once neither is answering.
+          local wantsFallback = settings.fallback and profile.fallback ~= nil
+          if wantsFallback and attempts >= autoconnect.ATTEMPTS_BEFORE_FALLBACK then
+            local fallback = store.get(cfg, profile.fallback)
+            local fallbackState = states[profile.fallback] or "unknown"
+            -- `disconnected`, not merely "not up". `unknown` means nobody could
+            -- read it, and asking an unreadable connection to connect is the
+            -- thing [ADR 0013] says not to do — the rule was stated for the
+            -- wanted connection and quietly not applied to its stand-in.
+            if fallback and fallbackState == "disconnected" then
+              local fallbackAttempts = attemptsFor(memory, profile.fallback)
+              local fallbackLast = lastTryFor(memory, profile.fallback)
+              local fallbackReady = fallbackLast == nil
+                or (now - fallbackLast) >= autoconnect.cooldown(fallbackAttempts)
+              if fallbackReady then
+                return { id = profile.fallback, verb = "connect", reason = "fallback" }
+              end
             end
           end
         end
