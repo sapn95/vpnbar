@@ -191,9 +191,21 @@ function autoconnect.plan(cfg, states, memory, now)
       if state == "disconnected" then
         local blocked = false
         if settings.exclusive then
-          -- Somebody else is already up, or on the way: leave it at one.
-          for _, other in ipairs(store.list(cfg, true)) do
-            if other.id ~= profile.id and isUp(states[other.id]) then
+          -- Only something ranked *above* this one may hold it down.
+          --
+          -- Blocking on any other tunnel made the fallback a dead end: once the
+          -- stand-in was up, the connection somebody actually chose could never
+          -- be tried again, and the machine stayed on the second choice for as
+          -- long as it kept working. A lower-ranked tunnel that is up is exactly
+          -- what the supersede rule above takes down once this one arrives.
+          local rank = 0
+          for position, other in ipairs(store.list(cfg, true)) do
+            if other.id == profile.id then
+              rank = position
+            end
+          end
+          for position, other in ipairs(store.list(cfg, true)) do
+            if other.id ~= profile.id and position < rank and isUp(states[other.id]) then
               blocked = true
             end
           end

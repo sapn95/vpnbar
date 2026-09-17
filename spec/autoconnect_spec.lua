@@ -452,3 +452,66 @@ describe("autoconnect, fallbacks switched off", function()
     assert.equals("aws", plan.id)
   end)
 end)
+
+describe("autoconnect, exclusive must not strand the preferred connection", function()
+  local function pair()
+    return assert(store.normalise({
+      settings = { exclusive = true, fallback = true },
+      profiles = {
+        {
+          id = "first",
+          name = "First",
+          backend = "scutil",
+          service = "a",
+          order = 10,
+          autoconnect = true,
+          fallback = "second",
+        },
+        { id = "second", name = "Second", backend = "scutil", service = "b", order = 20, autoconnect = true },
+      },
+    }))
+  end
+
+  -- Blocking on any other tunnel made the fallback a one-way door: once the
+  -- stand-in was up, the connection somebody chose was never tried again.
+  it("still asks for the preferred one while the stand-in is up", function()
+    local plan = autoconnect.plan(pair(), { first = "disconnected", second = "connected" }, {}, 1e6)
+    assert.equals("first", plan.id)
+    assert.equals("connect", plan.verb)
+  end)
+
+  it("takes the stand-in down once the preferred one has arrived", function()
+    local plan = autoconnect.plan(pair(), { first = "connected", second = "connected" }, {}, 1e6)
+    assert.equals("second", plan.id)
+    assert.equals("supersede", plan.verb)
+  end)
+
+  it("is finished once only the preferred one is up", function()
+    assert.is_nil(autoconnect.plan(pair(), { first = "connected", second = "disconnected" }, {}, 1e6))
+  end)
+
+  it("does not start a lower-ranked one while a higher-ranked one is up", function()
+    local plan = autoconnect.plan(pair(), { first = "connected", second = "disconnected" }, {}, 1e6)
+    assert.is_nil(plan, "the stand-in has no business starting under a working first choice")
+  end)
+
+  it("leaves the preferred one alone while it is on its way up", function()
+    assert.is_nil(autoconnect.plan(pair(), { first = "connecting", second = "disconnected" }, {}, 1e6))
+  end)
+
+  -- The whole cycle, in the order a machine would actually walk it.
+  it("walks from the stand-in back to the preferred one and stops", function()
+    local cfg, seen = pair(), {}
+    local states = { first = "disconnected", second = "connected" }
+    for _ = 1, 4 do
+      local plan = autoconnect.plan(cfg, states, {}, 1e6)
+      if not plan then
+        seen[#seen + 1] = "done"
+        break
+      end
+      seen[#seen + 1] = plan.verb .. " " .. plan.id
+      states[plan.id] = plan.verb == "connect" and "connected" or "disconnected"
+    end
+    assert.same({ "connect first", "supersede second", "done" }, seen)
+  end)
+end)

@@ -32,7 +32,7 @@ whole. Toggle them from **Connections → Settings**.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `exclusive` | `false` | Only one tunnel at a time. The one ranked highest in the menu stays up; every other one is taken down, whoever opened it and whether or not it is `protected`. |
+| `exclusive` | `false` | Only one tunnel at a time. The one ranked highest in the menu stays up; every other one is taken down, whoever opened it and whether or not it is `protected`. A connection still starts while something ranked *below* it is up — otherwise a fallback would be a one-way door. |
 | `fallback` | `true` | Whether autoconnect may try a connection's `fallback` at all. Off, it keeps asking for the one you chose. |
 
 `exclusive` outranks `protected`, which nothing else does
