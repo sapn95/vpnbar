@@ -597,6 +597,27 @@ describe("menu.quitApps and the one row that closes them all", function()
     assert.matches("AWS VPN Client", item.tooltip)
   end)
 
+  it("does not call one application 'them'", function()
+    local item
+    for _, row in ipairs(menu.build(cfg({ gp }), {})) do
+      if row.title == "Quit every VPN app" then
+        item = row
+      end
+    end
+    assert.matches("leaves it closed", item.tooltip)
+    assert.is_nil(item.tooltip:find("them", 1, true), item.tooltip)
+  end)
+
+  it("does call two of them 'them'", function()
+    local item
+    for _, row in ipairs(menu.build(cfg({ gp, aws }), {})) do
+      if row.title == "Quit every VPN app" then
+        item = row
+      end
+    end
+    assert.matches("leaves them closed", item.tooltip)
+  end)
+
   it("has no such row when there is nothing to close", function()
     for _, row in ipairs(menu.build(cfg({ { id = "a", name = "A", backend = "scutil", service = "a" } }), {})) do
       assert.not_equals("Quit every VPN app", row.title)

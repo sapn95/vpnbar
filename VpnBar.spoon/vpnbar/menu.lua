@@ -275,9 +275,13 @@ local function quitAllItem(apps)
   for _, entry in ipairs(apps) do
     names[#names + 1] = entry.app
   end
+  -- One application is not "them". On a machine where only one client may be
+  -- closed, which is the common case once something is protected, the plural
+  -- reads as a promise about connections nobody is going to touch.
+  local closed = #apps == 1 and " and leaves it closed." or " and leaves them closed."
   return {
     title = "Quit every VPN app",
-    tooltip = "Closes " .. table.concat(names, " and ") .. ", and leaves them closed.",
+    tooltip = "Closes " .. table.concat(names, " and ") .. closed,
     action = { kind = "quitAllApps" },
   }
 end
