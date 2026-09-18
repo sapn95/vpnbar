@@ -224,18 +224,61 @@ local function forceItem(profile)
   return { title = "Force disconnect", action = { kind = "force", id = profile.id } }
 end
 
--- Only for a backend where quitting the app leaves the tunnel alone, which today
--- means GlobalProtect and nothing else. Same shape as forceItem: a separator
--- where it does not apply, so the renderer collapses it away.
-local function restartItem(profile)
-  if not backends.canRestart(profile) then
+--- Every application this menu is allowed to close, one entry per application
+--- rather than one per connection: two connections through the same client are
+--- one thing to quit.
+---
+--- Protected connections whose client *is* the tunnel are not in it, because
+--- closing those is a disconnect and no button in this menu performs one
+--- ([ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md)).
+--- @param cfg table
+--- @return table list of { id, name, app }
+function menu.quitApps(cfg)
+  local apps, seen = {}, {}
+  for _, profile in ipairs(store.list(cfg, true)) do
+    if backends.canQuit(profile, cfg) and not seen[profile.app] then
+      seen[profile.app] = true
+      apps[#apps + 1] = { id = profile.id, name = profile.name, app = profile.app }
+    end
+  end
+  return apps
+end
+
+-- Whether closing the app leaves the tunnel alone decides what these rows are
+-- allowed to promise, and `backends.canQuit` has already refused the case where
+-- it would not. Same shape as forceItem: a separator where it does not apply,
+-- so the renderer collapses it away.
+local function quitItem(profile, cfg)
+  if not backends.canQuit(profile, cfg) then
+    return { separator = true }
+  end
+  return {
+    title = ("Quit %s"):format(profile.app),
+    tooltip = ("Closes %s and leaves it closed."):format(profile.app),
+    action = { kind = "quitApp", id = profile.id },
+  }
+end
+
+local function restartItem(profile, cfg)
+  if not backends.canRestart(profile, cfg) then
     return { separator = true }
   end
   return {
     title = ("Restart %s"):format(profile.app),
-    tooltip = ("Quits %s and opens it again, for a panel that has stopped answering. "):format(profile.app)
-      .. "The tunnel is held by the agent's own system service rather than by this app, so it is not a disconnect.",
+    tooltip = ("Closes %s and opens it again, for a client that has stopped answering."):format(profile.app),
     action = { kind = "restart", id = profile.id },
+  }
+end
+
+local function quitAllItem(apps)
+  local names = {}
+  for _, entry in ipairs(apps) do
+    names[#names + 1] = entry.app
+  end
+  return {
+    title = "Quit every VPN app",
+    tooltip = "Closes " .. table.concat(names, " and ") .. ", and leaves them closed.",
+    action = { kind = "quitAllApps" },
   }
 end
 
@@ -295,9 +338,18 @@ function menu.build(cfg, states)
   -- connection is already down, and a row offering to close nothing is noise.
   local plan = menu.disconnectAll(cfg, states)
   local held = heldOpen(cfg, states)
-  if #plan > 0 or #held > 0 then
+  local apps = menu.quitApps(cfg)
+  if #plan > 0 or #held > 0 or #apps > 0 then
     items[#items + 1] = { separator = true }
+  end
+  if #plan > 0 or #held > 0 then
     items[#items + 1] = disconnectAllItem(plan, held)
+  end
+  -- Closing the clients is a different thing from taking the tunnels down, and
+  -- it is the repair for a client that has stopped answering, so it sits beside
+  -- the row that disconnects rather than inside a connection's submenu.
+  if #apps > 0 then
+    items[#items + 1] = quitAllItem(apps)
   end
 
   items[#items + 1] = { separator = true }
@@ -350,7 +402,8 @@ function menu.build(cfg, states)
         },
         { separator = true },
         forceItem(profile),
-        restartItem(profile),
+        quitItem(profile, cfg),
+        restartItem(profile, cfg),
         { title = "Remove…", action = { kind = "remove", id = profile.id } },
       },
     }

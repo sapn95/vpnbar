@@ -100,12 +100,20 @@ it means opening the agent's panel on screen.
 
 Because every read and every click goes through that panel, an agent that stops
 answering leaves the connection with nothing to click. **Connections → the
-connection → Restart `<app>`** quits it and opens it again: `SIGTERM`, a couple of
-seconds, `SIGKILL` if it is still there, then `open -a`. Offered on a `protected`
-connection as well, since the tunnel is held by GlobalProtect's own root service
-rather than by the app being closed
-([ADR 0021](adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Not offered
-for `awsvpn`, where quitting the client is what `commands.force` is for.
+connection → Quit `<app>`** and **Restart `<app>`** close it, and reopen it for
+the restart: `SIGTERM`, a couple of seconds, `SIGKILL` if it is still there, then
+`open -a`. Both are offered on a `protected` connection here, since the tunnel is
+held by GlobalProtect's own root service rather than by the app being closed
+([ADR 0021](adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
+
+For `awsvpn` the same two rows exist and mean something else, because that client
+*is* the tunnel's parent: closing it ends the session. So there they are
+withheld from a `protected` connection, exactly as **Force disconnect** is
+([ADR 0028](adr/0028-quit-and-restart-are-per-application.md)).
+
+**Quit every VPN app**, above **Connections**, closes all of them in one go —
+one entry per application, so two connections through the same client are one
+thing to quit.
 
 ### `backend: "awsvpn"`
 
