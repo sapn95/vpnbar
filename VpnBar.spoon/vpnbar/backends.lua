@@ -99,6 +99,12 @@ function backends.quitCommand(app)
     "/usr/bin/pkill -x " .. quoted,
     "/bin/sleep " .. tostring(backends.APP_QUIT_GRACE),
     "/usr/bin/pkill -9 -x " .. quoted,
+    -- The exit status of `pkill` answers the wrong question: it reports
+    -- "nothing matched" as a failure, which is the normal outcome of a kill
+    -- that worked. Asking whether the process is still there answers the right
+    -- one, and it is the only way a `pkill` that failed for a real reason —
+    -- no permission, a command that is not there — is told apart from success.
+    "! /usr/bin/pgrep -x " .. quoted .. " >/dev/null",
   }, " ; ")
 end
 
@@ -128,10 +134,10 @@ end
 --- them may be made about a `protected` connection
 --- ([ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md)).
 local function quitApp(profile, runtime)
-  runtime.exec(backends.quitCommand(profile.app))
-  -- Always a success. `pkill` calls "nothing matched" a failure, and an app that
-  -- was not running is an app that is now closed, which is what was asked for.
-  return true, nil
+  local _, ok = runtime.exec(backends.quitCommand(profile.app))
+  -- The command ends by checking that nothing of that name is left, so this is
+  -- "it is closed" rather than "the kill returned zero".
+  return outcome(ok, tostring(profile.app) .. " is still running")
 end
 
 local function restartApp(profile, runtime)
@@ -220,7 +226,36 @@ end
 --- ([ADR 0021](../../docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
 --- @param profile table
 --- @return boolean
-local function appVerb(profile, verb)
+--- Is any connection through this application protected?
+---
+--- One application, several connections: the AWS client lists a profile per
+--- endpoint, and closing it closes all of them. Asking only about the profile
+--- somebody clicked would let an unprotected connection close a client that a
+--- protected one is also using, which is a disconnect of the protected tunnel by
+--- another name.
+---
+--- Without a config there is nothing to widen the question with, so the answer
+--- is about the one profile — the same as before, and the callers that matter
+--- all pass one.
+--- @param profile table
+--- @param cfg table|nil
+--- @return boolean
+local function appIsProtected(profile, cfg)
+  if profile.protected then
+    return true
+  end
+  if type(cfg) ~= "table" or type(cfg.profiles) ~= "table" then
+    return false
+  end
+  for _, other in ipairs(cfg.profiles) do
+    if type(other) == "table" and other.app == profile.app and other.protected then
+      return true
+    end
+  end
+  return false
+end
+
+local function appVerb(profile, verb, cfg)
   if type(profile) ~= "table" then
     return false
   end
@@ -230,18 +265,18 @@ local function appVerb(profile, verb)
   end
   -- Where closing the app closes the tunnel, closing it is a disconnect, and a
   -- protected connection refuses those from every button in the menu.
-  if profile.protected and backend.appOwnsTunnel then
+  if backend.appOwnsTunnel and appIsProtected(profile, cfg) then
     return false
   end
   return true
 end
 
-function backends.canRestart(profile)
-  return appVerb(profile, "restart")
+function backends.canRestart(profile, cfg)
+  return appVerb(profile, "restart", cfg)
 end
 
-function backends.canQuit(profile)
-  return appVerb(profile, "quit")
+function backends.canQuit(profile, cfg)
+  return appVerb(profile, "quit", cfg)
 end
 
 -- What a protected connection still allows. Connecting is the direction its
@@ -293,7 +328,7 @@ end
 --- @param verb string "connect" or "disconnect"
 --- @param runtime table
 --- @return boolean ok, string|nil err
-function backends.act(profile, verb, runtime)
+function backends.act(profile, verb, runtime, cfg)
   -- Enforced here as well as in the menu. The menu decides what is offered;
   -- this decides what happens, and a protected connection has to be safe from
   -- a dispatch that reaches it by any other route.
@@ -304,6 +339,11 @@ function backends.act(profile, verb, runtime)
   -- which is a different thing from the tunnel. See `backends.PROTECTED_VERBS`.
   local backendFor = backends.byName[profile.backend]
   local appIsTheTunnel = backendFor ~= nil and backendFor.appOwnsTunnel == true
+  -- Closing an application that a protected connection is also using is that
+  -- connection's disconnect, whichever profile was clicked to ask for it.
+  if appIsTheTunnel and backends.APP_VERBS[verb] and appIsProtected(profile, cfg) then
+    return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
+  end
   local allowed = backends.PROTECTED_VERBS[verb] and not (appIsTheTunnel and backends.APP_VERBS[verb])
   if profile.protected and not allowed then
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")

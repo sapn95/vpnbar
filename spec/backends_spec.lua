@@ -473,13 +473,17 @@ describe("quitting and restarting an application", function()
     assert.is_nil(ran:find("open -a", 1, true), "quit does not start it again")
   end)
 
-  it("says the app is closed even when it was not running", function()
-    -- pkill calls "nothing matched" a failure, and an app that was not there is
-    -- an app that is now closed.
-    local runtime = fakeRuntime({ exec = { "", false } })
-    local ok, err = backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", runtime)
-    assert.is_true(ok)
-    assert.is_nil(err)
+  -- An app that was not running is an app that is now closed, and the command
+  -- says so by ending in a check for the process rather than in the kill. Its
+  -- first version of this test passed `exec = { "", false }`, which the stub
+  -- reads as stdout and not as a status, so the runtime reported success and the
+  -- test asserted success: it proved nothing. `execOk` is the switch.
+  it("treats an app that was not running as one that is now closed", function()
+    local command = backends.quitCommand("GP")
+    local kill = command:find("pkill -9", 1, true)
+    local check = command:find("! /usr/bin/pgrep", 1, true)
+    assert.is_truthy(check, command)
+    assert.is_true(check > kill, "the question asked last is whether it is gone")
   end)
 
   -- Same command, two different promises.
@@ -519,5 +523,94 @@ describe("quitting and restarting an application", function()
   it("closes that same client happily once it is not protected", function()
     local open = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "w" }
     assert.is_true((backends.act(open, "quit", fake())))
+  end)
+end)
+
+describe("closing an application several connections share", function()
+  -- The AWS client lists one profile per endpoint, and closing it closes all of
+  -- them. Asking only about the profile somebody clicked would let an
+  -- unprotected connection close a client a protected one is also using.
+  local function twoProfiles(protectSecond)
+    return {
+      profiles = {
+        { id = "open", name = "Open", backend = "awsvpn", app = "AWS VPN Client", row = "a" },
+        {
+          id = "locked",
+          name = "Locked",
+          backend = "awsvpn",
+          app = "AWS VPN Client",
+          row = "b",
+          protected = protectSecond,
+        },
+      },
+    }
+  end
+
+  local function clicked(cfg)
+    return cfg.profiles[1]
+  end
+
+  it("refuses through the unprotected one when a sibling is protected", function()
+    local cfg = twoProfiles(true)
+    assert.is_false(backends.canQuit(clicked(cfg), cfg))
+    assert.is_false(backends.canRestart(clicked(cfg), cfg))
+  end)
+
+  it("refuses it in the backend as well, not only in the menu", function()
+    local cfg = twoProfiles(true)
+    local ok, err = backends.act(clicked(cfg), "quit", fakeRuntime(), cfg)
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("protected", 1, true), tostring(err))
+  end)
+
+  it("allows it once no connection through that client is protected", function()
+    local cfg = twoProfiles(false)
+    assert.is_true(backends.canQuit(clicked(cfg), cfg))
+    assert.is_true((backends.act(clicked(cfg), "quit", fakeRuntime(), cfg)))
+  end)
+
+  it("does not mind a protected connection through a different client", function()
+    local cfg = {
+      profiles = {
+        { id = "open", name = "Open", backend = "awsvpn", app = "AWS VPN Client", row = "a" },
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", protected = true },
+      },
+    }
+    assert.is_true(backends.canQuit(cfg.profiles[1], cfg))
+  end)
+
+  it("answers about the one profile when there is no config to widen it with", function()
+    local lone = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "a" }
+    assert.is_true(backends.canQuit(lone))
+    assert.is_false(
+      backends.canQuit({ id = "b", name = "B", backend = "awsvpn", app = "X", row = "b", protected = true })
+    )
+  end)
+end)
+
+describe("quitting says whether the application actually went", function()
+  it("checks that nothing of that name is left", function()
+    local runtime = fakeRuntime()
+    backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", runtime)
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("! /usr/bin/pgrep -x 'GP'", 1, true), ran)
+  end)
+
+  -- pkill reports "nothing matched" as a failure, which is the normal outcome
+  -- of a kill that worked, so its own status answers the wrong question.
+  it("reports a failure when the app is still there afterwards", function()
+    local ok, err = backends.act(
+      { id = "g", name = "G", backend = "globalprotect", app = "GP" },
+      "quit",
+      fakeRuntime({ execOk = false })
+    )
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("still running", 1, true), tostring(err))
+  end)
+
+  it("reports success when it is gone", function()
+    local ok, err = backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", fakeRuntime())
+    assert.is_true(ok)
+    assert.is_nil(err)
   end)
 end)

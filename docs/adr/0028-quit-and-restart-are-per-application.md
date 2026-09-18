@@ -61,6 +61,29 @@ submenu, because closing the clients is a different job from taking the tunnels
 down, and because it is the repair for a client that has stopped answering —
 which is not a thing you go looking for under one particular connection.
 
+## Protection belongs to the application, not to the profile
+
+One client, several connections: the AWS client lists a profile per endpoint,
+and closing it closes all of them. Asking only about the profile somebody
+clicked would let an unprotected connection close a client that a protected one
+is also using — a disconnect of the protected tunnel under another name.
+
+So both the menu and `backends.act` ask the wider question: *is any connection
+through this application protected?* Both take the config to ask it with, and
+without one they answer about the single profile, which is what every caller
+that has no config knows anyway.
+
+## Why quitting ends by looking for the process
+
+`pkill` reports "nothing matched" as a failure, which is the normal outcome of a
+kill that worked, so its exit status answers the wrong question. The first
+version of this returned success unconditionally because of that — and would
+have reported success for a `pkill` that failed for a real reason, with the app
+still on screen.
+
+The command therefore ends with `! pgrep -x <app>`: the thing being reported is
+"it is closed", not "the kill returned zero".
+
 ## What was rejected
 
 - **Making Quit a greyed-out row where the client owns the tunnel.** The menu

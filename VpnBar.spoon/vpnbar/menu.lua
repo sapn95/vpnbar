@@ -236,7 +236,7 @@ end
 function menu.quitApps(cfg)
   local apps, seen = {}, {}
   for _, profile in ipairs(store.list(cfg, true)) do
-    if backends.canQuit(profile) and not seen[profile.app] then
+    if backends.canQuit(profile, cfg) and not seen[profile.app] then
       seen[profile.app] = true
       apps[#apps + 1] = { id = profile.id, name = profile.name, app = profile.app }
     end
@@ -248,8 +248,8 @@ end
 -- allowed to promise, and `backends.canQuit` has already refused the case where
 -- it would not. Same shape as forceItem: a separator where it does not apply,
 -- so the renderer collapses it away.
-local function quitItem(profile)
-  if not backends.canQuit(profile) then
+local function quitItem(profile, cfg)
+  if not backends.canQuit(profile, cfg) then
     return { separator = true }
   end
   return {
@@ -259,8 +259,8 @@ local function quitItem(profile)
   }
 end
 
-local function restartItem(profile)
-  if not backends.canRestart(profile) then
+local function restartItem(profile, cfg)
+  if not backends.canRestart(profile, cfg) then
     return { separator = true }
   end
   return {
@@ -402,8 +402,8 @@ function menu.build(cfg, states)
         },
         { separator = true },
         forceItem(profile),
-        quitItem(profile),
-        restartItem(profile),
+        quitItem(profile, cfg),
+        restartItem(profile, cfg),
         { title = "Remove…", action = { kind = "remove", id = profile.id } },
       },
     }

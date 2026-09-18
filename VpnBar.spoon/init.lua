@@ -521,7 +521,7 @@ function obj:refresh(options)
       autoconnect.forget(self.attempts, plan.id)
     end
     if profile then
-      backends.act(profile, plan.verb, runtime)
+      backends.act(profile, plan.verb, runtime, self.config)
     end
   end
 
@@ -670,7 +670,7 @@ function obj:act(id, verb)
       work.finish(self.work)
       return
     end
-    local called, ok, err = pcall(backends.act, profile, verb, self:runtime(true))
+    local called, ok, err = pcall(backends.act, profile, verb, self:runtime(true), self.config)
     if not called then
       self:complain(("%s: %s"):format(profile.name, tostring(ok)))
     elseif not ok then
@@ -722,7 +722,7 @@ function obj:disconnectAll()
     for _, entry in ipairs(plan) do
       local profile = store.get(self.config, entry.id)
       if profile then
-        local called, ok, err = pcall(backends.act, profile, entry.verb, runtime)
+        local called, ok, err = pcall(backends.act, profile, entry.verb, runtime, self.config)
         if not called then
           self:complain(("%s: %s"):format(entry.name, tostring(ok)))
         elseif not ok then
@@ -804,7 +804,7 @@ function obj:quitAllApps()
     for _, entry in ipairs(apps) do
       local profile = store.get(self.config, entry.id)
       if profile then
-        local called, ok, err = pcall(backends.act, profile, "quit", runtime)
+        local called, ok, err = pcall(backends.act, profile, "quit", runtime, self.config)
         if not called then
           self:complain(("%s: %s"):format(entry.app, tostring(ok)))
         elseif not ok then
