@@ -33,6 +33,7 @@ from login to shutdown
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
 ├─ ────────────
 ├─ Disconnect everything  → all of them that are not protected
+├─ Quit every VPN app     → closes the clients, one row per app
 ├─ ────────────
 ├─ Connections ▸
 │    Add a connection ▸  scutil · GlobalProtect · AWS VPN · Shell
@@ -40,7 +41,7 @@ from login to shutdown
 │    ────────────
 │    Work VPN ▸  Rename… · Edit… · Move up · Move down
 │                Hide · Protect from disconnecting · Remove…
-│                Force disconnect, Restart <app> — only where they apply
+│                Force disconnect, Quit <app>, Restart <app> — where they apply
 │    ────────────
 │    Settings ▸  Only one connection at a time · Use fallbacks
 │    ────────────
@@ -180,17 +181,23 @@ does when it does not apply, and
 says why: here there is a feature and a reason, and the reason is a setting two
 submenus away.
 
-## Restarting the agent
+## Quitting and restarting the clients
 
-A `globalprotect` connection's submenu offers **Restart GlobalProtect**. It
-quits the agent, insists if it does not go, and opens it again.
+Any connection whose config names an `app` offers **Quit `<app>`** and **Restart
+`<app>`** in its submenu, and one row above **Connections** closes all of them:
+**Quit every VPN app**. One entry per application, so two connections through the
+same client are one thing to quit
+([ADR 0028](docs/adr/0028-quit-and-restart-are-per-application.md)).
 
-Offered on a **protected** connection too, which no other write is. Everything
-this backend does goes through the agent's panel, so an agent that has stopped
-answering is a connection with nothing left to click, and the tunnel itself is
-held by a root service rather than by the app that was just closed
-([ADR 0021](docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Not
-offered for the AWS client, which is the tunnel's own parent process.
+It quits the app, insists if it does not go, and for a restart opens it again.
+
+The same command is two different promises. Closing GlobalProtect closes a user
+interface and its tunnel is held by a root service, so it survives — which is why
+this is offered on a **protected** connection, the one whose only repair it is
+([ADR 0021](docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Closing
+the AWS client ends the session, because that client is the tunnel's own parent,
+so on a protected connection those two rows are absent: a button that
+disconnects a protected tunnel is the one thing this menu does not have.
 
 ## The probe
 

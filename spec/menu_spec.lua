@@ -495,7 +495,14 @@ describe("menu.build, restarting the agent", function()
     local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GlobalProtect" })
     local item = deep(menu.build(cfg, {}), "Restart GlobalProtect")
     assert.same({ kind = "restart", id = "gp" }, item.action)
-    assert.matches("not a disconnect", item.tooltip)
+    assert.matches("stopped answering", item.tooltip)
+  end)
+
+  it("offers a plain quit beside it, which is the half that does not reopen", function()
+    local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GlobalProtect" })
+    local item = deep(menu.build(cfg, {}), "Quit GlobalProtect")
+    assert.same({ kind = "quitApp", id = "gp" }, item.action)
+    assert.matches("leaves it closed", item.tooltip)
   end)
 
   it("is offered on a protected connection, which is the one that needs it", function()
@@ -506,16 +513,94 @@ describe("menu.build, restarting the agent", function()
     assert.is_table(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
   end)
 
-  it("is not offered where quitting the app would take the tunnel with it", function()
-    -- The AWS client *is* the tunnel's parent process, which is why its `force`
-    -- quits it. Calling that a restart would be the same click under a name that
-    -- promises the opposite.
+  -- The AWS client is an application like any other and may be closed, but it
+  -- *is* the tunnel's parent process, so closing it is a disconnect — which is
+  -- the one thing no button offers on a protected connection.
+  it("is offered for the AWS client while nothing is protected", function()
     local aws = only({ id = "aws", name = "AWS VPN", backend = "awsvpn", app = "AWS VPN Client", row = "work" })
-    assert.is_nil(deep(menu.build(aws, {}), "Restart"))
+    assert.is_table(deep(menu.build(aws, {}), "Restart AWS VPN Client"))
+    assert.is_table(deep(menu.build(aws, {}), "Quit AWS VPN Client"))
+  end)
+
+  it("is withheld from a protected client that is its own tunnel", function()
+    local aws = only({
+      id = "aws",
+      name = "AWS VPN",
+      backend = "awsvpn",
+      app = "AWS VPN Client",
+      row = "work",
+      protected = true,
+    })
+    assert.is_nil(deep(menu.build(aws, { aws = "connected" }), "Quit AWS VPN Client"))
+    assert.is_nil(deep(menu.build(aws, { aws = "connected" }), "Restart AWS VPN Client"))
+  end)
+
+  it("is not offered for a backend with no application at all", function()
     local scutil = only({ id = "a", name = "A", backend = "scutil", service = "a" })
     assert.is_nil(deep(menu.build(scutil, {}), "Restart"))
+    assert.is_nil(deep(menu.build(scutil, {}), "Quit A"))
     local shell = only({ id = "s", name = "S", backend = "shell", commands = { connect = "up", disconnect = "down" } })
     assert.is_nil(deep(menu.build(shell, {}), "Restart"))
+  end)
+end)
+
+describe("menu.quitApps and the one row that closes them all", function()
+  local function cfg(profiles)
+    return assert(store.normalise({ profiles = profiles }))
+  end
+
+  local gp = { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", order = 10 }
+  local aws = { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "w", order = 20 }
+
+  it("lists one entry per application, not one per connection", function()
+    local second = { id = "gp2", name = "GP two", backend = "globalprotect", app = "GlobalProtect", order = 30 }
+    local apps = menu.quitApps(cfg({ gp, aws, second }))
+    assert.equals(2, #apps, "two connections through one client are one thing to quit")
+    assert.equals("GlobalProtect", apps[1].app)
+    assert.equals("AWS VPN Client", apps[2].app)
+  end)
+
+  it("leaves out a protected client that is its own tunnel", function()
+    local locked = {
+      id = "aws",
+      name = "AWS",
+      backend = "awsvpn",
+      app = "AWS VPN Client",
+      row = "w",
+      protected = true,
+      order = 20,
+    }
+    local apps = menu.quitApps(cfg({ gp, locked }))
+    assert.equals(1, #apps)
+    assert.equals("GlobalProtect", apps[1].app)
+  end)
+
+  it("keeps a protected agent whose tunnel outlives it", function()
+    local locked = { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", protected = true }
+    assert.equals(1, #menu.quitApps(cfg({ locked })))
+  end)
+
+  it("is empty when nothing has an application to close", function()
+    assert.same({}, menu.quitApps(cfg({ { id = "a", name = "A", backend = "scutil", service = "a" } })))
+  end)
+
+  it("puts one row in the menu and names what it closes", function()
+    local item
+    for _, row in ipairs(menu.build(cfg({ gp, aws }), {})) do
+      if row.title == "Quit every VPN app" then
+        item = row
+      end
+    end
+    assert.is_table(item, "the row is there")
+    assert.same({ kind = "quitAllApps" }, item.action)
+    assert.matches("GlobalProtect", item.tooltip)
+    assert.matches("AWS VPN Client", item.tooltip)
+  end)
+
+  it("has no such row when there is nothing to close", function()
+    for _, row in ipairs(menu.build(cfg({ { id = "a", name = "A", backend = "scutil", service = "a" } }), {})) do
+      assert.not_equals("Quit every VPN app", row.title)
+    end
   end)
 end)
 

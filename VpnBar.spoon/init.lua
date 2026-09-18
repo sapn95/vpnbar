@@ -737,6 +737,86 @@ function obj:disconnectAll()
   end)
 end
 
+--- Quit or restart the application behind one connection, having asked first.
+---
+--- What the dialog promises depends on the backend. Closing GlobalProtect closes
+--- a user interface and its tunnel is held elsewhere; closing the AWS client
+--- ends the session. `backends.canQuit` has already kept the second case away
+--- from a protected connection, so the wording here only has to be honest about
+--- which of the two this is.
+--- @param id string
+--- @param verb string "quit" or "restart"
+function obj:controlApp(id, verb)
+  local profile = store.get(self.config, id)
+  if not profile then
+    return
+  end
+  local app = profile.app or profile.name
+  local backend = backends.byName[profile.backend]
+  local owns = backend ~= nil and backend.appOwnsTunnel == true
+  local consequence = owns and " This client is its own tunnel, so the connection goes down with it."
+    or " Its tunnel is held by a service of its own rather than by this app, so it is not a disconnect."
+  local safety = (not owns and profile.autoconnect)
+      and " If the connection does drop after all, autoconnect brings it back."
+    or ""
+  local button = verb == "quit" and "Quit" or "Restart"
+  local question = verb == "quit" and ("Quit %s?"):format(app) or ("Restart %s?"):format(app)
+  local what = verb == "quit" and ("%s closes and stays closed."):format(app)
+    or ("%s closes and opens again."):format(app)
+  if hs.dialog.blockAlert(question, what .. consequence .. safety, button, "Cancel") ~= button then
+    return
+  end
+  self:act(id, verb)
+end
+
+--- Close every VPN application the menu is allowed to close.
+---
+--- One pass over `menu.quitApps`, which is the same list the row named, so the
+--- confirmation cannot promise a different set from the one that closes.
+function obj:quitAllApps()
+  local apps = menu.quitApps(self.config)
+  if #apps == 0 then
+    return
+  end
+  local names = {}
+  for _, entry in ipairs(apps) do
+    names[#names + 1] = entry.app
+  end
+  if
+    hs.dialog.blockAlert(
+      ("Quit %d VPN app%s?"):format(#apps, #apps == 1 and "" or "s"),
+      table.concat(names, ", ")
+        .. ". They close and stay closed. A client that holds its own tunnel takes the connection with it.",
+      "Quit",
+      "Cancel"
+    ) ~= "Quit"
+  then
+    return
+  end
+  work.begin(self.work, os.time())
+  self:paint()
+  hs.timer.doAfter(0, function()
+    if not self.running then
+      work.finish(self.work)
+      return
+    end
+    local runtime = self:runtime(true)
+    for _, entry in ipairs(apps) do
+      local profile = store.get(self.config, entry.id)
+      if profile then
+        local called, ok, err = pcall(backends.act, profile, "quit", runtime)
+        if not called then
+          self:complain(("%s: %s"):format(entry.app, tostring(ok)))
+        elseif not ok then
+          self:complain(("%s: %s"):format(entry.app, err or "could not close it"))
+        end
+      end
+    end
+    self:refreshSoon(nil, 2)
+    work.finish(self.work)
+  end)
+end
+
 function obj:dispatch(action)
   local kinds = {
     connect = function()
@@ -777,25 +857,13 @@ function obj:dispatch(action)
       self:disconnectAll()
     end,
     restart = function()
-      local profile = store.get(self.config, action.id)
-      if not profile then
-        return
-      end
-      local app = profile.app or profile.name
-      local safety = profile.autoconnect and " If the connection does drop, autoconnect brings it back." or ""
-      if
-        hs.dialog.blockAlert(
-          ("Restart %s?"):format(app),
-          ("%s quits and opens again. Its tunnel is held by the agent's own system service rather than by "):format(app)
-            .. "the app, so this is not a disconnect."
-            .. safety,
-          "Restart",
-          "Cancel"
-        ) ~= "Restart"
-      then
-        return
-      end
-      self:act(action.id, "restart")
+      self:controlApp(action.id, "restart")
+    end,
+    quitApp = function()
+      self:controlApp(action.id, "quit")
+    end,
+    quitAllApps = function()
+      self:quitAllApps()
     end,
     toggleAutoconnect = function()
       local profile = store.get(self.config, action.id)

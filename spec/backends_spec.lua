@@ -257,7 +257,7 @@ describe("the globalprotect backend, restarting the agent", function()
   end)
 
   it("quotes the app name, which is allowed to contain a space", function()
-    local command = backends.byName.globalprotect.restartCommand("Some Agent")
+    local command = backends.restartCommand("Some Agent")
     assert.matches("pkill %-x 'Some Agent'", command)
     assert.matches("open %-a 'Some Agent'$", command)
   end)
@@ -293,7 +293,6 @@ describe("backends.canRestart", function()
   end)
 
   it("is false where quitting the app would take the tunnel with it", function()
-    assert.is_false(backends.canRestart({ id = "aws", backend = "awsvpn", app = "AWS VPN Client", row = "work" }))
     assert.is_false(backends.canRestart({ id = "a", backend = "scutil", service = "a" }))
     assert.is_false(backends.canRestart({ id = "s", backend = "shell", commands = { connect = "up" } }))
   end)
@@ -457,5 +456,68 @@ describe("backends.act, superseding", function()
     local ok, err = backends.act(scutilProfile(), "supersede", fakeRuntime())
     assert.is_true(ok)
     assert.is_nil(err, "a successful call carried an error message: " .. tostring(err))
+  end)
+end)
+
+describe("quitting and restarting an application", function()
+  local function fake()
+    return fakeRuntime()
+  end
+
+  it("asks the app to quit, then insists, and does not reopen it", function()
+    local runtime = fake()
+    assert.is_true((backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", runtime)))
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("pkill -x 'GP'", 1, true), ran)
+    assert.is_truthy(ran:find("pkill -9 -x 'GP'", 1, true), ran)
+    assert.is_nil(ran:find("open -a", 1, true), "quit does not start it again")
+  end)
+
+  it("says the app is closed even when it was not running", function()
+    -- pkill calls "nothing matched" a failure, and an app that was not there is
+    -- an app that is now closed.
+    local runtime = fakeRuntime({ exec = { "", false } })
+    local ok, err = backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", runtime)
+    assert.is_true(ok)
+    assert.is_nil(err)
+  end)
+
+  -- Same command, two different promises.
+  it("is offered for both agents, because both are applications", function()
+    assert.is_true(backends.canQuit({ id = "g", backend = "globalprotect", app = "GP" }))
+    assert.is_true(backends.canRestart({ id = "g", backend = "globalprotect", app = "GP" }))
+    assert.is_true(backends.canQuit({ id = "a", backend = "awsvpn", app = "AWS VPN Client", row = "work" }))
+    assert.is_true(backends.canRestart({ id = "a", backend = "awsvpn", app = "AWS VPN Client", row = "work" }))
+  end)
+
+  it("is not offered for a backend with no application to close", function()
+    assert.is_false(backends.canQuit({ id = "s", backend = "scutil", service = "s" }))
+    assert.is_false(backends.canQuit({ id = "h", backend = "shell", commands = {} }))
+    assert.is_false(backends.canQuit({ id = "g", backend = "globalprotect" }), "no app named")
+    assert.is_false(backends.canQuit(nil))
+  end)
+
+  -- The distinction the whole thing turns on: closing GlobalProtect closes a
+  -- window, closing the AWS client ends the session.
+  it("still closes a protected agent whose tunnel outlives it", function()
+    local locked = { id = "g", name = "G", backend = "globalprotect", app = "GP", protected = true }
+    assert.is_true(backends.canQuit(locked))
+    assert.is_true(backends.canRestart(locked))
+    assert.is_true((backends.act(locked, "quit", fake())))
+    assert.is_true((backends.act(locked, "restart", fake())))
+  end)
+
+  it("refuses to close a protected client that is its own tunnel", function()
+    local locked = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "w", protected = true }
+    assert.is_false(backends.canQuit(locked))
+    assert.is_false(backends.canRestart(locked))
+    local ok, err = backends.act(locked, "quit", fake())
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("protected", 1, true), tostring(err))
+  end)
+
+  it("closes that same client happily once it is not protected", function()
+    local open = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "w" }
+    assert.is_true((backends.act(open, "quit", fake())))
   end)
 end)

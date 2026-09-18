@@ -79,43 +79,68 @@ end
 -- Seconds given to the agent to go away by itself, and to settle once it is
 -- gone. Both are spent inside one blocking `exec`, which is why the caller runs
 -- this off the run loop like every other press.
-globalprotect.RESTART_GRACE = 2
-globalprotect.RESTART_SETTLE = 1
+--- Seconds between asking an app to quit and insisting, and between insisting
+--- and opening it again.
+backends.APP_QUIT_GRACE = 2
+backends.APP_SETTLE = 1
 
---- Quit the agent and open it again.
+--- Close an application by name.
 ---
---- The whole panel path depends on an app that answers. When it stops — a
---- GlobalProtect agent that shows no window, or one whose Disconnect never
---- responds — there is nothing left for `press` to find, and the only way back is
---- to restart the app. That is not a disconnect: this agent's tunnel is held by
---- its own root service and system extension, not by the process in the menu bar
---- (ADR 0001), which is why no other backend has this. The AWS client is the
---- opposite case, and quitting it is precisely what its `force` is for.
----
---- `pkill -x` matches on the process name, which for this agent is also the
+--- `pkill -x` matches on the process name, which for these agents is also the
 --- application name the config already carries. TERM first and KILL after the
---- grace period: the second one is a no-op when the first worked, and this is
---- asked for exactly when the app has stopped answering, which is when TERM
---- alone is least likely to land. The exit status has to come from `open`,
---- because `pkill` reports "nothing matched" as a failure and an agent that had
---- already crashed would then look like an error.
+--- grace period: the second is a no-op when the first worked, and this is asked
+--- for exactly when an app has stopped answering, which is when TERM alone is
+--- least likely to land.
 --- @param app string
 --- @return string command
-function globalprotect.restartCommand(app)
+function backends.quitCommand(app)
   local quoted = backends.shellQuote(app)
   return table.concat({
     "/usr/bin/pkill -x " .. quoted,
-    "/bin/sleep " .. tostring(globalprotect.RESTART_GRACE),
+    "/bin/sleep " .. tostring(backends.APP_QUIT_GRACE),
     "/usr/bin/pkill -9 -x " .. quoted,
-    "/bin/sleep " .. tostring(globalprotect.RESTART_SETTLE),
-    "/usr/bin/open -a " .. quoted,
   }, " ; ")
 end
 
-function globalprotect.restart(profile, runtime)
-  local _, ok = runtime.exec(globalprotect.restartCommand(profile.app))
+--- Close an application and open it again.
+---
+--- The exit status has to come from `open`, because `pkill` reports "nothing
+--- matched" as a failure and an app that had already crashed would then look
+--- like an error at the moment it was being fixed.
+--- @param app string
+--- @return string command
+function backends.restartCommand(app)
+  return table.concat({
+    backends.quitCommand(app),
+    "/bin/sleep " .. tostring(backends.APP_SETTLE),
+    "/usr/bin/open -a " .. backends.shellQuote(app),
+  }, " ; ")
+end
+
+--- Quitting and restarting, for any backend that names an application.
+---
+--- What it *means* differs by backend and that difference is the whole reason
+--- `appOwnsTunnel` exists. Closing GlobalProtect closes a user interface: its
+--- tunnel is held by a root service and a system extension
+--- ([ADR 0001](../../docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md)).
+--- Closing the AWS client takes the session with it, because that client is the
+--- tunnel's own parent. Same command, two different promises, and only one of
+--- them may be made about a `protected` connection
+--- ([ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md)).
+local function quitApp(profile, runtime)
+  runtime.exec(backends.quitCommand(profile.app))
+  -- Always a success. `pkill` calls "nothing matched" a failure, and an app that
+  -- was not running is an app that is now closed, which is what was asked for.
+  return true, nil
+end
+
+local function restartApp(profile, runtime)
+  local _, ok = runtime.exec(backends.restartCommand(profile.app))
   return outcome(ok, "could not open " .. tostring(profile.app) .. " again")
 end
+
+globalprotect.quit = quitApp
+globalprotect.restart = restartApp
 
 local shell = {}
 
@@ -160,6 +185,12 @@ function awsvpn.disconnect(profile, runtime)
   return runtime.pressRow(profile.app, profile.row, "Disconnect")
 end
 
+awsvpn.quit = quitApp
+awsvpn.restart = restartApp
+-- Quitting this client ends the session: it is the tunnel's parent process, so
+-- the same command that closes a window elsewhere is a disconnect here.
+awsvpn.appOwnsTunnel = true
+
 backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shell, awsvpn = awsvpn }
 
 --- Is there a harder way to bring this connection down than asking politely?
@@ -189,12 +220,28 @@ end
 --- ([ADR 0021](../../docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
 --- @param profile table
 --- @return boolean
-function backends.canRestart(profile)
+local function appVerb(profile, verb)
   if type(profile) ~= "table" then
     return false
   end
   local backend = backends.byName[profile.backend]
-  return backend ~= nil and backend.restart ~= nil and profile.app ~= nil
+  if backend == nil or backend[verb] == nil or profile.app == nil then
+    return false
+  end
+  -- Where closing the app closes the tunnel, closing it is a disconnect, and a
+  -- protected connection refuses those from every button in the menu.
+  if profile.protected and backend.appOwnsTunnel then
+    return false
+  end
+  return true
+end
+
+function backends.canRestart(profile)
+  return appVerb(profile, "restart")
+end
+
+function backends.canQuit(profile)
+  return appVerb(profile, "quit")
 end
 
 -- What a protected connection still allows. Connecting is the direction its
@@ -212,7 +259,11 @@ end
 ---
 --- `supersede` is deliberately not a verb any menu item produces. Every button
 --- goes on being refused, so protection still means what the menu says it means.
-backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true }
+backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true, quit = true }
+
+--- The verbs that act on an application rather than on a tunnel. They are only
+--- allowed on a protected connection where the application is not the tunnel.
+backends.APP_VERBS = { quit = true, restart = true }
 
 --- The state of one connection.
 ---
@@ -251,7 +302,10 @@ function backends.act(profile, verb, runtime)
   -- always allowed — a tunnel that must stay up is exactly the one worth
   -- bringing up automatically — and so is restarting the app that reports it,
   -- which is a different thing from the tunnel. See `backends.PROTECTED_VERBS`.
-  if profile.protected and not backends.PROTECTED_VERBS[verb] then
+  local backendFor = backends.byName[profile.backend]
+  local appIsTheTunnel = backendFor ~= nil and backendFor.appOwnsTunnel == true
+  local allowed = backends.PROTECTED_VERBS[verb] and not (appIsTheTunnel and backends.APP_VERBS[verb])
+  if profile.protected and not allowed then
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end
   local backend = backends.byName[profile.backend]
