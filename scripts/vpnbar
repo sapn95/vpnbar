@@ -453,7 +453,14 @@ cmd_doctor() {
   fi
   case "${frame}" in
     "")
-      note "cannot ask Hammerspoon — enable its command line with hs.ipc"
+      # A doctor that could not examine the patient must not say "healthy".
+      # This said "Nothing to fix" through a two-minute stretch in which
+      # Hammerspoon answered nothing at all.
+      bad "Hammerspoon did not answer within 6 seconds, so the icon could not be checked"
+      note "Try again in a moment; this has been seen to pass on its own."
+      note "If it keeps happening, enable the command line in the Hammerspoon"
+      note "console: hs.ipc.cliInstall()"
+      failures=$((failures + 1))
       ;;
     none)
       bad "not running inside Hammerspoon — run: vpnbar start"
