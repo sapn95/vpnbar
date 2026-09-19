@@ -219,13 +219,19 @@ end
 local function keepingFocus(body)
   local app = hs.application.frontmostApplication()
   local window = hs.window.focusedWindow()
-  local results = table.pack(body())
+  -- Restored whether or not the body threw. Every caller is under a pcall
+  -- already, but a throw that left the focus on the agent's panel would be the
+  -- one occurrence of the thing this exists to prevent.
+  local results = table.pack(pcall(body))
   if window and window:isVisible() then
     window:focus()
   elseif app then
     app:activate()
   end
-  return table.unpack(results, 1, results.n)
+  if not results[1] then
+    error(results[2], 0)
+  end
+  return table.unpack(results, 2, results.n)
 end
 
 --- Open the panel, do something with it, close it again. The same click both
@@ -546,11 +552,21 @@ function obj:refresh(options)
   -- because somebody wanted to read a status is not acceptable.
   -- How long since the last keystroke or click, so a retry that would open a
   -- client's login window is not made into the middle of somebody's sentence.
-  -- The read that follows a wake or an unlock is the exception: that person has
-  -- just arrived and wants the VPN now, and a login window then is expected.
-  local idle = hs.host.idleTime()
-  local plan = options.autoconnect
-      and autoconnect.plan(self.config, states, self.attempts, os.time(), idle, options.fresh == true)
+  -- `idleTime` asks IOKit and raises when it cannot; a refresh must not die on
+  -- that, and nil is the answer that means "go ahead". Only asked when it can
+  -- matter, which is when this read may connect something.
+  --
+  -- The window after a wake or an unlock is the exception: that person has just
+  -- arrived and wants the VPN now, and a login window then is expected. A window
+  -- rather than one read, because the one read that could act may not be able
+  -- to, and the exemption would be spent on nothing.
+  local idle, fresh
+  if options.autoconnect then
+    local measured, seconds = pcall(hs.host.idleTime)
+    idle = measured and seconds or nil
+    fresh = work.withinFreshStart(self.lastFreshStart, os.time())
+  end
+  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), idle, fresh)
     or nil
   if plan then
     local profile = store.get(self.config, plan.id)
@@ -1093,8 +1109,11 @@ function obj:start()
     -- instant of the wake, when there is no route yet — see work.WAKE_READS.
     -- All of them are claimed now, which is what keeps the mark moving from
     -- the moment the screen comes back until the state has settled.
+    -- Which of these may put a login window on screen is decided in `refresh`
+    -- from `lastFreshStart`, so the whole window after the arrival counts and
+    -- not one read of it.
     for _, read in ipairs(work.WAKE_READS) do
-      self:refreshSoon({ autoconnect = read.autoconnect == true, fresh = read.autoconnect == true }, read.after)
+      self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
     end
   end)
   self.wake:start()

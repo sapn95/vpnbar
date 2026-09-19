@@ -116,20 +116,6 @@ function autoconnect.forget(memory, id)
   memory[id] = nil
 end
 
---- What, if anything, to connect now.
----
---- Returns at most one action, because two VPNs coming up at the same moment
---- is a routing table nobody asked for. The next refresh takes the next one.
----
---- A protected connection may be *connected* here: protection points at
---- bringing one down, and a tunnel that must stay up is exactly the one worth
---- bringing up on its own.
----
---- @param cfg table
---- @param states table map of profile id to state
---- @param memory table the caller's memory of what has been tried
---- @param now number seconds
---- @return table|nil { id, verb = "connect"|"disconnect", reason }
 --- Would an automatic connect of this profile interrupt somebody right now?
 ---
 --- `idle` is seconds since the last input, or nil where nobody measured it, and
@@ -148,6 +134,22 @@ function autoconnect.wouldInterrupt(profile, idle, fresh)
   return backends.drivesUI(profile) and idle < autoconnect.IDLE_BEFORE_INTERRUPTING
 end
 
+--- What, if anything, to connect now.
+---
+--- Returns at most one action, because two VPNs coming up at the same moment
+--- is a routing table nobody asked for. The next refresh takes the next one.
+---
+--- A protected connection may be *connected* here: protection points at
+--- bringing one down, and a tunnel that must stay up is exactly the one worth
+--- bringing up on its own.
+---
+--- @param cfg table
+--- @param states table map of profile id to state
+--- @param memory table the caller's memory of what has been tried
+--- @param now number seconds
+--- @param idle number|nil seconds since the last keystroke or click; nil means unmeasured, which means go ahead
+--- @param fresh boolean|nil inside the window after a wake or an unlock, when a login window is expected
+--- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
 function autoconnect.plan(cfg, states, memory, now, idle, fresh)
   states, memory = states or {}, memory or {}
   local settings = store.settings(cfg)
@@ -261,6 +263,11 @@ function autoconnect.plan(cfg, states, memory, now, idle, fresh)
           -- where the stand-in gets its turn. The two therefore alternate, each
           -- on its own backoff, which is what "keep testing back and forth"
           -- amounts to once neither is answering.
+          --
+          -- Held back for interrupting lands here as well, on purpose: a
+          -- stand-in that opens nothing may carry the traffic while the
+          -- preferred connection waits for a quiet moment, and the supersede
+          -- rule takes the stand-in down again once the preferred one arrives.
           local wantsFallback = settings.fallback and profile.fallback ~= nil
           if wantsFallback and attempts >= autoconnect.ATTEMPTS_BEFORE_FALLBACK then
             local fallback = store.get(cfg, profile.fallback)

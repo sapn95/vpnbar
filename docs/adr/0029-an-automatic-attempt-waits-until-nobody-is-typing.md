@@ -59,6 +59,38 @@ not going to provide would be the menu being clever at their expense.
 A deferral is not an attempt. It records nothing, so it does not feed the
 backoff, and the connection is asked for as soon as the quiet arrives.
 
+## The window after an arrival, not one read of it
+
+The first version marked exactly one read as fresh, the one fifteen seconds
+after a wake or an unlock. If that read could not act — the connection still
+`connecting`, outranked by something up, a probe not yet settled — the exemption
+was spent on nothing, and the person who had just sat down waited for a minute
+of idle they were typing through. That is the case this record argues against.
+
+`work.withinFreshStart` answers instead: every read inside the twenty seconds
+that `work.freshStart` already treats as one arrival counts as fresh. It is the
+other side of the same predicate, and the tests say so.
+
+## A silent stand-in may go first
+
+A preferred connection that is ready but held back for interrupting does not
+end the matter: the fallback branch runs, and a stand-in that opens nothing —
+`scutil`, `shell` — may be connected meanwhile. It carries the traffic, the
+preferred connection is asked for as soon as the quiet arrives, and the
+supersede rule takes the stand-in down once it does. A stand-in that would open
+a window is held by the same rule as the preferred one.
+
+## What is not measured
+
+Two things in this record are claims rather than measurements. `hs.host.idleTime`
+counts from the last keyboard or mouse event as IOKit reports it, and whether a
+particular input device or tool on a given machine keeps that at zero is not
+something this repository can know. And the Escape that closes a stuck options
+menu is now addressed to the agent; that it still closes the menu when posted to
+a process rather than globally was not exercised, because there was no stuck
+menu to exercise it on. With no target found it posts globally, which is the
+behaviour before this change.
+
 ## What was rejected
 
 - **Detecting the login window and stopping until a person acts.** It is the

@@ -592,10 +592,39 @@ describe("autoconnect, an automatic attempt waits until nobody is typing", funct
     assert.equals("gp", autoconnect.plan(ui(), down, {}, 1e6).id)
   end)
 
-  it("records no attempt for a connect it held back", function()
-    local memory = {}
-    autoconnect.plan(ui(), down, memory, 1e6, 3, false)
-    assert.same({}, memory, "a deferral is not a failure and must not feed the backoff")
+  -- A deferral is not a plan. `plan` never writes the memory itself — that is
+  -- the adapter's `remember`, and it only runs on a returned connect — so the
+  -- thing to assert here is that nothing is returned to remember.
+  it("returns nothing for a connect it held back, so there is nothing to remember", function()
+    assert.is_nil(autoconnect.plan(ui(), down, {}, 1e6, 3, false))
+  end)
+
+  -- A stand-in that opens nothing may carry the traffic while the preferred
+  -- connection waits for a quiet moment.
+  it("lets a silent stand-in through while the preferred one is held back", function()
+    local cfg = assert(store.normalise({
+      settings = { fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          order = 10,
+          autoconnect = true,
+          fallback = "s",
+        },
+        { id = "s", name = "S", backend = "scutil", service = "s", order = 20 },
+      },
+    }))
+    local memory = { gp = { attempts = 1, lastTry = 0, started = true } }
+    local plan = autoconnect.plan(cfg, { gp = "disconnected", s = "disconnected" }, memory, 1e6, 3, false)
+    assert.same({ id = "s", verb = "connect", reason = "fallback" }, plan)
+  end)
+
+  it("holds a stand-in that would interrupt just as it holds the preferred one", function()
+    local memory = { gp = { attempts = 1, lastTry = 0, started = true } }
+    assert.is_nil(autoconnect.plan(ui(), down, memory, 1e6, 3, false))
   end)
 
   it("still takes an extra tunnel down while somebody is active", function()

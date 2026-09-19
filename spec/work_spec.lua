@@ -127,3 +127,32 @@ describe("work.freshStart", function()
     assert.is_true(work.freshStart(1000, 1000 - 86400))
   end)
 end)
+
+describe("work.withinFreshStart", function()
+  it("is the window the last fresh start opened", function()
+    assert.is_true(work.withinFreshStart(1000, 1000))
+    assert.is_true(work.withinFreshStart(1000, 1000 + work.FRESH_START_DEBOUNCE - 1))
+    assert.is_false(work.withinFreshStart(1000, 1000 + work.FRESH_START_DEBOUNCE))
+  end)
+
+  it("covers every wake read, which is the point of it", function()
+    local last = work.WAKE_READS[#work.WAKE_READS].after
+    assert.is_true(work.withinFreshStart(1000, 1000 + last))
+  end)
+
+  it("is false before any fresh start, and across a clock that went backwards", function()
+    assert.is_false(work.withinFreshStart(nil, 1000))
+    assert.is_false(work.withinFreshStart(1000, 990))
+    assert.is_false(work.withinFreshStart("nonsense", 1000))
+  end)
+
+  it("is the other side of freshStart", function()
+    for _, since in ipairs({ 0, 5, 19, 20, 21, 500 }) do
+      assert.not_equals(
+        work.freshStart(1000, 1000 + since),
+        work.withinFreshStart(1000, 1000 + since),
+        "since=" .. since
+      )
+    end
+  end)
+end)

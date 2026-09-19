@@ -52,6 +52,25 @@ work.FRESH_START_DEBOUNCE = 20
 --- @param lastAt number|nil when the last fresh start was handled
 --- @param now number seconds
 --- @return boolean
+--- Is `now` still inside the window the last fresh start opened?
+---
+--- The other side of `freshStart`: that one asks whether an event counts as a
+--- new arrival, this one whether the arrival is still going on. The reads that
+--- follow a wake or an unlock are allowed to put a login window on screen, and
+--- one read is too narrow a door for that: if the single read that could act
+--- cannot — still connecting, outranked, a probe not settled — the person who
+--- just sat down would then wait for a minute of idle they are typing through.
+--- @param lastAt number|nil when the last fresh start was handled
+--- @param now number seconds
+--- @return boolean
+function work.withinFreshStart(lastAt, now)
+  if type(lastAt) ~= "number" or type(now) ~= "number" then
+    return false
+  end
+  local since = now - lastAt
+  return since >= 0 and since < work.FRESH_START_DEBOUNCE
+end
+
 function work.freshStart(lastAt, now)
   if type(lastAt) ~= "number" or type(now) ~= "number" then
     return true
