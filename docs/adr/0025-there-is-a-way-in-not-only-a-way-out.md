@@ -98,6 +98,32 @@ And the watchdog in `run_with_timeout` calls `/bin/sleep` by its path. A sleep
 that returns at once, which the tests install on purpose for the polling
 loops, would otherwise kill every command before it had answered.
 
+## What is known about Hammerspoon not answering, and what is not
+
+Three times on 2026-09-19 the command line got no answer from Hammerspoon for
+a minute or two: no error, the call simply waited until its timeout. Twice this
+was right after `brew upgrade`, once with nothing going on. Each time it passed
+on its own. Measured during one of them: the main thread was idle (94% of a
+two-second `sample` in `mach_msg`), timers were firing, the Spoon's own read
+was running normally, the process had no children, and no dialog was up. So
+Hammerspoon was not blocked; its message port was not being served, or not
+reached.
+
+Two explanations were tested. That an open menu puts the run loop in a mode the
+port is not registered for: refuted — `libipc.dylib` adds its run-loop source
+with `kCFRunLoopCommonModes`, read off the disassembly. That a killed `hs`
+process leaves a dead instance registered and poisons `print`: the
+registration was reproduced (one instance became two), the poisoning was not.
+The cause is open.
+
+What follows from it is not. The in-place start cannot tell "no answer" from
+"answered late", and its own kill of a late `hs` is one plausible way to get
+the dead reply port that made `hs.loadSpoon` throw. So the start keeps its
+fallback, and the fallback keeps its check. And the doctor no longer says
+"Nothing to fix" when it could not ask: it said exactly that through one of
+those stretches, because "cannot ask Hammerspoon" was a note. A doctor that
+could not examine the patient reports that, as a failure.
+
 ## What was rejected
 
 - **A launch agent.** It would start vpnbar without Hammerspoon's knowledge,

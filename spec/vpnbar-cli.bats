@@ -525,3 +525,17 @@ SH
   [ "${status}" -eq 0 ]
   ! grep -qF 'hs.reload' "${STUB_HS_CALLS}"
 }
+
+# ----------------------------------------------- a silent Hammerspoon is a fail
+
+# "cannot ask Hammerspoon" was a note, and the doctor went on to say "Nothing
+# to fix" through a stretch in which Hammerspoon answered nothing at all.
+@test "the doctor fails rather than guesses when Hammerspoon does not answer" {
+  loads_it
+  "${SCRIPT}" link >/dev/null
+  export STUB_HS_ANSWER=""
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"did not answer"* ]]
+  [[ "${output}" != *"Nothing to fix"* ]]
+}
