@@ -485,13 +485,38 @@ SH
   grep -qF 'hs.reload' "${STUB_HS_CALLS}"
 }
 
-@test "the fallback reports failure when vpnbar does not come back after the reload" {
+# One wall-clock deadline for the whole fallback. With the budget set to two
+# seconds and a Hammerspoon that never says vpnbar is running, this has to
+# give up in about that long — not after thirty loops of bounded probes.
+@test "the fallback gives up at its deadline when vpnbar does not come back" {
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"; chmod +x "${STUB}/sleep"
+  export VPNBAR_RELOAD_BUDGET=2
+  export STUB_HS_ANSWER_FILE="${TMP}/answers"
+  { printf '%s\n' "up" "FAIL could not load the Spoon: boom" ""; for _ in $(seq 1 400); do printf '%s\n' "up" "false"; done; } >"${STUB_HS_ANSWER_FILE}"
+  local before after
+  before=$(date +%s)
+  run "${SCRIPT}" start
+  after=$(date +%s)
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"did not come back within 2 seconds"* ]]
+  [ $((after - before)) -le 6 ]
+}
+
+@test "the fallback bounds the reload request itself" {
   printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"; chmod +x "${STUB}/sleep"
   export STUB_HS_ANSWER_FILE="${TMP}/answers"
-  { printf '%s\n' "up" "FAIL could not load the Spoon: boom" ""; for _ in $(seq 1 40); do printf '%s\n' "up" "false"; done; } >"${STUB_HS_ANSWER_FILE}"
+  printf '%s\n' "up" "FAIL could not load the Spoon: boom" "" "up" "true" >"${STUB_HS_ANSWER_FILE}"
   run "${SCRIPT}" start
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"did not come back"* ]]
+  [ "${status}" -eq 0 ]
+  # The stub records every call in order, one per line — except the start
+  # script, which is many lines. So: exactly one reload, worded exactly so,
+  # and after the in-place attempt.
+  [ "$(grep -c 'hs.reload' "${STUB_HS_CALLS}")" -eq 1 ]
+  grep -qxF -- '-c hs.timer.doAfter(0.5, hs.reload)' "${STUB_HS_CALLS}"
+  local attempt reload
+  attempt="$(grep -n 'already running' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
+  reload="$(grep -n 'hs.reload' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
+  [ "${attempt}" -lt "${reload}" ]
 }
 
 @test "a start that loads in place never reloads Hammerspoon" {
