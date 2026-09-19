@@ -441,8 +441,13 @@ SH
   [ "${evict}" -lt "${load}" ]
 }
 
-@test "the eviction matches vpnbar and vpnbar.* only, by prefix" {
+# Two caches, two spellings: the Spoon itself is required as "VpnBar", the
+# modules under it as "vpnbar.*". Dropping only the lowercase ones would keep
+# the old init.lua with fresh modules underneath it, which is what the first
+# version of this did.
+@test "the eviction covers the Spoon's own entry as well as its modules" {
   export STUB_HS_ANSWER="started"
   run "${SCRIPT}" start
+  grep -qF 'name == "VpnBar"' "${STUB_HS_CALLS}"
   grep -qF 'name == "vpnbar" or name:sub(1, 7) == "vpnbar."' "${STUB_HS_CALLS}"
 }

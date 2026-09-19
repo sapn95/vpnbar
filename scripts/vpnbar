@@ -307,10 +307,16 @@ cmd_start() {
   # full hs.reload, with every other config in it, brought the installed code
   # in. Nothing loaded is lost: a running Spoon returns before this, and a
   # stopped one holds nothing worth keeping.
+  #
+  # Two spellings, because there are two caches. The Spoon itself is loaded
+  # by hs.loadSpoon through require("VpnBar"), so its init.lua sits under
+  # "VpnBar"; the modules it requires sit under "vpnbar.*". The first version
+  # of this dropped only the lowercase ones and would have gone on running the
+  # old init.lua with fresh modules underneath it.
   ask_hammerspoon '
     if _G.vpnbar and _G.vpnbar.running then return "already running" end
     for name in pairs(package.loaded) do
-      if name == "vpnbar" or name:sub(1, 7) == "vpnbar." then package.loaded[name] = nil end
+      if name == "VpnBar" or name == "vpnbar" or name:sub(1, 7) == "vpnbar." then package.loaded[name] = nil end
     end
     spoon.VpnBar = nil
     local ok, loaded = pcall(hs.loadSpoon, "VpnBar")
