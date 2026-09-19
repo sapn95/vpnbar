@@ -300,11 +300,28 @@ ensure_hammerspoon() {
 # other config with it, so the menu had a way out and no way in.
 cmd_start() {
   ensure_hammerspoon || exit 1
+  # The cached modules are dropped before the Spoon is loaded. hs.loadSpoon
+  # returns whatever is already in spoon.VpnBar, and require returns whatever
+  # is already in package.loaded, so a start after brew upgrade ran the code
+  # from before the upgrade — every time, on every upgrade so far — and only a
+  # full hs.reload, with every other config in it, brought the installed code
+  # in. Nothing loaded is lost: a running Spoon returns before this, and a
+  # stopped one holds nothing worth keeping.
+  #
+  # Two spellings, because there are two caches. The Spoon itself is loaded
+  # by hs.loadSpoon through require("VpnBar"), so its init.lua sits under
+  # "VpnBar"; the modules it requires sit under "vpnbar.*". The first version
+  # of this dropped only the lowercase ones and would have gone on running the
+  # old init.lua with fresh modules underneath it.
   ask_hammerspoon '
-    local ok, spoon = pcall(hs.loadSpoon, "VpnBar")
-    if not ok or not spoon then return "FAIL could not load the Spoon: " .. tostring(spoon) end
     if _G.vpnbar and _G.vpnbar.running then return "already running" end
-    _G.vpnbar = spoon:start()
+    for name in pairs(package.loaded) do
+      if name == "VpnBar" or name == "vpnbar" or name:sub(1, 7) == "vpnbar." then package.loaded[name] = nil end
+    end
+    spoon.VpnBar = nil
+    local ok, loaded = pcall(hs.loadSpoon, "VpnBar")
+    if not ok or not loaded then return "FAIL could not load the Spoon: " .. tostring(loaded) end
+    _G.vpnbar = loaded:start()
     return _G.vpnbar.running and "started" or "FAIL start did not take"
   '
 }

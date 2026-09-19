@@ -259,7 +259,7 @@ Then there is something to start:
 ```bash
 vpnbar start      # start it inside a running Hammerspoon
 vpnbar stop       # the same as Quit in the menu
-vpnbar restart
+vpnbar restart    # after brew upgrade: loads the installed code, not the cached one
 vpnbar app        # an icon in Launchpad and Spotlight that runs start
 ```
 

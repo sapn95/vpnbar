@@ -58,6 +58,23 @@ reads and two autoconnect attempts per interval, each unaware of the other.
 `stop` is the one place that knows the full list of things to take down, so
 `start` calls it rather than keeping a second copy of that list in its head.
 
+## Why start drops the cached modules first
+
+Added 2026-09-19, after the fourth upgrade in a week turned out never to have
+been running. `hs.loadSpoon` returns whatever is already in `spoon.VpnBar`, and
+`require` returns whatever is already in `package.loaded`, so `vpnbar restart`
+after `brew upgrade` stopped the Spoon and started it again on the code from
+before the upgrade. It looked right: the icon came back, the doctor was happy,
+and a method added that day was simply not there. Only a full `hs.reload`, with
+every other config in it, brought the installed code in — which is the thing
+`restart` exists to avoid.
+
+`start` now clears `package.loaded` of `vpnbar` and `vpnbar.*` and sets
+`spoon.VpnBar` to nil before it loads. Nothing loaded is lost: a running Spoon
+returns before that, and a stopped one holds nothing worth keeping. `restart`
+is therefore what the README always said it was, the whole update after an
+upgrade.
+
 ## What was rejected
 
 - **A launch agent.** It would start vpnbar without Hammerspoon's knowledge,
