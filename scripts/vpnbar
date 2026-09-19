@@ -478,7 +478,8 @@ cmd_doctor() {
   fi
 
   echo "The menu bar"
-  local frame="" hs_bin=""
+  local frame="" hs_bin="" bartender=""
+  bartender="$(bartender_state)"
   if hs_bin="$(find_hs)"; then
     frame="$(run_with_timeout 6 "${hs_bin}" -A -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d %d", f.x, f.w, f.h)' 2>/dev/null | tail -1 || true)"
   fi
@@ -503,7 +504,14 @@ cmd_doctor() {
         # A zero-height frame at x=0 is what an item Bartender 7 keeps in its
         # hidden section reports: no window on screen at all, rather than a
         # window parked off it. What this said before was "on screen at x=0".
-        note "the icon has no frame right now; the menu bar manager's answer counts"
+        # It is one thing to fix, not two, so when Bartender owns up to it the
+        # failure is counted there.
+        if [ "${bartender}" = "hidden" ]; then
+          note "the icon has no frame right now; Bartender's answer below says why"
+        else
+          bad "the icon has no frame right now, so it cannot be seen"
+          failures=$((failures + 1))
+        fi
       elif [ "${x}" -ge 0 ] 2>/dev/null; then
         ok "icon is on screen at x=${x}"
       else
@@ -520,7 +528,7 @@ cmd_doctor() {
       fi
       ;;
   esac
-  case "$(bartender_state)" in
+  case "${bartender}" in
     visible) ok "Bartender shows it" ;;
     hidden)
       bad "Bartender is hiding it"

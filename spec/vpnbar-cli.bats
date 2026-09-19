@@ -133,9 +133,22 @@ loads_it() {
   loads_it
   export STUB_HS_ANSWER="0 22 0"
   run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
   [[ "${output}" == *"no frame"* ]]
   [[ "${output}" != *"on screen"* ]]
   [[ "${output}" != *"off-screen"* ]]
+  [[ "${output}" != *"Nothing to fix"* ]]
+}
+
+@test "an icon Bartender hides is one thing to fix, not two" {
+  "${SCRIPT}" link
+  loads_it
+  export STUB_HS_ANSWER="0 22 0"
+  export STUB_OSASCRIPT_ANSWER='[{"id":"plist:status:org.hammerspoon.Hammerspoon::vpnbar","state":"hidden"}]'
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Bartender is hiding it"* ]]
+  [[ "${output}" == *"1 thing(s) to fix"* ]]
 }
 
 @test "doctor reports that Bartender shows the icon" {
