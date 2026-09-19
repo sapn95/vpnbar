@@ -278,23 +278,26 @@ already has it here for other reasons, and without it the other two backends
 still work.
 
 **If the icon does not appear, run `vpnbar doctor` before anything else.** It
-checks Hammerspoon, the link and the line in `init.lua`, and then asks
-Hammerspoon where the icon actually is. The usual answer is that it is drawing
-perfectly, in the menu bar, at a large negative x, because a menu bar manager
-is holding it off-screen.
+checks Hammerspoon, the link and the line in `init.lua`, and then asks two
+parties where the icon actually is: Hammerspoon, for the item's frame, and
+Bartender, when it is running, for what it is doing with the item. Older
+managers park a hidden item at a large negative x; Bartender 7 gives it no
+window at all, which reads as a frame of height 0, so Bartender's own answer
+is the one that counts.
 
-The doctor prints the id the manager knows it by and the command that shows it:
+Bartender 7 can keep an item in its hidden section while its settings list it
+nowhere, and its scripting does not move it out. A hidden icon is fixed in
+Bartender's settings, under Menu Bar Layout, by dragging the Hammerspoon item
+into the shown section. The doctor names the item:
 
-```bash
-osascript -e 'tell application "Bartender 6" \
-  to show "org.hammerspoon.Hammerspoon-vpnbar"'
+```text
+plist:status:org.hammerspoon.Hammerspoon::vpnbar
 ```
 
 A **name** rather than an ordinal, because the status item is created with an
-autosave name — which is the whole reason a manager's decision about it now
+autosave name — which is the whole reason a manager's decision about it
 sticks instead of landing on whichever Hammerspoon item happened to be first
-([ADR 0016](docs/adr/0016-the-menu-bar-item-has-a-name.md)). Add that id to the
-manager's shown items to keep it.
+([ADR 0016](docs/adr/0016-the-menu-bar-item-has-a-name.md)).
 
 Start with an empty menu and `Import from scutil…`, or write
 `~/.config/vpnbar/profiles.json` by hand — the format is in

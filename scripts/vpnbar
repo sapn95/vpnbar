@@ -21,8 +21,12 @@ readonly LOAD_MARK='loadSpoon("VpnBar")'
 # What a menu bar manager calls this icon: the application's bundle id plus the
 # autosave name the Spoon gives its status item. Without that name it would be
 # an ordinal, and an ordinal is not something a decision can stick to — see
-# docs/adr/0016-the-menu-bar-item-has-a-name.md.
-readonly BARTENDER_ID="org.hammerspoon.Hammerspoon-vpnbar"
+# docs/adr/0016-the-menu-bar-item-has-a-name.md. Bartender 7 spells it
+# "plist:status:<bundle>::<name>"; Bartender 6 spelled it "<bundle>-<name>".
+readonly BARTENDER_ITEM="plist:status:org.hammerspoon.Hammerspoon::vpnbar"
+# Bartender is addressed by bundle id so that its version, which is in the
+# application's name ("Bartender 7"), is not in the command.
+readonly BARTENDER_BUNDLE="com.surteesstudios.Bartender"
 
 # `timeout` is GNU and not on a stock macOS. A Hammerspoon that is wedged, or
 # whose ipc is off, must not hang the doctor.
@@ -248,6 +252,13 @@ find_hs() {
 # while Hammerspoon is still running the script is not free: the reply port
 # dies, the next print inside that script throws, and a script that has
 # already dropped the old modules then loads nothing. So a start gets longer.
+#
+# `-A` on every call. Without it the client asks LaunchServices whether
+# Hammerspoon is running before it touches the port, and when that answer is
+# empty — which it is now and then for a process that is plainly there — it
+# puts up a modal "launch it now?" alert that no timeout covers and sits in it
+# until killed. With it the client launches Hammerspoon without activation, a
+# no-op when it is running, and polls the port instead. See ADR 0025.
 ask_hammerspoon() {
   local hs_bin answer budget="${2:-10}"
   hs_bin="$(find_hs)" || {
@@ -257,7 +268,7 @@ ask_hammerspoon() {
     echo "    hs.ipc.cliInstall()" >&2
     return 1
   }
-  answer="$(run_with_timeout "${budget}" "${hs_bin}" -c "$1" 2>/dev/null | tail -1)"
+  answer="$(run_with_timeout "${budget}" "${hs_bin}" -A -c "$1" 2>/dev/null | tail -1)"
   case "${answer}" in
     FAIL*)
       echo "${answer#FAIL }" >&2
@@ -282,7 +293,7 @@ ask_hammerspoon() {
 hammerspoon_answers() {
   local hs_bin budget="${1:-3}"
   hs_bin="$(find_hs)" || return 1
-  [ -n "$(run_with_timeout "${budget}" "${hs_bin}" -c 'return "up"' 2>/dev/null | tail -1)" ]
+  [ -n "$(run_with_timeout "${budget}" "${hs_bin}" -A -c 'return "up"' 2>/dev/null | tail -1)" ]
 }
 
 # Hammerspoon has to be up *and answering* before it can be asked anything.
@@ -330,7 +341,7 @@ start_by_reloading() {
   local hs_bin deadline remaining per
   hs_bin="$(find_hs)" || return 1
   deadline=$(( $(date +%s) + RELOAD_BUDGET ))
-  run_with_timeout 5 "${hs_bin}" -c 'hs.timer.doAfter(0.5, hs.reload)' >/dev/null 2>&1 || true
+  run_with_timeout 5 "${hs_bin}" -A -c 'hs.timer.doAfter(0.5, hs.reload)' >/dev/null 2>&1 || true
   while :; do
     remaining=$(( deadline - $(date +%s) ))
     [ "${remaining}" -gt 0 ] || break
@@ -339,7 +350,7 @@ start_by_reloading() {
     per=$(( remaining < 5 ? remaining : 5 ))
     [ "${per}" -gt 0 ] || break
     if hammerspoon_answers "${per}" \
-      && [ "$(run_with_timeout "${per}" "${hs_bin}" -c 'return tostring(_G.vpnbar and _G.vpnbar.running)' 2>/dev/null | tail -1)" = "true" ]; then
+      && [ "$(run_with_timeout "${per}" "${hs_bin}" -A -c 'return tostring(_G.vpnbar and _G.vpnbar.running)' 2>/dev/null | tail -1)" = "true" ]; then
       echo "started, by reloading Hammerspoon"
       return 0
     fi
@@ -404,6 +415,26 @@ cmd_restart() {
   cmd_start
 }
 
+# What Bartender says about the icon: "visible", "hidden", "unlisted" when it
+# answers but has never seen the item, and nothing when no Bartender is running
+# or it does not answer. Bartender 7 lists its items as JSON objects whose key
+# order is not fixed, so the object is found by the id and the state read off
+# that same object.
+bartender_state() {
+  pgrep -f '/Bartender[^/]*\.app/Contents/MacOS/' >/dev/null 2>&1 || return 0
+  local details object
+  details="$(run_with_timeout 6 osascript -e "tell application id \"${BARTENDER_BUNDLE}\" to list menu bar item details" 2>/dev/null || true)"
+  [ -n "${details}" ] || return 0
+  object="$(printf '%s' "${details}" | tr '}' '\n' | grep -F "\"id\":\"${BARTENDER_ITEM}\"" | head -n 1)"
+  case "${object}" in
+    *'"state":"'*)
+      object="${object#*\"state\":\"}"
+      printf '%s\n' "${object%%\"*}"
+      ;;
+    *) echo unlisted ;;
+  esac
+}
+
 cmd_doctor() {
   local failures=0
 
@@ -447,9 +478,10 @@ cmd_doctor() {
   fi
 
   echo "The menu bar"
-  local frame="" hs_bin=""
+  local frame="" hs_bin="" bartender=""
+  bartender="$(bartender_state)"
   if hs_bin="$(find_hs)"; then
-    frame="$(run_with_timeout 6 "${hs_bin}" -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d", f.x, f.w)' 2>/dev/null | tail -1 || true)"
+    frame="$(run_with_timeout 6 "${hs_bin}" -A -c 'local m = _G.vpnbar and _G.vpnbar.menubar; if not m then return "none" end local f = m:frame(); return string.format("%d %d %d", f.x, f.w, f.h)' 2>/dev/null | tail -1 || true)"
   fi
   case "${frame}" in
     "")
@@ -467,27 +499,48 @@ cmd_doctor() {
       failures=$((failures + 1))
       ;;
     *)
-      local x="${frame%% *}"
-      if [ "${x}" -ge 0 ] 2>/dev/null; then
+      local x="${frame%% *}" h="${frame##* }"
+      if [ "${h}" = "0" ]; then
+        # A zero-height frame at x=0 is what an item Bartender 7 keeps in its
+        # hidden section reports: no window on screen at all, rather than a
+        # window parked off it. What this said before was "on screen at x=0".
+        # It is one thing to fix, not two, so when Bartender owns up to it the
+        # failure is counted there.
+        if [ "${bartender}" = "hidden" ]; then
+          note "the icon has no frame right now; Bartender's answer below says why"
+        else
+          bad "the icon has no frame right now, so it cannot be seen"
+          failures=$((failures + 1))
+        fi
+      elif [ "${x}" -ge 0 ] 2>/dev/null; then
         ok "icon is on screen at x=${x}"
       else
         # This is the one nobody guesses. Bartender, Ice, Vanilla and the rest
         # hide an item by parking it at a large negative x. The item is running
         # and drawing; it is simply not where anyone can see it.
         bad "icon is parked off-screen at x=${x}"
-        note "A menu bar manager is holding it there. Bartender knows it"
-        note "as ${BARTENDER_ID} — a name"
-        note "rather than an ordinal, because the Spoon gives its status"
-        note "item an autosave name, so a decision about it sticks."
-        note ""
-        note "Show it now:"
-        note "  osascript -e 'tell application \"Bartender 6\" \\"
-        note "    to show \"${BARTENDER_ID}\"'"
-        note ""
-        note "To keep it, add that id to the manager's shown items. Ice"
-        note "and Vanilla have the same idea under a different name."
+        note "A menu bar manager is holding it there. Bartender knows it as"
+        note "${BARTENDER_ITEM} — a name rather than an ordinal, because the"
+        note "Spoon gives its status item an autosave name, so a decision"
+        note "about it sticks. Add it to the manager's shown items. Ice and"
+        note "Vanilla have the same idea under a different name."
         failures=$((failures + 1))
       fi
+      ;;
+  esac
+  case "${bartender}" in
+    visible) ok "Bartender shows it" ;;
+    hidden)
+      bad "Bartender is hiding it"
+      note "Bartender's scripting does not move it out: \`show\` returns and"
+      note "leaves the state at hidden. In Bartender's settings, under Menu Bar"
+      note "Layout, drag the Hammerspoon item into the shown section. Its id:"
+      note "${BARTENDER_ITEM}"
+      failures=$((failures + 1))
+      ;;
+    unlisted)
+      note "Bartender has not listed the icon; it does once the item is"
+      note "created — vpnbar restart"
       ;;
   esac
 

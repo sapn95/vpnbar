@@ -109,12 +109,31 @@ was running normally, the process had no children, and no dialog was up. So
 Hammerspoon was not blocked; its message port was not being served, or not
 reached.
 
-Two explanations were tested. That an open menu puts the run loop in a mode the
-port is not registered for: refuted — `libipc.dylib` adds its run-loop source
-with `kCFRunLoopCommonModes`, read off the disassembly. That a killed `hs`
-process leaves a dead instance registered and poisons `print`: the
+Two explanations were tested and refuted. That an open menu puts the run loop
+in a mode the port is not registered for: `libipc.dylib` adds its run-loop
+source with `kCFRunLoopCommonModes`, read off the disassembly. That a killed
+`hs` process leaves a dead instance registered and poisons `print`: the
 registration was reproduced (one instance became two), the poisoning was not.
-The cause is open.
+
+The cause was found later the same day, and it was never in Hammerspoon. A
+`sample` of a client that had been waiting for a minute showed it in
+`-[NSAlert runModal]`. Before it touches the port, the client asks
+LaunchServices whether Hammerspoon is running
+(`runningApplicationsWithBundleIdentifier:`), and when that answer is empty,
+which it is now and then for a process that is plainly there, it puts up
+"Hammerspoon is not running. Would you like to launch it now?" and waits for a
+click. From a script nobody clicks, the alert is on no screen, and `-t` is the
+port's timeout, not the alert's. The empty answer comes in stretches: four
+clients in a row got it over twenty seconds, and a minute later six in a row
+were answered within a tenth of a second each. The message port itself was
+registered and valid throughout, checked from a separate process with
+`CFMessagePortCreateRemote`.
+
+The fix is the client's own `-A`: launch without asking. It launches with
+`NSWorkspaceLaunchWithoutActivation`, so nothing takes focus; that is a no-op
+for a Hammerspoon that is running; and it then polls the port for up to ten
+seconds instead of waiting for a click. Every `hs` call in the script passes
+it.
 
 What follows from it is not. The in-place start cannot tell "no answer" from
 "answered late", and its own kill of a late `hs` is one plausible way to get
