@@ -539,3 +539,132 @@ describe("autoconnect, exclusive must not strand the preferred connection", func
     assert.same({ "connect first", "supersede second", "done" }, seen)
   end)
 end)
+
+describe("autoconnect, an attempt that needs a person waits for one", function()
+  local function pair()
+    return assert(store.normalise({
+      settings = { fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          order = 10,
+          autoconnect = true,
+          fallback = "aws",
+        },
+        { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS", row = "w", order = 20 },
+      },
+    }))
+  end
+  local down = { gp = "disconnected", aws = "disconnected" }
+  local wants = { gp = "login", aws = "login" }
+  local active = { idle = 3, fresh = false, locked = false }
+  local quiet = { idle = 60, fresh = false, locked = false }
+  local arrived = { idle = 0, fresh = true, locked = false }
+  local locked = { idle = 9999, fresh = false, locked = true }
+
+  -- The case autoconnect exists for. A session that is still good reconnects
+  -- without a window, and holding that would be holding the one thing that
+  -- keeps an always-on VPN always on.
+  it("never holds a silent reconnect, however active the person", function()
+    assert.equals("gp", autoconnect.plan(pair(), down, {}, 1e6, active).id)
+  end)
+
+  it("never holds a silent reconnect on a locked screen", function()
+    assert.equals("gp", autoconnect.plan(pair(), down, {}, 1e6, locked).id)
+  end)
+
+  it("holds a connect that needs a login while somebody is typing", function()
+    assert.is_nil(autoconnect.plan(pair(), wants, {}, 1e6, active))
+  end)
+
+  it("makes it after a minute of quiet", function()
+    assert.equals("gp", autoconnect.plan(pair(), wants, {}, 1e6, quiet).id)
+  end)
+
+  -- The person has just arrived. A login window then is what they came for.
+  it("makes it at once on the read that follows a wake or an unlock", function()
+    assert.equals("gp", autoconnect.plan(pair(), wants, {}, 1e6, arrived).id)
+  end)
+
+  -- Idle only grows on a locked screen, and every one of those windows would
+  -- open in front of an empty chair.
+  it("holds it on a locked screen, whatever the idle time says", function()
+    assert.is_nil(autoconnect.plan(pair(), wants, {}, 1e6, locked))
+  end)
+
+  it("holds it on a locked screen even inside the arrival window", function()
+    assert.is_nil(autoconnect.plan(pair(), wants, {}, 1e6, { idle = 0, fresh = true, locked = true }))
+  end)
+
+  it("holds the fallback by the same rule", function()
+    local memory = { gp = { attempts = 1, lastTry = 1e6, started = true } }
+    assert.is_nil(autoconnect.plan(pair(), wants, memory, 1e6, active), "gp mid-cooldown, aws needs a login")
+    assert.equals("aws", autoconnect.plan(pair(), wants, memory, 1e6, quiet).id)
+  end)
+
+  -- A stand-in that opens nothing may carry the traffic while the preferred
+  -- connection waits for a person.
+  it("lets a silent stand-in through while the wanted one needs a login", function()
+    local cfg = assert(store.normalise({
+      settings = { fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          order = 10,
+          autoconnect = true,
+          fallback = "s",
+        },
+        { id = "s", name = "S", backend = "scutil", service = "s", order = 20 },
+      },
+    }))
+    local memory = { gp = { attempts = 1, lastTry = 0, started = true } }
+    local plan = autoconnect.plan(cfg, { gp = "login", s = "disconnected" }, memory, 1e6, active)
+    assert.same({ id = "s", verb = "connect", reason = "fallback" }, plan)
+  end)
+
+  it("goes ahead where nobody measured the idle time, and with no context at all", function()
+    assert.equals("gp", autoconnect.plan(pair(), wants, {}, 1e6, { idle = nil, fresh = false, locked = false }).id)
+    assert.equals("gp", autoconnect.plan(pair(), wants, {}, 1e6).id)
+  end)
+
+  -- A deferral is not a plan. `plan` never writes the memory itself — that is
+  -- the adapter's `remember`, and it only runs on a returned connect — so the
+  -- thing to assert here is that nothing is returned to remember.
+  it("returns nothing for a connect it held back, so there is nothing to remember", function()
+    assert.is_nil(autoconnect.plan(pair(), wants, {}, 1e6, active))
+  end)
+
+  it("still takes an extra tunnel down while somebody is active", function()
+    local cfg = assert(store.setSettings(pair(), { exclusive = true }))
+    local plan = autoconnect.plan(cfg, { gp = "connected", aws = "connected" }, {}, 1e6, active)
+    assert.equals("supersede", plan.verb, "closing is not the thing that opens a login window")
+  end)
+end)
+
+describe("autoconnect.wouldInterrupt", function()
+  local active = { idle = 3, fresh = false, locked = false }
+
+  it("is only ever about the login state", function()
+    for _, state in ipairs({ "disconnected", "connected", "connecting", "unknown" }) do
+      assert.is_false(autoconnect.wouldInterrupt(state, active), state)
+    end
+  end)
+
+  it("is the four conditions, in the order they are asked", function()
+    assert.is_true(autoconnect.wouldInterrupt("login", { idle = 0, fresh = true, locked = true }), "locked beats fresh")
+    assert.is_false(autoconnect.wouldInterrupt("login", { idle = 0, fresh = true, locked = false }), "fresh")
+    assert.is_false(autoconnect.wouldInterrupt("login", { idle = 60, fresh = false, locked = false }), "quiet")
+    assert.is_false(autoconnect.wouldInterrupt("login", { idle = nil, fresh = false, locked = false }), "unmeasured")
+    assert.is_true(autoconnect.wouldInterrupt("login", { idle = 59, fresh = false, locked = false }), "typing")
+  end)
+
+  it("copes with no context at all", function()
+    assert.is_false(autoconnect.wouldInterrupt("login", nil))
+  end)
+end)

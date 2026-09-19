@@ -114,7 +114,7 @@ newest_log() {
   printf '%s\n' "${newest}"
 }
 
-# The last thing the log says about the connection, in our four words.
+# The last thing the log says about the connection, in our five words.
 #
 # Every line that states a transition counts, and the last one wins, so the
 # three-minute "Profile connected" heartbeat cannot outvote a disconnection that
@@ -157,7 +157,17 @@ log_state() {
       sub(/^.*Profile connect succeeded:[[:space:]]*/, "", name)
       set_named(name)
     }
-    /SAML authentication required/             { s = "disconnected" }
+    # The session has ended and the client is asking for a person. Down, with
+    # the reason attached, so nothing automatic goes on asking into a locked
+    # screen. Named like the connected line: a login another profile needs is
+    # not one this profile needs. (No apostrophes in here: this is inside the
+    # single-quoted awk program.)
+    /SAML authentication required for profile:/ {
+      name = $0
+      sub(/^.*SAML authentication required for profile:[[:space:]]*/, "", name)
+      name = trim(name)
+      if (wanted == "" || name == trim(wanted)) { s = "login" } else { s = "disconnected" }
+    }
     /Disconnecting all connections/            { s = "disconnected" }
     END { if (s != "") print s }
   ' "${log}"
@@ -165,6 +175,35 @@ log_state() {
 
 app_running() {
   pgrep -f "${APP}.app/Contents/MacOS" >/dev/null 2>&1
+}
+
+# Has this profile ever needed a person to sign in?
+#
+# Measured on the machine this was written for: the client logs "SAML
+# authentication required" on every single connect, twelve out of twelve
+# across three days, user-initiated and automatic alike. There is no silent
+# path. So a profile that has needed a login once will need one next time, and
+# "disconnected" for it means "the next connect opens a browser tab" — which is
+# what vpnbar holds until a person is there. Read from every log the client
+# has kept, not only today's, and named per profile: a certificate profile that
+# never asked is never held.
+needed_login_before() {
+  local wanted="${1:-}" candidate
+  for candidate in "${LOG_DIR}"/aws_vpn_client_gui_*.log; do
+    [ -r "${candidate}" ] || continue
+    if awk -v wanted="${wanted}" '
+      function trim(text) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", text); return text }
+      /SAML authentication required for profile:/ {
+        name = $0
+        sub(/^.*SAML authentication required for profile:[[:space:]]*/, "", name)
+        if (wanted == "" || trim(name) == trim(wanted)) { found = 1 }
+      }
+      END { exit found ? 0 : 1 }
+    ' "${candidate}"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 cmd_status() {
@@ -201,6 +240,12 @@ cmd_status() {
   # that wrote "none" and then quit is not about to have connected since.
   if [ "${state}" != "disconnected" ] && ! app_running; then
     echo unknown
+    return
+  fi
+
+  # Down is only plain "down" for a profile that has never asked for a person.
+  if [ "${state}" = "disconnected" ] && needed_login_before "${wanted}"; then
+    echo login
     return
   fi
 

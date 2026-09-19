@@ -92,7 +92,11 @@ AppleScript dictionary and no URL scheme for connect or disconnect — the only
 door in is the accessibility API, which is what
 [ADR 0001](docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md) records and what
 this code uses. The consequence for the menu: **give a GlobalProtect connection
-a probe**, or reading its state means opening its panel.
+a probe**, or reading its state means opening its panel. When the probe says
+the tunnel is down, the agent's own event log is read once more to tell *down*
+from *down because the session ended*: the second reads as `needs your login`,
+and the next connect will open a SAML window rather than a tunnel
+([ADR 0029](docs/adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
 
 ## Tunnels that must stay up
 
@@ -117,6 +121,14 @@ fifteen, and stays there for as long as it takes
 ([ADR 0024](docs/adr/0024-autoconnect-backs-off-it-does-not-give-up.md)). An
 always-on VPN that is down while the thing meant to bring it up has decided not
 to is the state this is here to remove.
+
+A connection that **needs your login** is the one exception. Its session has
+ended, so a retry opens a login window and nothing else, and a login window
+needs a person: it is held while the screen is locked, and otherwise until a
+minute has passed without a keystroke, except right after a wake or an unlock,
+when one is let through at once. A connection that is merely down reconnects
+silently and is never held, at any hour
+([ADR 0029](docs/adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
 
 Anything that makes the old failures meaningless puts it back on the fast path:
 the connection comes up, the Mac wakes, somebody unlocks it, or you toggle the

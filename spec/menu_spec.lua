@@ -775,3 +775,38 @@ describe("menu.build, the order is the priority", function()
     assert.is_truthy(rows[2].tooltip:find("taken down first", 1, true))
   end)
 end)
+
+describe("menu.build, a connection that needs a login", function()
+  local function one(extra)
+    local profile = { id = "gp", name = "GP", backend = "globalprotect", app = "GP" }
+    for k, v in pairs(extra or {}) do
+      profile[k] = v
+    end
+    return assert(store.normalise({ profiles = { profile } }))
+  end
+
+  it("says so on the row, since the glyph cannot", function()
+    local row = menu.build(one(), { gp = "login" })[1]
+    assert.equals("○  GP", row.title)
+    assert.matches("needs your login", row.tooltip)
+    assert.same({ kind = "connect", id = "gp" }, row.action)
+  end)
+
+  -- Protection points at bringing a connection down. Down for want of a login
+  -- is still down, and the one click that may bring it back must stay.
+  it("offers a protected connection its one click back, as it would when merely down", function()
+    local row = menu.build(one({ protected = true }), { gp = "login" })[1]
+    assert.is_nil(row.disabled, "not greyed out")
+    assert.same({ kind = "connect", id = "gp" }, row.action)
+    assert.matches("protected once it is up", row.tooltip)
+  end)
+
+  it("ranks it as down for the one glyph in the menu bar", function()
+    assert.equals("connecting", menu.overall({ a = "login", b = "connecting" }))
+    assert.equals("connected", menu.overall({ a = "login", b = "connected" }))
+    -- The one that fails if `login` is missing from the ranking: unranked
+    -- would lose to unknown, and a menu that knows a login is needed is not a
+    -- menu where nothing is known.
+    assert.equals("login", menu.overall({ a = "login", b = "unknown" }))
+  end)
+end)

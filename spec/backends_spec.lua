@@ -614,3 +614,92 @@ describe("quitting says whether the application actually went", function()
     assert.is_nil(err)
   end)
 end)
+
+describe("backends.status, down with a reason", function()
+  local NO_TUNNEL = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n\tinet 127.0.0.1 netmask 0xff000000\n"
+  local TUNNEL = "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n"
+    .. "\tinet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff\n"
+  local function gp(extra)
+    local profile = {
+      id = "gp",
+      name = "GP",
+      backend = "globalprotect",
+      app = "GP",
+      probe = { cidr = "10.0.0.0/8", interface = "utun" },
+    }
+    for k, v in pairs(extra or {}) do
+      profile[k] = v
+    end
+    return profile
+  end
+  local LOGGED_OUT =
+    "[Info ]: Tunnel is down due to disconnection.\n[Info ]: User was logged out of Gateway example.invalid.\n"
+  local RESTORED = "[Info ]: User was logged out of Gateway example.invalid.\n[Info ]: Tunnel is restored.\n"
+
+  it("turns a probe's 'down' into 'login' when the agent's log says the session ended", function()
+    local runtime = fakeRuntime({ ifconfig = NO_TUNNEL, exec = LOGGED_OUT })
+    assert.equals("login", backends.status(gp(), runtime))
+  end)
+
+  it("leaves it at 'disconnected' when the log does not say so", function()
+    local runtime = fakeRuntime({ ifconfig = NO_TUNNEL, exec = RESTORED })
+    assert.equals("disconnected", backends.status(gp(), runtime))
+  end)
+
+  it("does not ask the log at all while the tunnel is up", function()
+    local runtime = fakeRuntime({ ifconfig = TUNNEL, exec = LOGGED_OUT })
+    assert.equals("connected", backends.status(gp(), runtime))
+    assert.equals(0, #runtime.calls.exec, "no tail while the probe says up")
+  end)
+
+  -- Only the markers, from the whole file. A trailing-line budget let a logout
+  -- scroll out after a dozen network changes, and "scrolled out" read as
+  -- "disconnected", which is the case that opens the window on schedule.
+  it("greps the whole event log for the session markers, quoted, and lets the config point elsewhere", function()
+    local runtime = fakeRuntime({ ifconfig = NO_TUNNEL, exec = "" })
+    backends.status(gp({ eventLog = "/tmp/some log.txt" }), runtime)
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("grep -F", 1, true), ran)
+    assert.is_truthy(ran:find("'/tmp/some log.txt'", 1, true), ran)
+    assert.is_nil(ran:find("tail -n 300", 1, true), "no line budget on the file itself")
+    for _, marker in ipairs(backends.byName.globalprotect.SESSION_MARKERS) do
+      assert.is_truthy(ran:find("-e '" .. marker .. "'", 1, true), marker)
+    end
+    local default = fakeRuntime({ ifconfig = NO_TUNNEL, exec = "" })
+    backends.status(gp(), default)
+    assert.is_truthy(default.calls.exec[1]:find("pan_gp_event.log", 1, true))
+  end)
+
+  -- The markers exist twice: once as the strings grep is asked for, once as
+  -- the strings parse looks for. Dropping one from the grep list alone would
+  -- pass every other test while that line silently stopped arriving.
+  it("greps for exactly the markers the parser can read", function()
+    local parse = require("vpnbar.parse")
+    for _, marker in ipairs(backends.byName.globalprotect.SESSION_MARKERS) do
+      local alone = "[Info ]: " .. marker .. " example.invalid."
+      local dead = parse.globalprotectNeedsLogin(alone)
+      local afterAlive = parse.globalprotectNeedsLogin("[Info ]: Tunnel is restored.\n" .. alone)
+      local afterDead = parse.globalprotectNeedsLogin("[Info ]: User was logged out of Gateway x.\n" .. alone)
+      -- Each marker must move the answer in one direction or the other; a
+      -- string the parser ignores would be a wasted grep and a lying list.
+      assert.is_true(afterAlive ~= afterDead or dead == afterAlive, "parser does not react to: " .. marker)
+    end
+  end)
+
+  it("stays at 'disconnected' when reading the log throws", function()
+    local runtime = fakeRuntime({
+      ifconfig = NO_TUNNEL,
+      exec = function()
+        error("no such file")
+      end,
+    })
+    assert.equals("disconnected", backends.status(gp(), runtime))
+  end)
+
+  it("accepts 'login' from a backend that reports it directly", function()
+    local profile =
+      { id = "s", name = "S", backend = "shell", commands = { status = "st", connect = "c", disconnect = "d" } }
+    local runtime = fakeRuntime({ exec = "login" })
+    assert.equals("login", backends.status(profile, runtime))
+  end)
+end)

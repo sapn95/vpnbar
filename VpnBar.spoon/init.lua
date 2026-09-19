@@ -203,6 +203,37 @@ local function findPressable(root, verbs)
   end)
 end
 
+--- Do something that takes the focus, then give it back.
+---
+--- Every way this Spoon reaches a VPN client goes through that client's own
+--- user interface: a menu-bar panel that opens with keyboard focus, a window
+--- brought up by `open`. Each of those takes the focus from whatever the person
+--- was typing into, and nothing gave it back. With autoconnect retrying on a
+--- schedule, that was the focus being taken every few minutes, for as long as a
+--- connection stayed down.
+---
+--- The window is preferred to the application: an app with several windows
+--- would otherwise come back with whichever one it chose.
+--- @param body function
+--- @return ... whatever body returns
+local function keepingFocus(body)
+  local app = hs.application.frontmostApplication()
+  local window = hs.window.focusedWindow()
+  -- Restored whether or not the body threw. Every caller is under a pcall
+  -- already, but a throw that left the focus on the agent's panel would be the
+  -- one occurrence of the thing this exists to prevent.
+  local results = table.pack(pcall(body))
+  if window and window:isVisible() then
+    window:focus()
+  elseif app then
+    app:activate()
+  end
+  if not results[1] then
+    error(results[2], 0)
+  end
+  return table.unpack(results, 2, results.n)
+end
+
 --- Open the panel, do something with it, close it again. The same click both
 --- opens and closes it, which is more reliable than sending Escape and does
 --- not depend on which window happens to be focused.
@@ -266,6 +297,8 @@ local function windowOf(appName)
   if window then
     return window, nil
   end
+  -- Not `open -g`. Measured: plain `open -a` on the running client left the
+  -- focus where it was, and `-g` moved the focused window to the client's.
   hs.execute("/usr/bin/open -a " .. backends.shellQuote(appName))
   for _ = 1, 25 do
     window = (element:attributeValue("AXWindows") or {})[1]
@@ -338,7 +371,9 @@ local function panelPress(appName, verbs)
           hs.timer.usleep(100000)
         end
         if not target then
-          hs.eventtap.keyStroke({}, "escape", 0)
+          -- Addressed to the agent. Sent to nowhere in particular, this went
+          -- to whatever had the keyboard, which by now was somebody's editor.
+          hs.eventtap.keyStroke({}, "escape", 0, hs.application.get(appName))
         end
       end
     end
@@ -371,13 +406,19 @@ function obj:runtime(allowPanelReads)
       if not (allowPanelReads and self.panelReads) then
         return "unknown"
       end
-      return panelState(app)
+      return keepingFocus(function()
+        return panelState(app)
+      end)
     end,
     press = function(app, verbs)
-      return panelPress(app, verbs)
+      return keepingFocus(function()
+        return panelPress(app, verbs)
+      end)
     end,
     pressRow = function(app, row, buttonTitle)
-      return pressRow(app, row, buttonTitle)
+      return keepingFocus(function()
+        return pressRow(app, row, buttonTitle)
+      end)
     end,
   }
 end
@@ -509,12 +550,33 @@ function obj:refresh(options)
   -- the menu does not. Otherwise looking at the menu would start a VPN: the
   -- awsvpn backend brings a window up and clicks it, and having that happen
   -- because somebody wanted to read a status is not acceptable.
-  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time()) or nil
+  -- What this read knows about the person, for the one kind of connect that
+  -- needs one: a connection whose session has ended. Everything else is silent
+  -- and is never held.
+  --
+  -- `idleTime` asks IOKit and raises when it cannot; a refresh must not die on
+  -- that, and nil is the answer that means "go ahead". `fresh` is the window
+  -- after a wake or an unlock, spent by the first login-needing connect made in
+  -- it, so the second connection does not get the exemption ten seconds after
+  -- the first used it. `locked` is nobody there, whatever the idle time says.
+  local context
+  if options.autoconnect then
+    local measured, seconds = pcall(hs.host.idleTime)
+    context = {
+      idle = measured and seconds or nil,
+      fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
+      locked = self:screenLocked(),
+    }
+  end
+  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
   if plan then
     local profile = store.get(self.config, plan.id)
     self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
     if plan.verb == "connect" then
       autoconnect.remember(self.attempts, plan.id, os.time())
+      if context.fresh and states[plan.id] == "login" then
+        self.freshSpent = true
+      end
     else
       -- Taking the stand-in back down ends its history: it is not a failure,
       -- and the next time it is needed it should start from nothing.
@@ -735,6 +797,27 @@ function obj:disconnectAll()
     self:refreshSoon(nil, 2)
     work.finish(self.work)
   end)
+end
+
+--- Is the screen locked right now?
+---
+--- Two sources, because each has a hole. The lock and unlock events are what
+--- keep `self.locked` current, and on this machine they are reliable — the lock
+--- fires a second after `systemWillSleep`, so a Mac that sleeps unlocked wakes
+--- with the flag already set. But a Spoon loaded or restarted while the screen
+--- is locked has never seen an event, and would read the screen as unlocked
+--- until the next lock. For that case only, the session properties are asked:
+--- they carry `CGSSessionScreenIsLocked` while the screen is locked and not
+--- otherwise, both measured here. Only for that case, because once an event
+--- has been seen the events are the authority, and a dictionary that lagged an
+--- unlock by a moment must not be able to overrule the unlock.
+--- @return boolean
+function obj:screenLocked()
+  if self.locked ~= nil then
+    return self.locked == true
+  end
+  local ok, props = pcall(hs.caffeinate.sessionProperties)
+  return ok and type(props) == "table" and props.CGSSessionScreenIsLocked == true
 end
 
 --- Quit or restart the application behind one connection, having asked first.
@@ -1035,15 +1118,40 @@ function obj:start()
   -- person who just typed their password is about to want a VPN.
   self.wake = hs.caffeinate.watcher.new(function(event)
     local watcher = hs.caffeinate.watcher
+    -- A locked screen is nobody there. Silent reconnects go on as before; the
+    -- one thing held is a connect that would put a login window in front of an
+    -- empty chair, and the unlock below is what lets it through.
+    if event == watcher.screensDidLock then
+      self.locked = true
+      return
+    end
     if event ~= watcher.systemDidWake and event ~= watcher.screensDidUnlock then
       return
     end
     local now = os.time()
     -- Waking a locked Mac fires both, so the second one is the same arrival.
-    if not work.freshStart(self.lastFreshStart, now) then
+    local arrival = work.freshStart(self.lastFreshStart, now)
+    if event == watcher.screensDidUnlock then
+      self.locked = false
+      -- The arrival window reopens on every unlock, debounced or not. The
+      -- debounce exists to stop a second `forget` and a second read schedule;
+      -- it must not deny the person who typed a password sixteen seconds
+      -- after the wake the one login window they came for, when the read
+      -- fifteen seconds after the wake had held it for a locked screen.
+      self.lastFreshStart = now
+      self.freshSpent = false
+    end
+    if not arrival then
+      -- One read of its own, so the window is used before it closes. Left to
+      -- the timer, that only worked because the interval is shorter than the
+      -- window, and nothing pins the two together.
+      if event == watcher.screensDidUnlock then
+        self:refreshSoon({ autoconnect = true }, 2)
+      end
       return
     end
     self.lastFreshStart = now
+    self.freshSpent = false
     -- Failures from before the lid closed say nothing about the network on
     -- the other side of it, so autoconnect starts again from nothing.
     autoconnect.forget(self.attempts)
@@ -1051,6 +1159,9 @@ function obj:start()
     -- instant of the wake, when there is no route yet — see work.WAKE_READS.
     -- All of them are claimed now, which is what keeps the mark moving from
     -- the moment the screen comes back until the state has settled.
+    -- Which of these may put a login window on screen is decided in `refresh`
+    -- from `lastFreshStart`, so the whole window after the arrival counts and
+    -- not one read of it.
     for _, read in ipairs(work.WAKE_READS) do
       self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
     end

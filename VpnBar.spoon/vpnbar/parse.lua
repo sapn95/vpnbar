@@ -7,7 +7,10 @@ local parse = {}
 --- The four words the rest of the code knows. Everything a backend says has to
 --- come through here first, so a menu item never has to guess what
 --- "Disconnecting" or "Verbunden" was supposed to mean.
-parse.STATES = { connected = true, connecting = true, disconnected = true, unknown = true }
+--- The five words. `login` is down with a reason: the session has ended and
+--- only a person can start another, so nothing automatic should keep asking
+--- ([ADR 0029](../../docs/adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
+parse.STATES = { connected = true, connecting = true, disconnected = true, login = true, unknown = true }
 
 local WORDS = {
   ["connected"] = "connected",
@@ -18,6 +21,9 @@ local WORDS = {
   ["disconnecting"] = "connecting",
   ["reconnecting"] = "connecting",
   ["authenticating"] = "connecting",
+  ["login"] = "login",
+  ["needs login"] = "login",
+  ["sign in"] = "login",
   ["disconnected"] = "disconnected",
   ["disconnect"] = "disconnected",
   ["down"] = "disconnected",
@@ -209,6 +215,53 @@ function parse.probeState(output, probe)
     end
   end
   return "disconnected", nil
+end
+
+--- Does GlobalProtect's own event log say the session has ended?
+---
+--- The agent writes one line per event to a world-readable log. A session that
+--- the gateway has ended is announced ("User was logged out", "Auth Failed
+--- during login", "Cleared user auth cookie", "Invalid user auth cookie"), and
+--- the next connect starts a SAML login rather than a tunnel. A session that is
+--- still good reconnects on its own and says so ("Auto Gateway login finished",
+--- "IPSec tunnel creation finished", "Tunnel is restored"). The last of either
+--- kind wins, so a logout followed by a login is not a logout.
+---
+--- Measured, and worth knowing: on the machine this was written for, that SAML
+--- login usually completes inside the agent's own web view from a cached
+--- identity in a few seconds, with no window. So `login` here means "the next
+--- connect may need a person", and holding it is a bounded precaution rather
+--- than the difference between a window and none.
+---
+--- Anything else — a keep-alive timeout, an unreachable gateway — says nothing
+--- about the session and is ignored: those are exactly the failures worth
+--- retrying without a person. The alive markers are checked first because the
+--- agent writes "Cleared user auth cookie" without a newline, and whatever
+--- follows on that physical line came later.
+--- @param text string|nil the relevant lines of the event log, oldest first
+--- @return boolean
+function parse.globalprotectNeedsLogin(text)
+  if type(text) ~= "string" then
+    return false
+  end
+  local needs = false
+  for line in text:gmatch("[^\n]+") do
+    if
+      line:find("Auto Gateway login finished", 1, true)
+      or line:find("IPSec tunnel creation finished", 1, true)
+      or line:find("Tunnel is restored", 1, true)
+    then
+      needs = false
+    elseif
+      line:find("User was logged out of Gateway", 1, true)
+      or line:find("Auth Failed during login", 1, true)
+      or line:find("Cleared user auth cookie", 1, true)
+      or line:find("Invalid user auth cookie", 1, true)
+    then
+      needs = true
+    end
+  end
+  return needs
 end
 
 return parse

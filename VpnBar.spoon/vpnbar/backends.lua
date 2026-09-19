@@ -148,6 +148,51 @@ end
 globalprotect.quit = quitApp
 globalprotect.restart = restartApp
 
+--- Where the agent writes one line per event. World-readable, and the same
+--- file that diagnosed every GlobalProtect incident in this repository.
+globalprotect.EVENT_LOG = "/Library/Logs/PaloAltoNetworks/GlobalProtect/pan_gp_event.log"
+
+--- The lines in the event log that say anything about the session, in the
+--- order they were written. Only the markers, from the whole file: a fixed
+--- number of trailing lines was the first version, and at the agent's measured
+--- rate of around twenty lines per network change a logout scrolled out of it
+--- after a dozen of those, which read as "disconnected" and opened the SAML
+--- window on schedule. The file is small and the grep is bounded by it.
+globalprotect.SESSION_MARKERS = {
+  "User was logged out of Gateway",
+  "Auth Failed during login",
+  "Cleared user auth cookie",
+  "Invalid user auth cookie",
+  "Auto Gateway login finished",
+  "IPSec tunnel creation finished",
+  "Tunnel is restored",
+}
+
+--- @param log string
+--- @return string command
+function globalprotect.sessionCommand(log)
+  local parts = { "/usr/bin/grep -F" }
+  for _, marker in ipairs(globalprotect.SESSION_MARKERS) do
+    parts[#parts + 1] = "-e " .. backends.shellQuote(marker)
+  end
+  parts[#parts + 1] = backends.shellQuote(log)
+  parts[#parts + 1] = "2>/dev/null | /usr/bin/tail -n 20"
+  return table.concat(parts, " ")
+end
+
+--- Has the gateway ended the session, so that the next connect starts a login
+--- rather than a tunnel? Asked only once the probe has said the tunnel is
+--- down: it turns "down" into "down, and a person may be needed", which is
+--- what keeps autoconnect from starting that login on a locked screen.
+--- @param profile table
+--- @param runtime table
+--- @return boolean
+function globalprotect.needsLogin(profile, runtime)
+  local log = profile.eventLog or globalprotect.EVENT_LOG
+  local out = runtime.exec(globalprotect.sessionCommand(log))
+  return parse.globalprotectNeedsLogin(out)
+end
+
 local shell = {}
 
 function shell.status(profile, runtime)
@@ -310,13 +355,21 @@ backends.APP_VERBS = { quit = true, restart = true }
 --- @param runtime table
 --- @return string state
 function backends.status(profile, runtime)
+  local backend = backends.byName[profile.backend]
   if profile.probe then
     local state = parse.probeState(runtime.ifconfig(), profile.probe)
     if state ~= "unknown" then
+      -- A probe can only say up or down. Down with a session that has ended is
+      -- a different thing from down, and the backend's own log knows which.
+      if state == "disconnected" and backend and backend.needsLogin then
+        local ok, needs = pcall(backend.needsLogin, profile, runtime)
+        if ok and needs then
+          return "login"
+        end
+      end
       return state
     end
   end
-  local backend = backends.byName[profile.backend]
   if not backend then
     return "unknown"
   end

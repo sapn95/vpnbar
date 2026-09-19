@@ -13,18 +13,22 @@ local GLYPHS = {
   connected = "●",
   connecting = "◐",
   disconnected = "○",
+  login = "○",
   unknown = "◌",
 }
 
 -- Worst-to-best, for the one glyph in the menu bar: anything connected shows
 -- as connected, anything mid-flight shows as busy, and only a menu where
 -- nothing is known shows as unknown.
-local PRECEDENCE = { connected = 4, connecting = 3, disconnected = 2, unknown = 1 }
+local PRECEDENCE = { connected = 4, connecting = 3, disconnected = 2, login = 2, unknown = 1 }
 
 local LABELS = {
   connected = "connected",
   connecting = "working…",
   disconnected = "not connected",
+  -- Down, and the row can say why: the session has ended, and the next connect
+  -- opens a login window rather than a tunnel.
+  login = "needs your login",
   unknown = "state unknown",
 }
 
@@ -114,6 +118,12 @@ end
 -- unconfigured probe turns into a panel opening by itself.
 local function isUp(state)
   return state == "connected" or state == "connecting"
+end
+
+-- Down, whether or not a person is needed to bring it back. What a protected
+-- row may offer turns on this and not on the one word "disconnected".
+local function isDown(state)
+  return state == "disconnected" or state == "login"
 end
 
 --- Everything a **Disconnect everything** would actually take down, in the order
@@ -308,7 +318,7 @@ function menu.build(cfg, states)
 
   for _, profile in ipairs(visible) do
     local state = states[profile.id] or "unknown"
-    if profile.protected and state ~= "disconnected" then
+    if profile.protected and not isDown(state) then
       -- Protected means protected from being brought *down*: an always-on
       -- corporate VPN is a policy, and a menu item that would breach it is
       -- worse than no menu item. Up or on its way up, there is nothing this

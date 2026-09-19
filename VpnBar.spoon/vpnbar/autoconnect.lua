@@ -26,6 +26,18 @@ autoconnect.COOLDOWN = 60
 --- which becomes possible again is picked up without anybody doing anything.
 autoconnect.COOLDOWN_CEILING = 900
 
+--- Seconds without a keystroke or a click before an attempt that needs a person
+--- may put a login window on the screen.
+---
+--- A connection in the `login` state is down because its session has ended,
+--- and its next connect opens a SAML window rather than a tunnel. Made on a
+--- schedule, that is the focus taken from whatever somebody is typing into,
+--- every few minutes, for as long as the connection stays down; made into a
+--- locked screen, it is a window nobody can answer
+--- ([ADR 0029](../../docs/adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
+--- A minute of quiet is a pause, not a gap between two words.
+autoconnect.IDLE_BEFORE_INTERRUPTING = 60
+
 --- How many times to ask for the connection somebody actually chose before
 --- accepting that it is not coming and trying its fallback.
 ---
@@ -104,6 +116,38 @@ function autoconnect.forget(memory, id)
   memory[id] = nil
 end
 
+--- Would an automatic connect of a connection in this state need a person who
+--- is not there to be asked?
+---
+--- Only `login` is ever held: every other down state reconnects silently when it
+--- reconnects at all, and holding those would be holding the one case autoconnect
+--- exists for. `context` is what the adapter knows about the person:
+--- `locked` (the screen is locked: nobody is there, whatever the idle time says),
+--- `fresh` (inside the window after a wake or an unlock, when somebody has just
+--- sat down and a login window is what they came for), and `idle` (seconds since
+--- the last input, or nil where nobody measured it, which means go ahead).
+--- @param state string
+--- @param context table|nil { locked = boolean, fresh = boolean, idle = number|nil }
+--- @return boolean
+function autoconnect.wouldInterrupt(state, context)
+  if state ~= "login" then
+    return false
+  end
+  context = context or {}
+  if context.locked then
+    return true
+  end
+  if context.fresh or type(context.idle) ~= "number" then
+    return false
+  end
+  return context.idle < autoconnect.IDLE_BEFORE_INTERRUPTING
+end
+
+--- Down, whether silently or for want of a login.
+local function isDown(state)
+  return state == "disconnected" or state == "login"
+end
+
 --- What, if anything, to connect now.
 ---
 --- Returns at most one action, because two VPNs coming up at the same moment
@@ -117,8 +161,9 @@ end
 --- @param states table map of profile id to state
 --- @param memory table the caller's memory of what has been tried
 --- @param now number seconds
---- @return table|nil { id, verb = "connect"|"disconnect", reason }
-function autoconnect.plan(cfg, states, memory, now)
+--- @param context table|nil what the adapter knows about the person, see `wouldInterrupt`
+--- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
+function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
   local settings = store.settings(cfg)
 
@@ -188,7 +233,7 @@ function autoconnect.plan(cfg, states, memory, now)
     if profile.autoconnect then
       local state = states[profile.id] or "unknown"
 
-      if state == "disconnected" then
+      if isDown(state) then
         local blocked = false
         if settings.exclusive then
           -- Only something ranked *above* this one may hold it down.
@@ -223,7 +268,7 @@ function autoconnect.plan(cfg, states, memory, now)
           -- up the preferred connection was never tried again and the machine
           -- stayed on second best. A fallback is there to carry traffic while
           -- the preferred one is unavailable, not to replace the preference.
-          if ready then
+          if ready and not autoconnect.wouldInterrupt(state, context) then
             return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
@@ -231,20 +276,25 @@ function autoconnect.plan(cfg, states, memory, now)
           -- where the stand-in gets its turn. The two therefore alternate, each
           -- on its own backoff, which is what "keep testing back and forth"
           -- amounts to once neither is answering.
+          --
+          -- Held back for interrupting lands here as well, on purpose: a
+          -- stand-in that opens nothing may carry the traffic while the
+          -- preferred connection waits for a quiet moment, and the supersede
+          -- rule takes the stand-in down again once the preferred one arrives.
           local wantsFallback = settings.fallback and profile.fallback ~= nil
           if wantsFallback and attempts >= autoconnect.ATTEMPTS_BEFORE_FALLBACK then
             local fallback = store.get(cfg, profile.fallback)
             local fallbackState = states[profile.fallback] or "unknown"
-            -- `disconnected`, not merely "not up". `unknown` means nobody could
-            -- read it, and asking an unreadable connection to connect is the
-            -- thing [ADR 0013] says not to do — the rule was stated for the
-            -- wanted connection and quietly not applied to its stand-in.
-            if fallback and fallbackState == "disconnected" then
+            -- Down, not merely "not up". `unknown` means nobody could read it,
+            -- and asking an unreadable connection to connect is the thing
+            -- [ADR 0013] says not to do — the rule was stated for the wanted
+            -- connection and quietly not applied to its stand-in.
+            if fallback and isDown(fallbackState) then
               local fallbackAttempts = attemptsFor(memory, profile.fallback)
               local fallbackLast = lastTryFor(memory, profile.fallback)
               local fallbackReady = fallbackLast == nil
                 or (now - fallbackLast) >= autoconnect.cooldown(fallbackAttempts)
-              if fallbackReady then
+              if fallbackReady and not autoconnect.wouldInterrupt(fallbackState, context) then
                 return { id = profile.fallback, verb = "connect", reason = "fallback" }
               end
             end
