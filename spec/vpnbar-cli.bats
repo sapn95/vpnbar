@@ -18,7 +18,8 @@ setup() {
   mkdir -p "${VPNBAR_HAMMERSPOON_APP}"
 
   # `hs` answers with whatever the test puts in STUB_HS_ANSWER; `pgrep` decides
-  # whether Hammerspoon counts as running.
+  # whether Hammerspoon counts as running and, asked about Bartender, whether
+  # Bartender does; `osascript` answers for Bartender.
   export STUB_HS_CALLS="${TMP}/hs-calls"
   : >"${STUB_HS_CALLS}"
   # One answer per call when STUB_HS_ANSWER_FILE is set (a line is consumed
@@ -36,16 +37,24 @@ printf '%s\n' "${STUB_HS_ANSWER:-}"
 EOF
   cat >"${STUB}/pgrep" <<'EOF'
 #!/usr/bin/env bash
+case "$*" in *Bartender*) exit "${STUB_PGREP_BARTENDER_EXIT:-0}" ;; esac
 exit "${STUB_PGREP_EXIT:-0}"
+EOF
+  cat >"${STUB}/osascript" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_OSASCRIPT_ANSWER:-}"
 EOF
   # Nothing in these tests should wait for real: the start fallback polls
   # thirty times with a sleep between.
   printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"
-  chmod +x "${STUB}/hs" "${STUB}/pgrep" "${STUB}/sleep"
+  chmod +x "${STUB}/hs" "${STUB}/pgrep" "${STUB}/osascript" "${STUB}/sleep"
   # Never let a search reach the real Hammerspoon on this machine.
   export VPNBAR_HS="${STUB}/hs"
   export PATH="${STUB}:${PATH}"
-  export STUB_HS_ANSWER="900 32"
+  export STUB_HS_ANSWER="900 32 22"
+  # Bartender 7's answer to `list menu bar item details`: one object per item,
+  # key order not fixed.
+  export STUB_OSASCRIPT_ANSWER='[{"state":"visible","id":"plist:status:org.hammerspoon.Hammerspoon::vpnbar","name":"Hammerspoon"}]'
 }
 
 teardown() {
@@ -110,11 +119,81 @@ loads_it() {
 @test "doctor names the menu bar manager when the icon is off-screen" {
   "${SCRIPT}" link
   loads_it
-  export STUB_HS_ANSWER="-9224 32"
+  export STUB_HS_ANSWER="-9224 32 22"
   run "${SCRIPT}" doctor
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"off-screen"* ]]
   [[ "${output}" == *"Bartender"* ]]
+}
+
+@test "doctor does not read a zero-height frame as on screen" {
+  # An item Bartender 7 keeps in its hidden section has no window at all and
+  # reports x=0, height 0. This used to be reported as "on screen at x=0".
+  "${SCRIPT}" link
+  loads_it
+  export STUB_HS_ANSWER="0 22 0"
+  run "${SCRIPT}" doctor
+  [[ "${output}" == *"no frame"* ]]
+  [[ "${output}" != *"on screen"* ]]
+  [[ "${output}" != *"off-screen"* ]]
+}
+
+@test "doctor reports that Bartender shows the icon" {
+  "${SCRIPT}" link
+  loads_it
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"Bartender shows it"* ]]
+}
+
+@test "doctor fails when Bartender hides the icon and names the item to drag" {
+  "${SCRIPT}" link
+  loads_it
+  export STUB_OSASCRIPT_ANSWER='[{"id":"plist:status:com.example.other::Item-0","state":"visible"},{"id":"plist:status:org.hammerspoon.Hammerspoon::vpnbar","name":"Hammerspoon","state":"hidden"}]'
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Bartender is hiding it"* ]]
+  [[ "${output}" == *"Menu Bar"* ]]
+  [[ "${output}" == *"plist:status:org.hammerspoon.Hammerspoon::vpnbar"* ]]
+}
+
+@test "doctor notes an icon Bartender has not listed" {
+  "${SCRIPT}" link
+  loads_it
+  export STUB_OSASCRIPT_ANSWER='[{"id":"plist:status:com.example.other::Item-0","state":"visible"}]'
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"not listed"* ]]
+}
+
+@test "doctor leaves Bartender out when it is not running" {
+  "${SCRIPT}" link
+  loads_it
+  export STUB_PGREP_BARTENDER_EXIT=1
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"Bartender"* ]]
+}
+
+@test "doctor does not fail on Bartender running but not answering" {
+  "${SCRIPT}" link
+  loads_it
+  export STUB_OSASCRIPT_ANSWER=""
+  run "${SCRIPT}" doctor
+  [ "${status}" -eq 0 ]
+  [[ "${output}" != *"Bartender"* ]]
+}
+
+@test "every call to hs launches Hammerspoon without a prompt" {
+  # Without -A the client, told by LaunchServices that Hammerspoon is not
+  # running, opens a modal alert that no timeout covers.
+  "${SCRIPT}" link
+  loads_it
+  export STUB_HS_ANSWER="started"
+  "${SCRIPT}" start >/dev/null
+  run "${SCRIPT}" doctor
+  grep -q '^-A -c' "${STUB_HS_CALLS}"
+  ! grep -q '^-c ' "${STUB_HS_CALLS}"
 }
 
 @test "doctor says so when the Spoon is not linked" {
@@ -512,7 +591,7 @@ SH
   # script, which is many lines. So: exactly one reload, worded exactly so,
   # and after the in-place attempt.
   [ "$(grep -c 'hs.reload' "${STUB_HS_CALLS}")" -eq 1 ]
-  grep -qxF -- '-c hs.timer.doAfter(0.5, hs.reload)' "${STUB_HS_CALLS}"
+  grep -qxF -- '-A -c hs.timer.doAfter(0.5, hs.reload)' "${STUB_HS_CALLS}"
   local attempt reload
   attempt="$(grep -n 'already running' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
   reload="$(grep -n 'hs.reload' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
