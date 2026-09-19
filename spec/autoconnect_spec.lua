@@ -539,3 +539,79 @@ describe("autoconnect, exclusive must not strand the preferred connection", func
     assert.same({ "connect first", "supersede second", "done" }, seen)
   end)
 end)
+
+describe("autoconnect, an automatic attempt waits until nobody is typing", function()
+  local function ui()
+    return assert(store.normalise({
+      settings = { fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          order = 10,
+          autoconnect = true,
+          fallback = "aws",
+        },
+        { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS", row = "w", order = 20 },
+      },
+    }))
+  end
+  local down = { gp = "disconnected", aws = "disconnected" }
+
+  it("holds a connect that would open a client's window while somebody is active", function()
+    assert.is_nil(autoconnect.plan(ui(), down, {}, 1e6, 3, false))
+  end)
+
+  it("makes it once there has been a minute of quiet", function()
+    local plan = autoconnect.plan(ui(), down, {}, 1e6, autoconnect.IDLE_BEFORE_INTERRUPTING, false)
+    assert.equals("gp", plan.id)
+  end)
+
+  -- The person has just arrived. A login window then is what they came for.
+  it("makes it at once on the read that follows a wake or an unlock", function()
+    local plan = autoconnect.plan(ui(), down, {}, 1e6, 0, true)
+    assert.equals("gp", plan.id)
+  end)
+
+  it("holds the fallback by the same rule", function()
+    local memory = { gp = { attempts = 1, lastTry = 1e6, started = true } }
+    assert.is_nil(autoconnect.plan(ui(), down, memory, 1e6, 3, false), "gp mid-cooldown, aws would interrupt")
+    local plan = autoconnect.plan(ui(), down, memory, 1e6, 120, false)
+    assert.equals("aws", plan.id)
+  end)
+
+  it("does not hold a backend that opens nothing", function()
+    local plan = autoconnect.plan(config(), { aws = "disconnected" }, {}, 1e6, 0, false)
+    assert.equals("aws", plan.id, "scutil connects without a window")
+  end)
+
+  it("goes ahead where nobody measured the idle time", function()
+    assert.equals("gp", autoconnect.plan(ui(), down, {}, 1e6, nil, false).id)
+    assert.equals("gp", autoconnect.plan(ui(), down, {}, 1e6).id)
+  end)
+
+  it("records no attempt for a connect it held back", function()
+    local memory = {}
+    autoconnect.plan(ui(), down, memory, 1e6, 3, false)
+    assert.same({}, memory, "a deferral is not a failure and must not feed the backoff")
+  end)
+
+  it("still takes an extra tunnel down while somebody is active", function()
+    local cfg = assert(store.setSettings(ui(), { exclusive = true }))
+    local plan = autoconnect.plan(cfg, { gp = "connected", aws = "connected" }, {}, 1e6, 0, false)
+    assert.equals("supersede", plan.verb, "closing is not the thing that opens a login window")
+  end)
+end)
+
+describe("autoconnect.wouldInterrupt", function()
+  local gp = { id = "gp", backend = "globalprotect", app = "GP" }
+  it("is the three conditions and nothing else", function()
+    assert.is_true(autoconnect.wouldInterrupt(gp, 5, false))
+    assert.is_false(autoconnect.wouldInterrupt(gp, 5, true), "fresh start")
+    assert.is_false(autoconnect.wouldInterrupt(gp, 60, false), "quiet enough")
+    assert.is_false(autoconnect.wouldInterrupt(gp, nil, false), "unmeasured")
+    assert.is_false(autoconnect.wouldInterrupt({ id = "s", backend = "scutil" }, 0, false), "no window")
+  end)
+end)

@@ -147,6 +147,9 @@ end
 
 globalprotect.quit = quitApp
 globalprotect.restart = restartApp
+-- Connecting means opening the agent's panel and pressing in it, and an agent
+-- whose session has ended answers that by putting a login window on screen.
+globalprotect.drivesUI = true
 
 local shell = {}
 
@@ -193,6 +196,8 @@ end
 
 awsvpn.quit = quitApp
 awsvpn.restart = restartApp
+-- Connecting brings the client's window up and clicks a row in it.
+awsvpn.drivesUI = true
 -- Quitting this client ends the session: it is the tunnel's parent process, so
 -- the same command that closes a window elsewhere is a disconnect here.
 awsvpn.appOwnsTunnel = true
@@ -269,6 +274,14 @@ local function appVerb(profile, verb, cfg)
     return false
   end
   return true
+end
+
+--- Does connecting this profile put something on the screen?
+--- @param profile table
+--- @return boolean
+function backends.drivesUI(profile)
+  local backend = type(profile) == "table" and backends.byName[profile.backend] or nil
+  return backend ~= nil and backend.drivesUI == true
 end
 
 function backends.canRestart(profile, cfg)

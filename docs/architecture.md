@@ -126,6 +126,16 @@ Matching on text rather than on a remembered position is what makes this
 survive an agent update that moves a control, and it is why nothing here needs
 to know whether Disconnect is a button on the panel or an item in the menu.
 
+What takes the keyboard focus is not the click but what the agent does after
+it: a connect on a session that has ended puts a login window on screen. So an
+automatic connect through `globalprotect` or `awsvpn` is made only after a
+minute without input, or on the read that follows a wake or an unlock —
+`autoconnect.wouldInterrupt` is the pure half, `hs.host.idleTime()` the
+measurement. `keepingFocus` wraps `panel`, `press` and `pressRow` and gives the
+focused window back afterwards, and the Escape that closes a stuck options menu
+is addressed to the agent rather than to whatever has the keyboard
+([ADR 0029](adr/0029-an-automatic-attempt-waits-until-nobody-is-typing.md)).
+
 All of it depends on an agent that answers, and the repair for one that does not
 is `globalprotect.restart`: `SIGTERM`, a wait, `SIGKILL`, `open -a`. It is allowed
 on a protected connection because it closes an application and not a tunnel

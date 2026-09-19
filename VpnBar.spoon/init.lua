@@ -203,6 +203,31 @@ local function findPressable(root, verbs)
   end)
 end
 
+--- Do something that takes the focus, then give it back.
+---
+--- Every way this Spoon reaches a VPN client goes through that client's own
+--- user interface: a menu-bar panel that opens with keyboard focus, a window
+--- brought up by `open`. Each of those takes the focus from whatever the person
+--- was typing into, and nothing gave it back. With autoconnect retrying on a
+--- schedule, that was the focus being taken every few minutes, for as long as a
+--- connection stayed down.
+---
+--- The window is preferred to the application: an app with several windows
+--- would otherwise come back with whichever one it chose.
+--- @param body function
+--- @return ... whatever body returns
+local function keepingFocus(body)
+  local app = hs.application.frontmostApplication()
+  local window = hs.window.focusedWindow()
+  local results = table.pack(body())
+  if window and window:isVisible() then
+    window:focus()
+  elseif app then
+    app:activate()
+  end
+  return table.unpack(results, 1, results.n)
+end
+
 --- Open the panel, do something with it, close it again. The same click both
 --- opens and closes it, which is more reliable than sending Escape and does
 --- not depend on which window happens to be focused.
@@ -266,6 +291,8 @@ local function windowOf(appName)
   if window then
     return window, nil
   end
+  -- Not `open -g`. Measured: plain `open -a` on the running client left the
+  -- focus where it was, and `-g` moved the focused window to the client's.
   hs.execute("/usr/bin/open -a " .. backends.shellQuote(appName))
   for _ = 1, 25 do
     window = (element:attributeValue("AXWindows") or {})[1]
@@ -338,7 +365,9 @@ local function panelPress(appName, verbs)
           hs.timer.usleep(100000)
         end
         if not target then
-          hs.eventtap.keyStroke({}, "escape", 0)
+          -- Addressed to the agent. Sent to nowhere in particular, this went
+          -- to whatever had the keyboard, which by now was somebody's editor.
+          hs.eventtap.keyStroke({}, "escape", 0, hs.application.get(appName))
         end
       end
     end
@@ -371,13 +400,19 @@ function obj:runtime(allowPanelReads)
       if not (allowPanelReads and self.panelReads) then
         return "unknown"
       end
-      return panelState(app)
+      return keepingFocus(function()
+        return panelState(app)
+      end)
     end,
     press = function(app, verbs)
-      return panelPress(app, verbs)
+      return keepingFocus(function()
+        return panelPress(app, verbs)
+      end)
     end,
     pressRow = function(app, row, buttonTitle)
-      return pressRow(app, row, buttonTitle)
+      return keepingFocus(function()
+        return pressRow(app, row, buttonTitle)
+      end)
     end,
   }
 end
@@ -509,7 +544,14 @@ function obj:refresh(options)
   -- the menu does not. Otherwise looking at the menu would start a VPN: the
   -- awsvpn backend brings a window up and clicks it, and having that happen
   -- because somebody wanted to read a status is not acceptable.
-  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time()) or nil
+  -- How long since the last keystroke or click, so a retry that would open a
+  -- client's login window is not made into the middle of somebody's sentence.
+  -- The read that follows a wake or an unlock is the exception: that person has
+  -- just arrived and wants the VPN now, and a login window then is expected.
+  local idle = hs.host.idleTime()
+  local plan = options.autoconnect
+      and autoconnect.plan(self.config, states, self.attempts, os.time(), idle, options.fresh == true)
+    or nil
   if plan then
     local profile = store.get(self.config, plan.id)
     self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
@@ -1052,7 +1094,7 @@ function obj:start()
     -- All of them are claimed now, which is what keeps the mark moving from
     -- the moment the screen comes back until the state has settled.
     for _, read in ipairs(work.WAKE_READS) do
-      self:refreshSoon({ autoconnect = read.autoconnect == true }, read.after)
+      self:refreshSoon({ autoconnect = read.autoconnect == true, fresh = read.autoconnect == true }, read.after)
     end
   end)
   self.wake:start()

@@ -92,7 +92,12 @@ AppleScript dictionary and no URL scheme for connect or disconnect — the only
 door in is the accessibility API, which is what
 [ADR 0001](docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md) records and what
 this code uses. The consequence for the menu: **give a GlobalProtect connection
-a probe**, or reading its state means opening its panel.
+a probe**, or reading its state means opening its panel. An automatic connect
+through that panel, or through the AWS client's window, is only made after a
+minute without a keystroke, or right after a wake or an unlock: an agent whose
+session has ended answers a connect with a login window, and a retry on a timer
+must not put one of those in the middle of a sentence
+([ADR 0029](docs/adr/0029-an-automatic-attempt-waits-until-nobody-is-typing.md)).
 
 ## Tunnels that must stay up
 
@@ -117,6 +122,10 @@ fifteen, and stays there for as long as it takes
 ([ADR 0024](docs/adr/0024-autoconnect-backs-off-it-does-not-give-up.md)). An
 always-on VPN that is down while the thing meant to bring it up has decided not
 to is the state this is here to remove.
+
+A retry that would open a client's window waits for a minute of quiet first,
+so it never lands in the middle of somebody's typing
+([ADR 0029](docs/adr/0029-an-automatic-attempt-waits-until-nobody-is-typing.md)).
 
 Anything that makes the old failures meaningless puts it back on the fast path:
 the connection comes up, the Mac wakes, somebody unlocks it, or you toggle the

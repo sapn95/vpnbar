@@ -9,6 +9,7 @@
 --- without waiting for anything.
 
 local store = require("vpnbar.store")
+local backends = require("vpnbar.backends")
 
 local autoconnect = {}
 
@@ -25,6 +26,17 @@ autoconnect.COOLDOWN = 60
 --- all night costs four attempts an hour, and quick enough that a connection
 --- which becomes possible again is picked up without anybody doing anything.
 autoconnect.COOLDOWN_CEILING = 900
+
+--- Seconds without a keystroke or a click before an automatic attempt may put
+--- a client's user interface on the screen.
+---
+--- Connecting GlobalProtect or the AWS client is done through their windows,
+--- and an agent whose session has ended answers a connect by opening a login
+--- window. Retried on a schedule, that is the focus taken from whatever somebody
+--- is typing into, every few minutes, for as long as the connection stays down
+--- ([ADR 0029](../../docs/adr/0029-an-automatic-attempt-waits-until-nobody-is-typing.md)).
+--- A minute of quiet is a pause, not a gap between two words.
+autoconnect.IDLE_BEFORE_INTERRUPTING = 60
 
 --- How many times to ask for the connection somebody actually chose before
 --- accepting that it is not coming and trying its fallback.
@@ -118,7 +130,25 @@ end
 --- @param memory table the caller's memory of what has been tried
 --- @param now number seconds
 --- @return table|nil { id, verb = "connect"|"disconnect", reason }
-function autoconnect.plan(cfg, states, memory, now)
+--- Would an automatic connect of this profile interrupt somebody right now?
+---
+--- `idle` is seconds since the last input, or nil where nobody measured it, and
+--- nil means "go ahead": a caller that cannot say is not a caller that should be
+--- held up. `fresh` is the read that follows a wake or an unlock, when the person
+--- has just arrived and wants the connection now — a login window then is what
+--- they came for.
+--- @param profile table
+--- @param idle number|nil
+--- @param fresh boolean|nil
+--- @return boolean
+function autoconnect.wouldInterrupt(profile, idle, fresh)
+  if fresh or type(idle) ~= "number" then
+    return false
+  end
+  return backends.drivesUI(profile) and idle < autoconnect.IDLE_BEFORE_INTERRUPTING
+end
+
+function autoconnect.plan(cfg, states, memory, now, idle, fresh)
   states, memory = states or {}, memory or {}
   local settings = store.settings(cfg)
 
@@ -223,7 +253,7 @@ function autoconnect.plan(cfg, states, memory, now)
           -- up the preferred connection was never tried again and the machine
           -- stayed on second best. A fallback is there to carry traffic while
           -- the preferred one is unavailable, not to replace the preference.
-          if ready then
+          if ready and not autoconnect.wouldInterrupt(profile, idle, fresh) then
             return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
@@ -244,7 +274,7 @@ function autoconnect.plan(cfg, states, memory, now)
               local fallbackLast = lastTryFor(memory, profile.fallback)
               local fallbackReady = fallbackLast == nil
                 or (now - fallbackLast) >= autoconnect.cooldown(fallbackAttempts)
-              if fallbackReady then
+              if fallbackReady and not autoconnect.wouldInterrupt(fallback, idle, fresh) then
                 return { id = profile.fallback, verb = "connect", reason = "fallback" }
               end
             end
