@@ -221,16 +221,24 @@ end
 ---
 --- The agent writes one line per event to a world-readable log. A session that
 --- the gateway has ended is announced ("User was logged out", "Auth Failed
---- during login", "Cleared user auth cookie"), and the next connect will put a
---- SAML window on screen rather than a tunnel. A session that is still good
---- reconnects on its own and says so ("Auto Gateway login finished", "IPSec
---- tunnel creation finished", "Tunnel is restored"). The last of either kind
---- wins, so a logout followed by a login is not a logout.
+--- during login", "Cleared user auth cookie", "Invalid user auth cookie"), and
+--- the next connect starts a SAML login rather than a tunnel. A session that is
+--- still good reconnects on its own and says so ("Auto Gateway login finished",
+--- "IPSec tunnel creation finished", "Tunnel is restored"). The last of either
+--- kind wins, so a logout followed by a login is not a logout.
+---
+--- Measured, and worth knowing: on the machine this was written for, that SAML
+--- login usually completes inside the agent's own web view from a cached
+--- identity in a few seconds, with no window. So `login` here means "the next
+--- connect may need a person", and holding it is a bounded precaution rather
+--- than the difference between a window and none.
 ---
 --- Anything else — a keep-alive timeout, an unreachable gateway — says nothing
 --- about the session and is ignored: those are exactly the failures worth
---- retrying without a person.
---- @param text string|nil the tail of the event log
+--- retrying without a person. The alive markers are checked first because the
+--- agent writes "Cleared user auth cookie" without a newline, and whatever
+--- follows on that physical line came later.
+--- @param text string|nil the relevant lines of the event log, oldest first
 --- @return boolean
 function parse.globalprotectNeedsLogin(text)
   if type(text) ~= "string" then
@@ -239,17 +247,18 @@ function parse.globalprotectNeedsLogin(text)
   local needs = false
   for line in text:gmatch("[^\n]+") do
     if
-      line:find("User was logged out of Gateway", 1, true)
-      or line:find("Auth Failed during login", 1, true)
-      or line:find("Cleared user auth cookie", 1, true)
-    then
-      needs = true
-    elseif
       line:find("Auto Gateway login finished", 1, true)
       or line:find("IPSec tunnel creation finished", 1, true)
       or line:find("Tunnel is restored", 1, true)
     then
       needs = false
+    elseif
+      line:find("User was logged out of Gateway", 1, true)
+      or line:find("Auth Failed during login", 1, true)
+      or line:find("Cleared user auth cookie", 1, true)
+      or line:find("Invalid user auth cookie", 1, true)
+    then
+      needs = true
     end
   end
   return needs

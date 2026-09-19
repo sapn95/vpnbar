@@ -157,7 +157,10 @@ profile to `status` and the answer is about that one
 ([ADR 0027](adr/0027-the-aws-client-stopped-having-a-management-interface.md)).
 Where nothing can be read at all the answer is `unknown`, not `disconnected`,
 because those are different things and guessing the second one reported a live
-tunnel as down.
+tunnel as down. And a profile that is down and has *ever* needed a SAML login
+reads as `login`: the client asks for one on every connect, so the next one
+will open a browser tab, and autoconnect waits for a person before doing that
+([ADR 0029](adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
 
 Connecting brings the client's window up if it is not showing: with no window
 the client exposes no accessibility tree at all, and there is nothing to click.

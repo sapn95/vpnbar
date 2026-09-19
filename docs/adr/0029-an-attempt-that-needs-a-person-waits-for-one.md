@@ -54,6 +54,32 @@ of the unlock.
 Whether a click opens a window is not the question. Whether the attempt needs a
 person is, and the clients say so in their logs.
 
+## What the two clients actually do, measured
+
+A third review read the agents' own logs on the machine this was written for,
+and the two clients are not alike.
+
+**GlobalProtect** completed four of its five SAML logins since its reinstall
+inside its own web view, from a cached identity, in two or three seconds and
+with no window; the dialog appeared once. So for GlobalProtect `login` means
+"the next connect *may* need a person", and holding it costs at most a minute
+of quiet before a reconnect that would usually have been silent anyway. That is
+a bounded precaution, kept because the one time in five is the complaint. It
+also means "Auth Failed during login" is written in the middle of every normal
+portal login, so `login` flickers true for a few seconds while the agent is
+already connecting; the cooldown makes that harmless.
+
+**The AWS client** logged `SAML authentication required` on every single
+connect, twelve of twelve across three days, user-initiated and automatic
+alike. It has no silent path. So the state from its last line alone was too
+late: the first automatic connect always opened a browser tab, and only the
+retries were held. The helper therefore reports `login` for a profile that is
+down and has *ever* needed a person, read from every log the client has kept
+and named per profile. A certificate profile that never asked is never held.
+This is the one place the earlier version's "gate on the backend" was right,
+and it is right because the logs say so rather than because of what the
+backend is.
+
 ## Why the state, and not a flag beside it
 
 "Needs a login" is a fact about the connection, in the same way "connected" is,
@@ -67,8 +93,11 @@ every rule that asks; only autoconnect tells the two apart.
 For GlobalProtect the state is read from the probe first, as
 [ADR 0003](0003-a-probe-beats-asking-the-app.md) says, and the event log is only
 asked once the probe has said the tunnel is down. It turns "down" into "down,
-and only you can fix it", and costs one `tail` on a read that already knows the
-answer is not "up".
+and a person may be needed", and costs one `grep` for the session markers over
+a file that is a few tens of kilobytes. Only the markers, from the whole file:
+a budget of trailing lines was the first version, and at the agent's measured
+rate a logout scrolled out of it after a dozen network changes, which read as
+plain "disconnected" — the case that opens the window on schedule.
 
 ## Why locked holds, and why unlock lets one through
 
@@ -83,7 +112,15 @@ wants the connection now; a login window then is what they came for. The
 exemption is a window of twenty seconds rather than one read, because the one
 read that could act may not be able to, and it is spent by the first
 login-needing connect made in it, so the stand-in does not get a second window
-ten seconds after the first.
+ten seconds after the first. The window reopens on every unlock, debounced or
+not: measured, the lock fires a second after `systemWillSleep`, so a Mac that
+sleeps unlocked wakes locked, the read fifteen seconds after the wake holds,
+and the unlock that follows — one to twenty-one seconds later on this machine
+— is what lets the one window through.
+
+`locked` is read from the lock and unlock events and, failing those, from the
+session properties, because a Spoon loaded while the screen is locked has
+never seen an event.
 
 A deferral is not an attempt. It records nothing and does not feed the backoff.
 
@@ -93,8 +130,11 @@ A deferral is not an attempt. It records nothing and does not feed the backoff.
 that neither `caffeinate -u` nor a Hammerspoon-posted mouse move or keystroke
 resets it, so a software jiggler does not; whether physical input on a lock
 screen or Touch ID does is stated by the documentation, not measured here. The
-Escape addressed to the agent was not exercised, because there was no stuck
-menu to exercise it on; with no target found it posts globally, as before.
+Escape is posted to the agent's process, and that it still closes a stuck
+options menu when delivered that way was not exercised, because there was no
+stuck menu to exercise it on. Only when the agent cannot be found at all does
+Hammerspoon fall back to posting it globally, which is what every version before
+this one did every time.
 
 ## What was rejected
 

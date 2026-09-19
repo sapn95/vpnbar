@@ -259,6 +259,21 @@ describe("parse.globalprotectNeedsLogin", function()
     )
   end)
 
+  it("knows the cookie the agent calls invalid", function()
+    assert.is_true(parse.globalprotectNeedsLogin("[Info ]: Invalid user auth cookie."))
+  end)
+
+  -- The agent writes "Cleared user auth cookie for portal" without a newline,
+  -- so whatever it logs next lands on the same physical line — and came later.
+  it("lets a success glued onto the same line win, because it came after", function()
+    assert.is_false(
+      parse.globalprotectNeedsLogin("[Info ]: Cleared user auth cookie for portal[Info ]: Tunnel is restored.")
+    )
+    assert.is_true(
+      parse.globalprotectNeedsLogin("[Info ]: Cleared user auth cookie for portal[Info ]: Started the Portal pre-login")
+    )
+  end)
+
   it("is false on nothing at all", function()
     assert.is_false(parse.globalprotectNeedsLogin(""))
     assert.is_false(parse.globalprotectNeedsLogin(nil))

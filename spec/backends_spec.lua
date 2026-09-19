@@ -652,10 +652,19 @@ describe("backends.status, down with a reason", function()
     assert.equals(0, #runtime.calls.exec, "no tail while the probe says up")
   end)
 
-  it("reads the tail of the event log, quoted, and lets the config point elsewhere", function()
+  -- Only the markers, from the whole file. A trailing-line budget let a logout
+  -- scroll out after a dozen network changes, and "scrolled out" read as
+  -- "disconnected", which is the case that opens the window on schedule.
+  it("greps the whole event log for the session markers, quoted, and lets the config point elsewhere", function()
     local runtime = fakeRuntime({ ifconfig = NO_TUNNEL, exec = "" })
     backends.status(gp({ eventLog = "/tmp/some log.txt" }), runtime)
-    assert.is_truthy(runtime.calls.exec[1]:find("tail -n 300 '/tmp/some log.txt'", 1, true), runtime.calls.exec[1])
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("grep -F", 1, true), ran)
+    assert.is_truthy(ran:find("'/tmp/some log.txt'", 1, true), ran)
+    assert.is_nil(ran:find("tail -n 300", 1, true), "no line budget on the file itself")
+    for _, marker in ipairs(backends.byName.globalprotect.SESSION_MARKERS) do
+      assert.is_truthy(ran:find("-e '" .. marker .. "'", 1, true), marker)
+    end
     local default = fakeRuntime({ ifconfig = NO_TUNNEL, exec = "" })
     backends.status(gp(), default)
     assert.is_truthy(default.calls.exec[1]:find("pan_gp_event.log", 1, true))

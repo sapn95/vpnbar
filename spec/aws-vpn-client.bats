@@ -400,3 +400,55 @@ log_says() {
   run "${SCRIPT}" status "work"
   [ "${output}" = "connected" ]
 }
+
+# -------------------------------------------- a profile that has asked before
+
+# The client logs "SAML authentication required" on every connect, so a
+# profile that has needed a person once will need one next time, and "down"
+# for it means "the next connect opens a browser tab".
+
+@test "down reads as login for a profile that has needed a person before" {
+  export STUB_NC_LISTENING=0
+  printf '%s\n' "2026-09-16T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260916.log"
+  printf '%s\n' "2026-09-17T09:00:00Z  INFO ThreadId(01) [tray] Refresh state: none" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260917.log"
+  run "${SCRIPT}" status work
+  [ "${output}" = "login" ]
+}
+
+@test "the history is per profile" {
+  export STUB_NC_LISTENING=0
+  printf '%s\n' "2026-09-16T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260916.log"
+  printf '%s\n' "2026-09-17T09:00:00Z  INFO ThreadId(01) [tray] Refresh state: none" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260917.log"
+  run "${SCRIPT}" status work-full
+  [ "${output}" = "disconnected" ]
+}
+
+@test "a profile that never asked stays plain disconnected" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-09-17T09:00:00Z  INFO ThreadId(01) [tray] Refresh state: none"
+  run "${SCRIPT}" status work
+  [ "${output}" = "disconnected" ]
+}
+
+@test "without a name, any profile that ever asked counts" {
+  export STUB_NC_LISTENING=0
+  printf '%s\n' "2026-09-16T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work-full" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260916.log"
+  printf '%s\n' "2026-09-17T09:00:00Z  INFO ThreadId(01) [tray] Refresh state: none" \
+    >"${AWS_VPN_LOG_DIR}/aws_vpn_client_gui_20260917.log"
+  run "${SCRIPT}" status
+  [ "${output}" = "login" ]
+}
+
+@test "the history does not turn connected into login" {
+  export STUB_NC_LISTENING=0
+  log_says \
+    "2026-09-17T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work" \
+    "2026-09-17T09:11:13Z  INFO ThreadId(01) [renderer] [poll] Profile connected: work"
+  run "${SCRIPT}" status work
+  [ "${output}" = "connected" ]
+}

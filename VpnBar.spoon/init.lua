@@ -565,7 +565,7 @@ function obj:refresh(options)
     context = {
       idle = measured and seconds or nil,
       fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
-      locked = self.locked == true,
+      locked = self:screenLocked(),
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -797,6 +797,25 @@ function obj:disconnectAll()
     self:refreshSoon(nil, 2)
     work.finish(self.work)
   end)
+end
+
+--- Is the screen locked right now?
+---
+--- Two sources, because each has a hole. The lock and unlock events are what
+--- keep `self.locked` current, and on this machine they are reliable — the lock
+--- fires a second after `systemWillSleep`, so a Mac that sleeps unlocked wakes
+--- with the flag already set. But a Spoon loaded or restarted while the screen
+--- is locked has never seen an event, and would read the screen as unlocked
+--- until the next lock. The session properties carry
+--- `CGSSessionScreenIsLocked` only while it is locked: absent when it is not
+--- (checked here), present when it is (the documentation's word, not measured).
+--- @return boolean
+function obj:screenLocked()
+  if self.locked then
+    return true
+  end
+  local ok, props = pcall(hs.caffeinate.sessionProperties)
+  return ok and type(props) == "table" and props.CGSSessionScreenIsLocked == true
 end
 
 --- Quit or restart the application behind one connection, having asked first.
@@ -1107,12 +1126,20 @@ function obj:start()
     if event ~= watcher.systemDidWake and event ~= watcher.screensDidUnlock then
       return
     end
-    if event == watcher.screensDidUnlock then
-      self.locked = false
-    end
     local now = os.time()
     -- Waking a locked Mac fires both, so the second one is the same arrival.
-    if not work.freshStart(self.lastFreshStart, now) then
+    local arrival = work.freshStart(self.lastFreshStart, now)
+    if event == watcher.screensDidUnlock then
+      self.locked = false
+      -- The arrival window reopens on every unlock, debounced or not. The
+      -- debounce exists to stop a second `forget` and a second read schedule;
+      -- it must not deny the person who typed a password sixteen seconds
+      -- after the wake the one login window they came for, when the read
+      -- fifteen seconds after the wake had held it for a locked screen.
+      self.lastFreshStart = now
+      self.freshSpent = false
+    end
+    if not arrival then
       return
     end
     self.lastFreshStart = now

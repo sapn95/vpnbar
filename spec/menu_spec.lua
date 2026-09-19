@@ -804,5 +804,9 @@ describe("menu.build, a connection that needs a login", function()
   it("ranks it as down for the one glyph in the menu bar", function()
     assert.equals("connecting", menu.overall({ a = "login", b = "connecting" }))
     assert.equals("connected", menu.overall({ a = "login", b = "connected" }))
+    -- The one that fails if `login` is missing from the ranking: unranked
+    -- would lose to unknown, and a menu that knows a login is needed is not a
+    -- menu where nothing is known.
+    assert.equals("login", menu.overall({ a = "login", b = "unknown" }))
   end)
 end)
