@@ -670,6 +670,22 @@ describe("backends.status, down with a reason", function()
     assert.is_truthy(default.calls.exec[1]:find("pan_gp_event.log", 1, true))
   end)
 
+  -- The markers exist twice: once as the strings grep is asked for, once as
+  -- the strings parse looks for. Dropping one from the grep list alone would
+  -- pass every other test while that line silently stopped arriving.
+  it("greps for exactly the markers the parser can read", function()
+    local parse = require("vpnbar.parse")
+    for _, marker in ipairs(backends.byName.globalprotect.SESSION_MARKERS) do
+      local alone = "[Info ]: " .. marker .. " example.invalid."
+      local dead = parse.globalprotectNeedsLogin(alone)
+      local afterAlive = parse.globalprotectNeedsLogin("[Info ]: Tunnel is restored.\n" .. alone)
+      local afterDead = parse.globalprotectNeedsLogin("[Info ]: User was logged out of Gateway x.\n" .. alone)
+      -- Each marker must move the answer in one direction or the other; a
+      -- string the parser ignores would be a wasted grep and a lying list.
+      assert.is_true(afterAlive ~= afterDead or dead == afterAlive, "parser does not react to: " .. marker)
+    end
+  end)
+
   it("stays at 'disconnected' when reading the log throws", function()
     local runtime = fakeRuntime({
       ifconfig = NO_TUNNEL,

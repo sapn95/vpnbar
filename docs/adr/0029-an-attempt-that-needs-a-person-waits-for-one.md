@@ -118,9 +118,14 @@ sleeps unlocked wakes locked, the read fifteen seconds after the wake holds,
 and the unlock that follows — one to twenty-one seconds later on this machine
 — is what lets the one window through.
 
-`locked` is read from the lock and unlock events and, failing those, from the
-session properties, because a Spoon loaded while the screen is locked has
-never seen an event.
+`locked` is read from the lock and unlock events. A Spoon loaded while the
+screen is locked has never seen one, and for that case only the session
+properties are asked: `CGSSessionScreenIsLocked` is present while the screen
+is locked and absent otherwise, both measured here. Once an event has been
+seen, the events are the authority, so a dictionary that lagged an unlock by a
+moment cannot overrule the unlock. And an unlock inside the debounce schedules
+one read of its own, so the reopened window is used before it closes rather
+than waiting for a timer tick that is only shorter than the window by default.
 
 A deferral is not an attempt. It records nothing and does not feed the backoff.
 

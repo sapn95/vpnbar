@@ -190,7 +190,7 @@ app_running() {
 needed_login_before() {
   local wanted="${1:-}" candidate
   for candidate in "${LOG_DIR}"/aws_vpn_client_gui_*.log; do
-    [ -f "${candidate}" ] || continue
+    [ -r "${candidate}" ] || continue
     if awk -v wanted="${wanted}" '
       function trim(text) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", text); return text }
       /SAML authentication required for profile:/ {

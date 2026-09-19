@@ -806,13 +806,15 @@ end
 --- fires a second after `systemWillSleep`, so a Mac that sleeps unlocked wakes
 --- with the flag already set. But a Spoon loaded or restarted while the screen
 --- is locked has never seen an event, and would read the screen as unlocked
---- until the next lock. The session properties carry
---- `CGSSessionScreenIsLocked` only while it is locked: absent when it is not
---- (checked here), present when it is (the documentation's word, not measured).
+--- until the next lock. For that case only, the session properties are asked:
+--- they carry `CGSSessionScreenIsLocked` while the screen is locked and not
+--- otherwise, both measured here. Only for that case, because once an event
+--- has been seen the events are the authority, and a dictionary that lagged an
+--- unlock by a moment must not be able to overrule the unlock.
 --- @return boolean
 function obj:screenLocked()
-  if self.locked then
-    return true
+  if self.locked ~= nil then
+    return self.locked == true
   end
   local ok, props = pcall(hs.caffeinate.sessionProperties)
   return ok and type(props) == "table" and props.CGSSessionScreenIsLocked == true
@@ -1140,6 +1142,12 @@ function obj:start()
       self.freshSpent = false
     end
     if not arrival then
+      -- One read of its own, so the window is used before it closes. Left to
+      -- the timer, that only worked because the interval is shorter than the
+      -- window, and nothing pins the two together.
+      if event == watcher.screensDidUnlock then
+        self:refreshSoon({ autoconnect = true }, 2)
+      end
       return
     end
     self.lastFreshStart = now
