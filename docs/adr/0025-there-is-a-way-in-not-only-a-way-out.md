@@ -75,6 +75,29 @@ returns before that, and a stopped one holds nothing worth keeping. `restart`
 is therefore what the README always said it was, the whole update after an
 upgrade.
 
+## Why start falls back to a reload
+
+Added 2026-09-19, the same evening. The first `vpnbar restart` with the
+eviction in place stopped the Spoon, dropped the old modules, and then
+`hs.loadSpoon` threw *ipc port is no longer valid* from a `print` inside it —
+and nothing was running. The likely cause is the script's own ten-second
+budget: Hammerspoon was slow to answer, `run_with_timeout` killed the `hs`
+process, its reply port died, and the next `print` in the script threw on it.
+That a killed `hs` leaves its instance registered was reproduced; that the
+kill was the trigger is inferred from the timing and not proven.
+
+Two changes. A start gets a thirty-second budget instead of ten. And when the
+in-place load fails anyway, `start` falls back to the proven way in — a full
+`hs.reload` — and then **confirms** that vpnbar is running before saying so,
+rather than reporting "could not load" and walking away with the modules
+already gone. The fallback reloads every other config Hammerspoon holds, which
+is exactly the cost the in-place path exists to avoid; it is a fallback, not
+the path.
+
+And the watchdog in `run_with_timeout` calls `/bin/sleep` by its path. A sleep
+that returns at once, which the tests install on purpose for the polling
+loops, would otherwise kill every command before it had answered.
+
 ## What was rejected
 
 - **A launch agent.** It would start vpnbar without Hammerspoon's knowledge,

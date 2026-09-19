@@ -21,16 +21,27 @@ setup() {
   # whether Hammerspoon counts as running.
   export STUB_HS_CALLS="${TMP}/hs-calls"
   : >"${STUB_HS_CALLS}"
+  # One answer per call when STUB_HS_ANSWER_FILE is set (a line is consumed
+  # per call); otherwise the same answer every time.
   cat >"${STUB}/hs" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${STUB_HS_CALLS}"
+if [ -n "${STUB_HS_ANSWER_FILE:-}" ] && [ -s "${STUB_HS_ANSWER_FILE}" ]; then
+  head -n 1 "${STUB_HS_ANSWER_FILE}"
+  tail -n +2 "${STUB_HS_ANSWER_FILE}" >"${STUB_HS_ANSWER_FILE}.next"
+  mv "${STUB_HS_ANSWER_FILE}.next" "${STUB_HS_ANSWER_FILE}"
+  exit 0
+fi
 printf '%s\n' "${STUB_HS_ANSWER:-}"
 EOF
   cat >"${STUB}/pgrep" <<'EOF'
 #!/usr/bin/env bash
 exit "${STUB_PGREP_EXIT:-0}"
 EOF
-  chmod +x "${STUB}/hs" "${STUB}/pgrep"
+  # Nothing in these tests should wait for real: the start fallback polls
+  # thirty times with a sleep between.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"
+  chmod +x "${STUB}/hs" "${STUB}/pgrep" "${STUB}/sleep"
   # Never let a search reach the real Hammerspoon on this machine.
   export VPNBAR_HS="${STUB}/hs"
   export PATH="${STUB}:${PATH}"
@@ -450,4 +461,67 @@ SH
   run "${SCRIPT}" start
   grep -qF 'name == "VpnBar"' "${STUB_HS_CALLS}"
   grep -qF 'name == "vpnbar" or name:sub(1, 7) == "vpnbar."' "${STUB_HS_CALLS}"
+}
+
+# ------------------------------------------ when loading in place fails
+
+# Loading in place can fail after the old modules are already gone, which leaves
+# nothing running. The fallback is the proven way in: a full reload, then a
+# check that vpnbar actually came back.
+@test "start falls back to reloading Hammerspoon when the Spoon will not load in place" {
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"; chmod +x "${STUB}/sleep"
+  export STUB_HS_ANSWER_FILE="${TMP}/answers"
+  printf '%s\n' \
+    "up" \
+    "FAIL could not load the Spoon: ipc port is no longer valid (early)" \
+    "" \
+    "up" \
+    "true" \
+    >"${STUB_HS_ANSWER_FILE}"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"would not load in place"* ]]
+  [[ "${output}" == *"started, by reloading Hammerspoon"* ]]
+  grep -qF 'hs.reload' "${STUB_HS_CALLS}"
+}
+
+# One wall-clock deadline for the whole fallback. With the budget set to two
+# seconds and a Hammerspoon that never says vpnbar is running, this has to
+# give up in about that long — not after thirty loops of bounded probes.
+@test "the fallback gives up at its deadline when vpnbar does not come back" {
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"; chmod +x "${STUB}/sleep"
+  export VPNBAR_RELOAD_BUDGET=2
+  export STUB_HS_ANSWER_FILE="${TMP}/answers"
+  { printf '%s\n' "up" "FAIL could not load the Spoon: boom" ""; for _ in $(seq 1 400); do printf '%s\n' "up" "false"; done; } >"${STUB_HS_ANSWER_FILE}"
+  local before after
+  before=$(date +%s)
+  run "${SCRIPT}" start
+  after=$(date +%s)
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"did not come back within 2 seconds"* ]]
+  [ $((after - before)) -le 6 ]
+}
+
+@test "the fallback bounds the reload request itself" {
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/sleep"; chmod +x "${STUB}/sleep"
+  export STUB_HS_ANSWER_FILE="${TMP}/answers"
+  printf '%s\n' "up" "FAIL could not load the Spoon: boom" "" "up" "true" >"${STUB_HS_ANSWER_FILE}"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  # The stub records every call in order, one per line — except the start
+  # script, which is many lines. So: exactly one reload, worded exactly so,
+  # and after the in-place attempt.
+  [ "$(grep -c 'hs.reload' "${STUB_HS_CALLS}")" -eq 1 ]
+  grep -qxF -- '-c hs.timer.doAfter(0.5, hs.reload)' "${STUB_HS_CALLS}"
+  local attempt reload
+  attempt="$(grep -n 'already running' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
+  reload="$(grep -n 'hs.reload' "${STUB_HS_CALLS}" | head -1 | cut -d: -f1)"
+  [ "${attempt}" -lt "${reload}" ]
+}
+
+@test "a start that loads in place never reloads Hammerspoon" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  ! grep -qF 'hs.reload' "${STUB_HS_CALLS}"
 }
