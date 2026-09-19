@@ -19,8 +19,11 @@ setup() {
 
   # `hs` answers with whatever the test puts in STUB_HS_ANSWER; `pgrep` decides
   # whether Hammerspoon counts as running.
+  export STUB_HS_CALLS="${TMP}/hs-calls"
+  : >"${STUB_HS_CALLS}"
   cat >"${STUB}/hs" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"${STUB_HS_CALLS}"
 printf '%s\n' "${STUB_HS_ANSWER:-}"
 EOF
   cat >"${STUB}/pgrep" <<'EOF'
@@ -411,4 +414,35 @@ SH
   run timeout 10 bash "${TMP}/fn.sh"
   [ "${status}" -ne 124 ]
   [[ "${output}" == *"too many symlinks"* ]]
+}
+
+# ------------------------------------------ start loads the installed code
+
+# hs.loadSpoon returns whatever is already in spoon.VpnBar and require returns
+# whatever is already in package.loaded, so a start after brew upgrade ran the
+# code from before the upgrade. Every time.
+@test "start drops the cached modules before loading the Spoon" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  [ "${status}" -eq 0 ]
+  grep -qF 'package.loaded[name] = nil' "${STUB_HS_CALLS}"
+  grep -qF 'spoon.VpnBar = nil' "${STUB_HS_CALLS}"
+}
+
+@test "the eviction comes before loadSpoon, and after the running check" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  local script running evict load
+  script="$(cat "${STUB_HS_CALLS}")"
+  running="$(printf '%s' "${script}" | grep -n 'already running' | head -1 | cut -d: -f1)"
+  evict="$(printf '%s' "${script}" | grep -n 'spoon.VpnBar = nil' | head -1 | cut -d: -f1)"
+  load="$(printf '%s' "${script}" | grep -n 'hs.loadSpoon' | head -1 | cut -d: -f1)"
+  [ "${running}" -lt "${evict}" ]
+  [ "${evict}" -lt "${load}" ]
+}
+
+@test "the eviction matches vpnbar and vpnbar.* only, by prefix" {
+  export STUB_HS_ANSWER="started"
+  run "${SCRIPT}" start
+  grep -qF 'name == "vpnbar" or name:sub(1, 7) == "vpnbar."' "${STUB_HS_CALLS}"
 }
