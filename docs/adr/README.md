@@ -34,4 +34,4 @@ whether their idea was considered or simply missed.
 | [0026](0026-one-at-a-time-outranks-protection.md) | One at a time outranks protection |
 | [0027](0027-the-aws-client-stopped-having-a-management-interface.md) | The AWS client stopped having a management interface |
 | [0028](0028-quit-and-restart-are-per-application.md) | Quit and restart are per application |
-| [0029](0029-an-automatic-attempt-waits-until-nobody-is-typing.md) | An automatic attempt waits until nobody is typing |
+| [0029](0029-an-attempt-that-needs-a-person-waits-for-one.md) | An attempt that needs a person waits for one |

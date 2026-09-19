@@ -184,3 +184,83 @@ describe("parse.probeState", function()
     assert.equals("10.11.12.13", address, "the address from the interface that is actually up")
   end)
 end)
+
+describe("parse.state, the fifth word", function()
+  it("reads a login prompt as its own state, not as disconnected", function()
+    assert.equals("login", parse.state("login"))
+    assert.equals("login", parse.state("Needs login"))
+    assert.equals("login", parse.state("sign in"))
+  end)
+
+  it("is one of the states the backends may answer with", function()
+    assert.is_true(parse.STATES.login)
+  end)
+end)
+
+describe("parse.globalprotectNeedsLogin", function()
+  local function lines(...)
+    return table.concat({ ... }, "\n")
+  end
+
+  it("is true once the gateway has ended the session", function()
+    assert.is_true(
+      parse.globalprotectNeedsLogin(
+        lines(
+          "09/16/2026 20:15:56:859 [Info ]: Tunnel is down due to disconnection.",
+          "09/16/2026 20:15:58:585 [Info ]: User was logged out of Gateway example.invalid."
+        )
+      )
+    )
+    assert.is_true(parse.globalprotectNeedsLogin("09/18/2026 15:10:27:443 [Info ]: Auth Failed during login"))
+    assert.is_true(
+      parse.globalprotectNeedsLogin("09/18/2026 15:10:27:443 [Info ]: Cleared user auth cookie for portal")
+    )
+  end)
+
+  -- The last of either kind wins: a logout followed by a login is not a logout.
+  it("is false again once a session has been made", function()
+    assert.is_false(
+      parse.globalprotectNeedsLogin(
+        lines(
+          "[Info ]: User was logged out of Gateway example.invalid.",
+          "[Info ]: Auto Gateway login finished with address example.invalid and user someone.",
+          "[Info ]: IPSec tunnel creation finished with Gateway example.invalid."
+        )
+      )
+    )
+    assert.is_false(
+      parse.globalprotectNeedsLogin(lines("[Info ]: Auth Failed during login", "[Info ]: Tunnel is restored."))
+    )
+  end)
+
+  it("is true when the logout came after the last session", function()
+    assert.is_true(
+      parse.globalprotectNeedsLogin(
+        lines(
+          "[Info ]: IPSec tunnel creation finished with Gateway example.invalid.",
+          "[Info ]: Tunnel is down due to disconnection.",
+          "[Info ]: User was logged out of Gateway example.invalid."
+        )
+      )
+    )
+  end)
+
+  -- A keep-alive timeout or an unreachable gateway says nothing about the
+  -- session, and those are exactly the failures worth retrying silently.
+  it("ignores a network failure, which is not a login", function()
+    assert.is_false(
+      parse.globalprotectNeedsLogin(
+        lines(
+          "[Info ]: Tunnel is down due to keep-alive timeout.",
+          "[Error]: Gateway example.invalid: The network connection is unreachable or the gateway is unresponsive.",
+          "[Info ]: Tunnel retry done: failed retry"
+        )
+      )
+    )
+  end)
+
+  it("is false on nothing at all", function()
+    assert.is_false(parse.globalprotectNeedsLogin(""))
+    assert.is_false(parse.globalprotectNeedsLogin(nil))
+  end)
+end)

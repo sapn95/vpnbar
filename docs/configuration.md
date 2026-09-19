@@ -92,11 +92,19 @@ typing these: it reads the list and adds everything not configured yet.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `app` | yes | The agent's name in the menu bar. Defaults to `GlobalProtect`. |
+| `eventLog` | no | The agent's event log, read to tell a lost tunnel from an ended session. Defaults to the path the agent writes to. |
 
 Driven through the accessibility API, because the agent offers nothing else —
 see [ADR 0001](adr/0001-globalprotect-is-not-a-scutil-vpn.md). Give it a
 `probe`: without one its state is only read when you ask for it, since reading
 it means opening the agent's panel on screen.
+
+When the probe says the tunnel is down, the agent's event log
+(`/Library/Logs/PaloAltoNetworks/GlobalProtect/pan_gp_event.log`, or the file
+named in `eventLog`) is read to tell *down* from *down because the gateway ended
+the session*. The second shows as `needs your login`, and autoconnect waits for
+a person before opening the SAML window that connect would bring up
+([ADR 0029](adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
 
 Because every read and every click goes through that panel, an agent that stops
 answering leaves the connection with nothing to click. **Connections → the
@@ -161,7 +169,7 @@ The federated login is still finished by hand in the browser.
 | --- | --- | --- |
 | `commands.connect` | yes | Run by the shell when you click to connect. |
 | `commands.disconnect` | yes | Run by the shell when you click to disconnect. |
-| `commands.status` | no | Should print `connected`, `connecting` or `disconnected`. Without it the state is `unknown`, which is still clickable. |
+| `commands.status` | no | Should print `connected`, `connecting`, `disconnected` or `login` — the last meaning the session has ended and a person has to sign in, which autoconnect then waits for. Without it the state is `unknown`, which is still clickable. |
 | `commands.force` | no | The harder way down. **Force disconnect** appears in the menu only for a profile that has one. |
 
 ```json

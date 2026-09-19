@@ -128,7 +128,7 @@ end
 --- - unknown: the outline, faint. Not knowing is not the same as being down,
 ---   and the icon should not claim otherwise.
 ---
---- @param state string|nil one of the four states, anything else is unknown
+--- @param state string|nil one of the five states, anything else is unknown
 --- @param size number|nil defaults to icon.SIZE
 --- @param phase number|nil which frame of the busy pulse, ignored by the rest
 --- @return table list of hs.canvas element descriptors
@@ -138,7 +138,9 @@ function icon.elements(state, size, phase)
     return { shieldElement(size, "fill", INK), tickElement(size) }
   elseif state == "connecting" then
     return { shieldElement(size, "stroke", INK), dot(size, INK, PULSE[icon.frame(phase)]) }
-  elseif state == "disconnected" then
+  elseif state == "disconnected" or state == "login" then
+    -- Down is down; which of the two it is belongs in the menu row, not in a
+    -- glyph nobody can read at sixteen pixels.
     return { shieldElement(size, "stroke", INK) }
   end
   return { shieldElement(size, "stroke", FAINT) }

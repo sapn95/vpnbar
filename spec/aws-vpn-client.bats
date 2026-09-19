@@ -234,13 +234,34 @@ log_says() {
   [ "${output}" = "connected" ]
 }
 
-@test "a SAML prompt is a disconnection with a reason" {
+# Down, with the reason attached: the session has ended and only a person can
+# start another. vpnbar holds automatic attempts on this state until one is
+# there, so it must not be folded into plain "disconnected".
+@test "a SAML prompt is its own word, login" {
   export STUB_NC_LISTENING=0
   log_says \
     "2026-09-17T09:10:00Z  INFO ThreadId(01) [renderer] [poll] Profile connected: work" \
     "2026-09-17T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work"
   run "${SCRIPT}" status
+  [ "${output}" = "login" ]
+}
+
+@test "a login another profile needs is not one this profile needs" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-09-17T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work-full"
+  run "${SCRIPT}" status work
   [ "${output}" = "disconnected" ]
+  run "${SCRIPT}" status work-full
+  [ "${output}" = "login" ]
+}
+
+@test "a login prompt that was answered reads as connected again" {
+  export STUB_NC_LISTENING=0
+  log_says \
+    "2026-09-17T09:10:19Z  INFO ThreadId(01) [renderer] [poll] SAML authentication required for profile: work" \
+    "2026-09-17T09:11:13Z  INFO ThreadId(01) [poll] Tray state changed to connected"
+  run "${SCRIPT}" status
+  [ "${output}" = "connected" ]
 }
 
 @test "the shutdown line counts as a disconnection" {

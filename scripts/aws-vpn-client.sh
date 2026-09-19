@@ -114,7 +114,7 @@ newest_log() {
   printf '%s\n' "${newest}"
 }
 
-# The last thing the log says about the connection, in our four words.
+# The last thing the log says about the connection, in our five words.
 #
 # Every line that states a transition counts, and the last one wins, so the
 # three-minute "Profile connected" heartbeat cannot outvote a disconnection that
@@ -157,7 +157,17 @@ log_state() {
       sub(/^.*Profile connect succeeded:[[:space:]]*/, "", name)
       set_named(name)
     }
-    /SAML authentication required/             { s = "disconnected" }
+    # The session has ended and the client is asking for a person. Down, with
+    # the reason attached, so nothing automatic goes on asking into a locked
+    # screen. Named like the connected line: a login another profile needs is
+    # not one this profile needs. (No apostrophes in here: this is inside the
+    # single-quoted awk program.)
+    /SAML authentication required for profile:/ {
+      name = $0
+      sub(/^.*SAML authentication required for profile:[[:space:]]*/, "", name)
+      name = trim(name)
+      if (wanted == "" || name == trim(wanted)) { s = "login" } else { s = "disconnected" }
+    }
     /Disconnecting all connections/            { s = "disconnected" }
     END { if (s != "") print s }
   ' "${log}"

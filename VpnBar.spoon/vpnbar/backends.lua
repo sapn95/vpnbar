@@ -147,9 +147,23 @@ end
 
 globalprotect.quit = quitApp
 globalprotect.restart = restartApp
--- Connecting means opening the agent's panel and pressing in it, and an agent
--- whose session has ended answers that by putting a login window on screen.
-globalprotect.drivesUI = true
+
+--- Where the agent writes one line per event. World-readable, and the same
+--- file that diagnosed every GlobalProtect incident in this repository.
+globalprotect.EVENT_LOG = "/Library/Logs/PaloAltoNetworks/GlobalProtect/pan_gp_event.log"
+
+--- Has the gateway ended the session, so that the next connect opens a login
+--- window rather than a tunnel? Asked only once the probe has said the tunnel
+--- is down: it turns "down" into "down, and only you can fix it", which is what
+--- keeps autoconnect from putting that window on a locked screen.
+--- @param profile table
+--- @param runtime table
+--- @return boolean
+function globalprotect.needsLogin(profile, runtime)
+  local log = profile.eventLog or globalprotect.EVENT_LOG
+  local out = runtime.exec("/usr/bin/tail -n 300 " .. backends.shellQuote(log) .. " 2>/dev/null")
+  return parse.globalprotectNeedsLogin(out)
+end
 
 local shell = {}
 
@@ -196,8 +210,6 @@ end
 
 awsvpn.quit = quitApp
 awsvpn.restart = restartApp
--- Connecting brings the client's window up and clicks a row in it.
-awsvpn.drivesUI = true
 -- Quitting this client ends the session: it is the tunnel's parent process, so
 -- the same command that closes a window elsewhere is a disconnect here.
 awsvpn.appOwnsTunnel = true
@@ -276,14 +288,6 @@ local function appVerb(profile, verb, cfg)
   return true
 end
 
---- Does connecting this profile put something on the screen?
---- @param profile table
---- @return boolean
-function backends.drivesUI(profile)
-  local backend = type(profile) == "table" and backends.byName[profile.backend] or nil
-  return backend ~= nil and backend.drivesUI == true
-end
-
 function backends.canRestart(profile, cfg)
   return appVerb(profile, "restart", cfg)
 end
@@ -323,13 +327,21 @@ backends.APP_VERBS = { quit = true, restart = true }
 --- @param runtime table
 --- @return string state
 function backends.status(profile, runtime)
+  local backend = backends.byName[profile.backend]
   if profile.probe then
     local state = parse.probeState(runtime.ifconfig(), profile.probe)
     if state ~= "unknown" then
+      -- A probe can only say up or down. Down with a session that has ended is
+      -- a different thing from down, and the backend's own log knows which.
+      if state == "disconnected" and backend and backend.needsLogin then
+        local ok, needs = pcall(backend.needsLogin, profile, runtime)
+        if ok and needs then
+          return "login"
+        end
+      end
       return state
     end
   end
-  local backend = backends.byName[profile.backend]
   if not backend then
     return "unknown"
   end

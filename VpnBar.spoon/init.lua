@@ -550,29 +550,33 @@ function obj:refresh(options)
   -- the menu does not. Otherwise looking at the menu would start a VPN: the
   -- awsvpn backend brings a window up and clicks it, and having that happen
   -- because somebody wanted to read a status is not acceptable.
-  -- How long since the last keystroke or click, so a retry that would open a
-  -- client's login window is not made into the middle of somebody's sentence.
-  -- `idleTime` asks IOKit and raises when it cannot; a refresh must not die on
-  -- that, and nil is the answer that means "go ahead". Only asked when it can
-  -- matter, which is when this read may connect something.
+  -- What this read knows about the person, for the one kind of connect that
+  -- needs one: a connection whose session has ended. Everything else is silent
+  -- and is never held.
   --
-  -- The window after a wake or an unlock is the exception: that person has just
-  -- arrived and wants the VPN now, and a login window then is expected. A window
-  -- rather than one read, because the one read that could act may not be able
-  -- to, and the exemption would be spent on nothing.
-  local idle, fresh
+  -- `idleTime` asks IOKit and raises when it cannot; a refresh must not die on
+  -- that, and nil is the answer that means "go ahead". `fresh` is the window
+  -- after a wake or an unlock, spent by the first login-needing connect made in
+  -- it, so the second connection does not get the exemption ten seconds after
+  -- the first used it. `locked` is nobody there, whatever the idle time says.
+  local context
   if options.autoconnect then
     local measured, seconds = pcall(hs.host.idleTime)
-    idle = measured and seconds or nil
-    fresh = work.withinFreshStart(self.lastFreshStart, os.time())
+    context = {
+      idle = measured and seconds or nil,
+      fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
+      locked = self.locked == true,
+    }
   end
-  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), idle, fresh)
-    or nil
+  local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
   if plan then
     local profile = store.get(self.config, plan.id)
     self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
     if plan.verb == "connect" then
       autoconnect.remember(self.attempts, plan.id, os.time())
+      if context.fresh and states[plan.id] == "login" then
+        self.freshSpent = true
+      end
     else
       -- Taking the stand-in back down ends its history: it is not a failure,
       -- and the next time it is needed it should start from nothing.
@@ -1093,8 +1097,18 @@ function obj:start()
   -- person who just typed their password is about to want a VPN.
   self.wake = hs.caffeinate.watcher.new(function(event)
     local watcher = hs.caffeinate.watcher
+    -- A locked screen is nobody there. Silent reconnects go on as before; the
+    -- one thing held is a connect that would put a login window in front of an
+    -- empty chair, and the unlock below is what lets it through.
+    if event == watcher.screensDidLock then
+      self.locked = true
+      return
+    end
     if event ~= watcher.systemDidWake and event ~= watcher.screensDidUnlock then
       return
+    end
+    if event == watcher.screensDidUnlock then
+      self.locked = false
     end
     local now = os.time()
     -- Waking a locked Mac fires both, so the second one is the same arrival.
@@ -1102,6 +1116,7 @@ function obj:start()
       return
     end
     self.lastFreshStart = now
+    self.freshSpent = false
     -- Failures from before the lid closed say nothing about the network on
     -- the other side of it, so autoconnect starts again from nothing.
     autoconnect.forget(self.attempts)
