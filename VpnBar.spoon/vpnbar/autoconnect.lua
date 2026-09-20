@@ -148,6 +148,31 @@ local function isDown(state)
   return state == "disconnected" or state == "login"
 end
 
+--- The ranking autoconnect works from: the order in the menu, with one
+--- exception. A connection somebody switched to goes first, whatever its
+--- `order`, for as long as the preference stands. The order itself is not
+--- touched: a switch is a preference for this session, not a change to the
+--- config ([ADR 0030](../../docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
+--- A preference for an id that is not in the config is ignored.
+--- @param cfg table
+--- @param preferred string|nil profile id
+--- @return table list of profiles, hidden ones included
+function autoconnect.ranked(cfg, preferred)
+  local order = store.list(cfg, true)
+  if preferred == nil then
+    return order
+  end
+  local ranked = {}
+  for _, profile in ipairs(order) do
+    if profile.id == preferred then
+      table.insert(ranked, 1, profile)
+    else
+      ranked[#ranked + 1] = profile
+    end
+  end
+  return ranked
+end
+
 --- What, if anything, to connect now.
 ---
 --- Returns at most one action, because two VPNs coming up at the same moment
@@ -161,11 +186,14 @@ end
 --- @param states table map of profile id to state
 --- @param memory table the caller's memory of what has been tried
 --- @param now number seconds
---- @param context table|nil what the adapter knows about the person, see `wouldInterrupt`
+--- @param context table|nil what the adapter knows about the person, see
+---   `wouldInterrupt`, plus `preferred`: the id somebody switched to, see `ranked`
 --- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
 function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
   local settings = store.settings(cfg)
+  local preferred = context and context.preferred or nil
+  local order = autoconnect.ranked(cfg, preferred)
 
   local function startedByUs(id)
     return memory[id] ~= nil and memory[id].started == true
@@ -185,7 +213,8 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- With `exclusive` on, the rule is the plain one: the connection ranked
   -- highest wins and every other tunnel goes down. Rank is the order in the
   -- menu, which is what Move up and Move down change, so the question "which one
-  -- survives" has an answer somebody can see and move.
+  -- survives" has an answer somebody can see and move. A connection somebody
+  -- switched to ranks first for as long as that preference stands.
   --
   -- This is the one place that may close a `protected` connection, and it asks
   -- for it under its own verb
@@ -194,7 +223,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- an exception for a tunnel opened by hand is not one at a time.
   if settings.exclusive then
     local best
-    for _, profile in ipairs(store.list(cfg, true)) do
+    for _, profile in ipairs(order) do
       if isUp(states[profile.id]) then
         best = best or profile
         if profile.id ~= best.id then
@@ -206,9 +235,9 @@ function autoconnect.plan(cfg, states, memory, now, context)
     -- Off, the old and narrower rule stands: only the stand-in started for this
     -- very connection, only if autoconnect started it, never a protected one
     -- ([ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
-    for _, profile in ipairs(store.list(cfg, true)) do
+    for _, profile in ipairs(order) do
       if profile.autoconnect and states[profile.id] == "connected" then
-        for _, other in ipairs(store.list(cfg, true)) do
+        for _, other in ipairs(order) do
           local extra = other.id ~= profile.id and states[other.id] == "connected" and not other.protected
           if extra and other.id == profile.fallback and startedByUs(other.id) then
             return { id = other.id, verb = "disconnect", reason = "superseded" }
@@ -223,14 +252,16 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- being marked for it itself, and a record that was never cleared would only
   -- ever grow, until the stand-in nobody configured was the slowest thing on the
   -- machine to come back.
-  for _, profile in ipairs(store.list(cfg, true)) do
+  for _, profile in ipairs(order) do
     if states[profile.id] == "connected" then
       autoconnect.succeeded(memory, profile.id)
     end
   end
 
-  for _, profile in ipairs(store.list(cfg, true)) do
-    if profile.autoconnect then
+  for _, profile in ipairs(order) do
+    -- The connection somebody switched to is wanted whether or not it was ever
+    -- marked to autoconnect: the switch is that mark, for this session.
+    if profile.autoconnect or profile.id == preferred then
       local state = states[profile.id] or "unknown"
 
       if isDown(state) then
@@ -244,12 +275,12 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- long as it kept working. A lower-ranked tunnel that is up is exactly
           -- what the supersede rule above takes down once this one arrives.
           local rank = 0
-          for position, other in ipairs(store.list(cfg, true)) do
+          for position, other in ipairs(order) do
             if other.id == profile.id then
               rank = position
             end
           end
-          for position, other in ipairs(store.list(cfg, true)) do
+          for position, other in ipairs(order) do
             if other.id ~= profile.id and position < rank and isUp(states[other.id]) then
               blocked = true
             end

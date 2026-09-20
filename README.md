@@ -28,6 +28,8 @@ from login to shutdown
 
 ```text
 ●2                        ← two tunnels up: the mark, plus a count
+├─ Switch to Gateway VPN  → be on the other one now, and stay there
+├─ ────────────
 ├─ ●  Work VPN            → click to disconnect
 ├─ ○  Gateway VPN         → click to connect
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
@@ -169,6 +171,19 @@ and **Disconnect everything** go on refusing a protected connection exactly as
 before. Switched off, the older and narrower rule stands: only the stand-in
 autoconnect started for this very connection
 ([ADR 0015](docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
+
+## Switch to the other one
+
+The first row of the menu is **Switch to <the other connection>**, or a
+submenu when there are several. It is for the afternoon the connection you
+chose is crawling: it connects the other one now and makes it the one that
+stays up, so *Only one connection at a time* takes the slow one down instead of
+the new one. The order in the menu is not touched; the preference lasts until
+vpnbar restarts, and the row then reads **Switch back to …**. A plain Connect
+does not do this, because the planner would take the second tunnel straight
+down again ([ADR 0030](docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
+With *Only one connection at a time* off, the switch brings the other one up
+and leaves the current one to you, and its tooltip says so.
 
 ## Force disconnect
 

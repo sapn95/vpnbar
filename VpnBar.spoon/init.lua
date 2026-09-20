@@ -566,6 +566,7 @@ function obj:refresh(options)
       idle = measured and seconds or nil,
       fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
       locked = self:screenLocked(),
+      preferred = self.preferred,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -680,6 +681,9 @@ function obj:editProfile(id)
 end
 
 function obj:removeProfile(id)
+  if self.preferred == id then
+    self.preferred = nil
+  end
   local profile = store.get(self.config, id)
   if not profile then
     return
@@ -744,6 +748,41 @@ function obj:act(id, verb)
     self:refreshSoon(nil, 2)
     work.finish(self.work)
   end)
+end
+
+--- Prefer one connection for this session, and connect it now.
+---
+--- The preference is what makes this a switch rather than a Connect: with *Only
+--- one connection at a time* on, the planner takes the other tunnel down once
+--- this one is up, and keeps this one up from here on. The order in the menu is
+--- not touched, and a restart forgets the preference
+--- ([ADR 0030](../../docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
+---
+--- The connect is made here rather than left to the planner, because this is a
+--- person clicking: nothing about idle time or a login window applies. Its
+--- failures are forgotten first, so a backoff earned while it was the stand-in
+--- does not make the switch wait.
+function obj:switchTo(id)
+  if not store.get(self.config, id) then
+    return
+  end
+  self.preferred = id
+  autoconnect.forget(self.attempts, id)
+  self.logger.i(("switch: %s is preferred until restart"):format(id))
+  local state = self.states[id]
+  if state == "connected" or state == "connecting" then
+    -- Already up: nothing to connect, only the other one to take down, which
+    -- is the planner's job on its next pass.
+    self:refreshSoon({ autoconnect = true }, 0)
+    return
+  end
+  self:act(id, "connect")
+  -- Remembered as an attempt so the planner does not press Connect a second
+  -- time while this one is still on its way; the planner's next pass is what
+  -- takes the other tunnel down once this one is up, and it is asked for
+  -- sooner than the timer would.
+  autoconnect.remember(self.attempts, id, os.time())
+  self:refreshSoon({ autoconnect = true }, 6)
 end
 
 --- Take down everything the menu just said it would take down.
@@ -914,6 +953,9 @@ function obj:dispatch(action)
     edit = function()
       self:editProfile(action.id)
     end,
+    switch = function()
+      self:switchTo(action.id)
+    end,
     remove = function()
       self:removeProfile(action.id)
     end,
@@ -1056,6 +1098,10 @@ function obj:init()
   -- What autoconnect has already tried, and when. Owned here, reasoned about
   -- in vpnbar/autoconnect.lua.
   self.attempts = {}
+  -- The id somebody switched to, for this session. Not in the config, and not
+  -- persisted, on purpose: the order is the lasting preference, a switch is
+  -- about this afternoon (ADR 0030).
+  self.preferred = nil
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()
@@ -1098,7 +1144,7 @@ function obj:start()
     -- and the queued read has the icon right by the time the menu closes.
     self:load()
     self:refreshSoon()
-    return self:hammerspoonMenu(menu.build(self.config, self.states))
+    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred))
   end)
   -- Deferred, so the icon is in the bar before anything is read. Hammerspoon
   -- loads this Spoon while it is still starting up, and a synchronous first
