@@ -110,3 +110,13 @@ after. It now counts them.
 - **Taking every extra down in one pass.** `plan` returns one action per refresh
   by design ([ADR 0013](0013-autoconnect-is-a-plan-not-a-timer.md)); the next
   refresh takes the next one. Ten seconds apart is not worth a second code path.
+
+## Addendum, 2026-09-20: the winner has to have arrived
+
+"Up" for the purpose of taking the others down now means `connected`. While
+the higher-ranked connection is still connecting, a lower-ranked tunnel that
+is up is the only one carrying traffic, and taking it down for a connection
+that may yet fail is a gap nobody asked for. The pass after the winner
+connects takes it down. Found on the switch row of
+[ADR 0030](0030-a-switch-is-a-preference-not-an-order.md), where the
+lower-ranked tunnel is the one somebody was working over a moment ago.

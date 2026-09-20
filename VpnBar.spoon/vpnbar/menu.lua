@@ -3,6 +3,7 @@
 --- Hammerspoon. The Spoon turns each `action` descriptor into a click handler;
 --- the tests read the same descriptors and never open a menu.
 
+local autoconnect = require("vpnbar.autoconnect")
 local backends = require("vpnbar.backends")
 local form = require("vpnbar.form")
 local store = require("vpnbar.store")
@@ -303,14 +304,82 @@ local function toggleAction(state)
   return "connect"
 end
 
+--- The connections a **Switch to** row may offer: everything visible except the
+--- one that ranks first right now, in rank order. Hidden connections are left
+--- out for the same reason they are out of the top level.
+--- @param cfg table
+--- @param preferred string|nil the id somebody switched to, if any
+--- @return table list of profiles
+function menu.switchTargets(cfg, preferred)
+  local ranked = autoconnect.ranked(cfg, preferred)
+  local current = ranked[1]
+  local targets = {}
+  for _, profile in ipairs(ranked) do
+    if current and profile.id ~= current.id and not profile.hidden then
+      targets[#targets + 1] = profile
+    end
+  end
+  return targets
+end
+
+--- One row that changes which connection stays up, without touching the order.
+---
+--- The connection you chose is crawling and you want to be on the other one
+--- *now*, and to stay there. A plain Connect does not give you that while
+--- *Only one connection at a time* takes the second tunnel straight down
+--- again, and Move up would change the config for a problem that is about this
+--- afternoon. The switch makes the other one preferred for this session and
+--- connects it
+--- ([ADR 0030](../../docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
+local function switchRow(profile, cfg, preferred, exclusive)
+  local natural = store.list(cfg, true)[1]
+  local back = preferred ~= nil and natural ~= nil and profile.id == natural.id
+  local tooltip = ("Connects %s now and keeps it up instead of the current one, until vpnbar restarts."):format(
+    profile.name
+  ) .. " The order in the menu stays as it is."
+  if not exclusive then
+    tooltip = tooltip .. " Only one connection at a time is off, so the current one stays up too."
+  end
+  return {
+    title = (back and "Switch back to %s" or "Switch to %s"):format(profile.name),
+    tooltip = tooltip,
+    action = { kind = "switch", id = profile.id },
+  }
+end
+
+local function switchItem(cfg, preferred)
+  local targets = menu.switchTargets(cfg, preferred)
+  if #targets == 0 then
+    return nil
+  end
+  local exclusive = store.settings(cfg).exclusive
+  if #targets == 1 then
+    return switchRow(targets[1], cfg, preferred, exclusive)
+  end
+  local rows = {}
+  for _, profile in ipairs(targets) do
+    rows[#rows + 1] = switchRow(profile, cfg, preferred, exclusive)
+  end
+  return { title = "Switch to", menu = rows }
+end
+
 --- Build the whole menu.
 --- @param cfg table
 --- @param states table map of profile id to state
+--- @param preferred string|nil the id somebody switched to for this session
 --- @return table list of items: { title, action?, separator?, disabled?, menu?, tooltip? }
-function menu.build(cfg, states)
+function menu.build(cfg, states, preferred)
   states = states or {}
   local items = {}
   local visible = store.list(cfg)
+
+  -- First, because it is the row for the moment this menu is opened in anger:
+  -- the connection you chose is crawling and you want the other one.
+  local switch = switchItem(cfg, preferred)
+  if switch then
+    items[#items + 1] = switch
+    items[#items + 1] = { separator = true }
+  end
 
   if #visible == 0 then
     items[#items + 1] = { title = "No connections configured", disabled = true }
