@@ -681,9 +681,6 @@ function obj:editProfile(id)
 end
 
 function obj:removeProfile(id)
-  if self.preferred == id then
-    self.preferred = nil
-  end
   local profile = store.get(self.config, id)
   if not profile then
     return
@@ -699,6 +696,11 @@ function obj:removeProfile(id)
     return
   end
   if self:apply(store.remove(self.config, id)) then
+    -- Only now: cleared before the dialog, a Cancel would have dropped the
+    -- preference and let the planner take the switched-to tunnel down.
+    if self.preferred == id then
+      self.preferred = nil
+    end
     self:refresh()
   end
 end

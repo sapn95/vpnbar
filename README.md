@@ -174,11 +174,11 @@ autoconnect started for this very connection
 
 ## Switch to the other one
 
-The first row of the menu is **Switch to <the other connection>**, or a
-submenu when there are several. It is for the afternoon the connection you
-chose is crawling: it connects the other one now and makes it the one that
-stays up, so *Only one connection at a time* takes the slow one down instead of
-the new one. The order in the menu is not touched; the preference lasts until
+The first row of the menu is **Switch to** followed by the other connection's
+name, or a submenu when there are several. It is for the afternoon the
+connection you chose is crawling: it connects the other one now and makes it
+the one that stays up, so *Only one connection at a time* takes the slow one
+down once the new one is connected, instead of the new one. The order in the menu is not touched; the preference lasts until
 vpnbar restarts, and the row then reads **Switch back to …**. A plain Connect
 does not do this, because the planner would take the second tunnel straight
 down again ([ADR 0030](docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).

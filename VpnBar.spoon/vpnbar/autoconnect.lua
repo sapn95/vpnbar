@@ -226,7 +226,11 @@ function autoconnect.plan(cfg, states, memory, now, context)
     for _, profile in ipairs(order) do
       if isUp(states[profile.id]) then
         best = best or profile
-        if profile.id ~= best.id then
+        -- Only once the winner has arrived. While it is still connecting, a
+        -- lower-ranked tunnel that is up is the only one carrying traffic, and
+        -- taking it down for a connection that may yet fail is a gap nobody
+        -- asked for. The pass after the winner connects takes it down.
+        if profile.id ~= best.id and states[best.id] == "connected" then
           return { id = profile.id, verb = "supersede", reason = "outranked by " .. best.id }
         end
       end

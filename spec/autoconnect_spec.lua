@@ -712,6 +712,27 @@ describe("autoconnect.plan, a preferred connection", function()
     assert.same({ id = "aws", verb = "connect", reason = "wanted" }, plan)
   end)
 
+  it("keeps the working tunnel up while the preferred one is still connecting", function()
+    -- The switch is about a slow tunnel, not about being without one.
+    local plan = autoconnect.plan(
+      exclusive(config()),
+      { aws = "connected", alt = "connecting" },
+      {},
+      1000,
+      { preferred = "alt" }
+    )
+    assert.is_nil(plan)
+  end)
+
+  it("waits for the higher-ranked connection to arrive before taking the other down", function()
+    local cfg = exclusive(config())
+    assert.is_nil(autoconnect.plan(cfg, { aws = "connecting", alt = "connected" }, {}, 1000))
+    assert.same(
+      { id = "alt", verb = "supersede", reason = "outranked by aws" },
+      autoconnect.plan(cfg, { aws = "connected", alt = "connected" }, {}, 1000)
+    )
+  end)
+
   it("changes nothing without a preference", function()
     local plan = autoconnect.plan(exclusive(config()), { aws = "connected", alt = "connected" }, {}, 1000, {})
     assert.same({ id = "alt", verb = "supersede", reason = "outranked by aws" }, plan)

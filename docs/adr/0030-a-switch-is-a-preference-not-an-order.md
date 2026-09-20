@@ -4,11 +4,13 @@
 
 ## The decision
 
-The first row of the menu is **Switch to <connection>**, one row for the other
-connection or a submenu when there are several. It makes that connection
-*preferred* for this session and connects it. Preferred means it ranks first
-for autoconnect: with *Only one connection at a time* on, the planner takes the
-other tunnel down once this one is up, and keeps this one up from then on.
+The first row of the menu is **Switch to** followed by a connection's name,
+one row for the other connection or a submenu when there are several. It makes
+that connection *preferred* for this session and connects it. Preferred means
+it ranks first for autoconnect: with *Only one connection at a time* on, the
+planner takes the other tunnel down once this one is connected, not while it is
+still on its way ([ADR 0026](0026-one-at-a-time-outranks-protection.md),
+addendum), and keeps this one up from then on.
 
 The preference lives in the adapter (`self.preferred`), travels to the planner
 in its `context`, and is forgotten when vpnbar restarts. The config is not
