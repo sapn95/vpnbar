@@ -32,8 +32,9 @@ nothing, the press has nowhere to go. What the failure cost was the backoff —
 one minute, then two, then four, up to fifteen
 ([ADR 0024](0024-autoconnect-backs-off-it-does-not-give-up.md)) — so a client
 that was closed for a quarter of an hour was a connection that then waited a
-quarter of an hour after it came back. Holding instead of attempting means the
-connect happens on the first refresh after the client returns.
+quarter of an hour after it came back. Holding instead of attempting spends
+nothing, so what is left when the client returns is at most the backoff the
+connection had already earned from a failure that was real.
 
 It is also the only way a quit made *outside* this menu is noticed at all. The
 AWS client is `protected` on the machine this was written for, so vpnbar is not
@@ -112,6 +113,14 @@ brings it back" — was the one being kept and is now wrong for a quit.
   reason, and a different decision: an always-on VPN that stays down because a
   click took it down once is the thing this project exists to prevent, and
   **Connect automatically** is already the per-connection switch for it.
+- **Clearing the backoff when a client reopens by itself.** A connection held
+  because its client was closed can still have a cooldown of its own to serve,
+  earned before the client went. Clearing it would treat an application starting
+  as evidence that whatever the connection failed on is over, and it is not
+  evidence of anything: launchd reopens these clients on its own. What does make
+  old failures meaningless is a wake, an unlock or a new network
+  ([ADR 0023](0023-an-unlock-is-a-fresh-start.md)), and those already clear it.
+  A person asking, through **Resume autoconnect** or a **Connect**, clears it too.
 - **Persisting the hold.** The clients are opened at login. A hold that survived
   a reboot would be a connection that never came back, from a quit nobody
   remembers.
