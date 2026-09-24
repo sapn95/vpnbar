@@ -265,7 +265,8 @@ local function quitItem(profile, cfg)
   end
   return {
     title = ("Quit %s"):format(profile.app),
-    tooltip = ("Closes %s and leaves it closed."):format(profile.app),
+    tooltip = ("Closes %s and leaves it closed."):format(profile.app)
+      .. " Autoconnect leaves its connections alone afterwards, until you connect one again.",
     action = { kind = "quitApp", id = profile.id },
   }
 end
@@ -292,8 +293,49 @@ local function quitAllItem(apps)
   local closed = #apps == 1 and " and leaves it closed." or " and leaves them closed."
   return {
     title = "Quit every VPN app",
-    tooltip = "Closes " .. table.concat(names, " and ") .. closed,
+    tooltip = "Closes "
+      .. table.concat(names, " and ")
+      .. closed
+      .. " Autoconnect leaves their connections alone afterwards, until you connect one again.",
     action = { kind = "quitAllApps" },
+  }
+end
+
+--- Has somebody closed the client behind this connection?
+---
+--- Keyed by application, because that is what was quit: one client, every
+--- connection through it ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+--- @param profile table
+--- @param quitByHand table|nil { [app] = true }
+--- @return boolean
+local function isStandingDown(profile, quitByHand)
+  return (profile.app ~= nil and quitByHand ~= nil and quitByHand[profile.app] == true)
+end
+
+-- Why nothing is happening. A connection autoconnect has been told to leave
+-- alone looks exactly like one that is failing, and the difference is the whole
+-- point: a row that did not say so would be a tunnel that stays down for a
+-- reason nobody can see from the menu.
+local function standingDownNote(profile, quitByHand)
+  if not isStandingDown(profile, quitByHand) then
+    return ""
+  end
+  return (" Autoconnect is leaving it alone since %s was quit; connecting it hands it back."):format(profile.app)
+end
+
+-- The way back, for somebody who wants autoconnect again without connecting
+-- anything this second. A separator everywhere else, which the renderer
+-- collapses: an always-present row that usually does nothing is a row that
+-- teaches nobody anything.
+local function resumeItem(profile, quitByHand)
+  if not isStandingDown(profile, quitByHand) then
+    return { separator = true }
+  end
+  return {
+    title = ("Resume autoconnect for %s"):format(profile.app),
+    tooltip = ("Autoconnect has left every connection through %s alone since it was quit."):format(profile.app)
+      .. " This hands them back, so they may come up on their own again.",
+    action = { kind = "resume", id = profile.id },
   }
 end
 
@@ -367,8 +409,9 @@ end
 --- @param cfg table
 --- @param states table map of profile id to state
 --- @param preferred string|nil the id somebody switched to for this session
+--- @param quitByHand table|nil the applications somebody closed, `{ [app] = true }`
 --- @return table list of items: { title, action?, separator?, disabled?, menu?, tooltip? }
-function menu.build(cfg, states, preferred)
+function menu.build(cfg, states, preferred, quitByHand)
   states = states or {}
   local items = {}
   local visible = store.list(cfg)
@@ -387,6 +430,11 @@ function menu.build(cfg, states, preferred)
 
   for _, profile in ipairs(visible) do
     local state = states[profile.id] or "unknown"
+    -- Added to every row rather than only to the ones that are down. A tunnel
+    -- that is still up with its client closed is the case worth saying it in:
+    -- GlobalProtect's tunnel outlives its app, and the moment it drops nothing
+    -- is going to bring it back.
+    local note = standingDownNote(profile, quitByHand)
     if profile.protected and not isDown(state) then
       -- Protected means protected from being brought *down*: an always-on
       -- corporate VPN is a policy, and a menu item that would breach it is
@@ -394,7 +442,7 @@ function menu.build(cfg, states, preferred)
       -- row may do, so it only reports.
       items[#items + 1] = {
         title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s, protected from disconnecting"):format(profile.name, menu.label(state)),
+        tooltip = ("%s — %s, protected from disconnecting"):format(profile.name, menu.label(state)) .. note,
         disabled = true,
       }
     elseif profile.protected then
@@ -402,13 +450,13 @@ function menu.build(cfg, states, preferred)
       -- protection points in.
       items[#items + 1] = {
         title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s, protected once it is up"):format(profile.name, menu.label(state)),
+        tooltip = ("%s — %s, protected once it is up"):format(profile.name, menu.label(state)) .. note,
         action = { kind = "connect", id = profile.id },
       }
     else
       items[#items + 1] = {
         title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s"):format(profile.name, menu.label(state)),
+        tooltip = ("%s — %s"):format(profile.name, menu.label(state)) .. note,
         -- A connection whose state is unknown is still clickable: refusing to
         -- act because the probe could not answer would make an unconfigured
         -- probe look like a broken connection.
@@ -483,6 +531,7 @@ function menu.build(cfg, states, preferred)
           disabled = false,
           action = { kind = "toggleAutoconnect", id = profile.id },
         },
+        resumeItem(profile, quitByHand),
         { separator = true },
         forceItem(profile),
         quitItem(profile, cfg),

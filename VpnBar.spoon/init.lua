@@ -423,6 +423,72 @@ function obj:runtime(allowPanelReads)
   }
 end
 
+-- -------------------------------------------------------------- applications
+
+--- Which of the applications the config names are running right now.
+---
+--- `hs.application.get` is the same lookup every way into these clients already
+--- makes — the menu-bar panel and the window are both fetched with it — so this
+--- answers the question autoconnect needs answered: would there be anything to
+--- click in? Asked once per profile per refresh, and only when autoconnect may
+--- act on the answer.
+--- @return table { [app] = boolean }
+function obj:appsRunning()
+  local running = {}
+  for _, profile in ipairs(store.list(self.config, true)) do
+    if profile.app and running[profile.app] == nil then
+      running[profile.app] = hs.application.get(profile.app) ~= nil
+    end
+  end
+  return running
+end
+
+--- Hand a client back to autoconnect.
+---
+--- Every path that means "I want this working again" ends here: Connect, Switch
+--- to, Restart, switching autoconnect on, and Resume itself. Keyed by
+--- application, because that is the unit a quit closed
+--- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+--- @param id string a profile id
+function obj:resume(id)
+  local profile = store.get(self.config, id)
+  local app = profile and profile.app or nil
+  if app == nil or not self.quitByHand[app] then
+    return
+  end
+  self.quitByHand[app] = nil
+  -- Handed back means tried now. A held connection records no attempts, so what
+  -- the memory still holds is whatever failed before the quit, and asking
+  -- somebody to wait out a fifteen-minute cooldown they earned before they
+  -- closed the client is the delay this whole rule was written to remove.
+  --
+  -- `succeeded` rather than `forget`, because who started a tunnel is not a
+  -- failure record and the supersede rule of
+  -- [ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)
+  -- turns on it. Every connection through the client, since the quit held all
+  -- of them.
+  for _, other in ipairs(store.list(self.config, true)) do
+    if other.app == app then
+      autoconnect.succeeded(self.attempts, other.id)
+    end
+  end
+end
+
+--- Remember that somebody closed a client, so autoconnect stops asking it for
+--- anything.
+---
+--- Taken on the click rather than on the outcome of the kill. `pkill` against an
+--- agent with `KeepAlive` set — which is how GlobalProtect is installed — races
+--- its own launch agent, so "did it stay closed" is not a question with a stable
+--- answer. What somebody asked for is.
+--- @param app string|nil
+function obj:standDown(app)
+  if app then
+    self.quitByHand[app] = true
+    self.logger.i(("quit: %s is left alone until somebody asks for it"):format(app))
+  end
+end
+
 -- ---------------------------------------------------------------------- icon
 
 -- Drawn once each and kept: three settled states plus the frames of the busy
@@ -540,6 +606,14 @@ function obj:refresh(options)
   for _, profile in ipairs(store.list(self.config, true)) do
     states[profile.id] = backends.status(profile, runtime)
   end
+  -- A tunnel that has just arrived was not being left alone by anybody: whoever
+  -- brought it up, the quit that held it has been overtaken by events. Which
+  -- readings count as an arrival is `autoconnect.arrived`, not this loop.
+  for _, profile in ipairs(store.list(self.config, true)) do
+    if profile.app and autoconnect.arrived((self.states or {})[profile.id], states[profile.id]) then
+      self.quitByHand[profile.app] = nil
+    end
+  end
   self.states = states
 
   -- At most one connection is started per refresh, and only from this one
@@ -567,6 +641,10 @@ function obj:refresh(options)
       fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
       locked = self:screenLocked(),
       preferred = self.preferred,
+      -- The two reasons a client is off limits: it is not running, so there is
+      -- nothing to click in, or somebody closed it and that stands (ADR 0031).
+      appRunning = self:appsRunning(),
+      quitByHand = self.quitByHand,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -769,6 +847,9 @@ function obj:switchTo(id)
     return
   end
   self.preferred = id
+  -- A person asking for this connection is a person asking for its client, which
+  -- is the one thing that lifts a quit.
+  self:resume(id)
   autoconnect.forget(self.attempts, id)
   self.logger.i(("switch: %s is preferred until restart"):format(id))
   local state = self.states[id]
@@ -880,15 +961,28 @@ function obj:controlApp(id, verb)
   local owns = backend ~= nil and backend.appOwnsTunnel == true
   local consequence = owns and " This client is its own tunnel, so the connection goes down with it."
     or " Its tunnel is held by a service of its own rather than by this app, so it is not a disconnect."
-  local safety = (not owns and profile.autoconnect)
-      and " If the connection does drop after all, autoconnect brings it back."
-    or ""
+  -- What happens next, which for a quit is now the opposite of what this used to
+  -- promise: autoconnect stops asking rather than bringing the connection back.
+  -- A quit is a decision (ADR 0031), and the dialog is where it has to be said.
+  local safety = " Autoconnect leaves this client's connections alone afterwards, until you connect one again."
+  if verb ~= "quit" then
+    safety = (not owns and profile.autoconnect)
+        and " If the connection does drop after all, autoconnect brings it back."
+      or ""
+  end
   local button = verb == "quit" and "Quit" or "Restart"
   local question = verb == "quit" and ("Quit %s?"):format(app) or ("Restart %s?"):format(app)
   local what = verb == "quit" and ("%s closes and stays closed."):format(app)
     or ("%s closes and opens again."):format(app)
   if hs.dialog.blockAlert(question, what .. consequence .. safety, button, "Cancel") ~= button then
     return
+  end
+  if verb == "quit" then
+    self:standDown(profile.app)
+  else
+    -- A restart is asked for to make a client work again, so it is the other
+    -- half of the same decision.
+    self:resume(id)
   end
   self:act(id, verb)
 end
@@ -910,12 +1004,16 @@ function obj:quitAllApps()
     hs.dialog.blockAlert(
       ("Quit %d VPN app%s?"):format(#apps, #apps == 1 and "" or "s"),
       table.concat(names, ", ")
-        .. ". They close and stay closed. A client that holds its own tunnel takes the connection with it.",
+        .. ". They close and stay closed. A client that holds its own tunnel takes the connection with it. "
+        .. "Autoconnect leaves their connections alone afterwards, until you connect one again.",
       "Quit",
       "Cancel"
     ) ~= "Quit"
   then
     return
+  end
+  for _, entry in ipairs(apps) do
+    self:standDown(entry.app)
   end
   work.begin(self.work, os.time())
   self:paint()
@@ -944,7 +1042,15 @@ end
 function obj:dispatch(action)
   local kinds = {
     connect = function()
+      -- Somebody asking for a connection is somebody asking for its client back.
+      self:resume(action.id)
       self:act(action.id, "connect")
+    end,
+    resume = function()
+      self:resume(action.id)
+      -- Asked for straight away rather than waiting for the timer: the row was
+      -- clicked to make something happen.
+      self:refreshSoon({ autoconnect = true }, 0)
     end,
     disconnect = function()
       self:act(action.id, "disconnect")
@@ -998,6 +1104,11 @@ function obj:dispatch(action)
         -- A connection just switched on should be tried now, not after
         -- whatever its previous failures had earned it.
         autoconnect.forget(self.attempts, action.id)
+        if not profile.autoconnect then
+          -- It was off, so this click asked for the connection to come up by
+          -- itself. A quit still standing would go on quietly denying that.
+          self:resume(action.id)
+        end
         self:refresh()
       end
     end,
@@ -1104,6 +1215,10 @@ function obj:init()
   -- persisted, on purpose: the order is the lasting preference, a switch is
   -- about this afternoon (ADR 0030).
   self.preferred = nil
+  -- The applications somebody closed from this menu, keyed by name. Not
+  -- persisted, for the same reason `preferred` is not: it is a decision about
+  -- now, and a restart of the Spoon is a fresh start for both (ADR 0031).
+  self.quitByHand = {}
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()
@@ -1146,7 +1261,7 @@ function obj:start()
     -- and the queued read has the icon right by the time the menu closes.
     self:load()
     self:refreshSoon()
-    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred))
+    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred, self.quitByHand))
   end)
   -- Deferred, so the icon is in the bar before anything is read. Hammerspoon
   -- loads this Spoon while it is still starting up, and a synchronous first

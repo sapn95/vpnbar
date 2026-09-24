@@ -854,3 +854,76 @@ describe("menu.build, the switch row", function()
     assert.is_nil(exclusive[1].tooltip:find("stays up too", 1, true))
   end)
 end)
+
+describe("menu.build, a client somebody quit", function()
+  local function deep(items, needle)
+    for _, item in ipairs(items) do
+      if item.title and item.title:find(needle, 1, true) then
+        return item
+      end
+      if item.menu then
+        local found = deep(item.menu, needle)
+        if found then
+          return found
+        end
+      end
+    end
+    return nil
+  end
+
+  local gp = { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", order = 10 }
+  local gp2 = { id = "gp2", name = "GP two", backend = "globalprotect", app = "GlobalProtect", order = 20 }
+  local plain = { id = "a", name = "A", backend = "scutil", service = "a", order = 30 }
+
+  local function cfg(profiles)
+    return assert(store.normalise({ profiles = profiles }))
+  end
+
+  local closed = { GlobalProtect = true }
+
+  it("says on the row why nothing is happening, and what hands it back", function()
+    local item = menu.build(cfg({ gp }), { gp = "disconnected" }, nil, closed)[1]
+    assert.matches("leaving it alone since GlobalProtect was quit", item.tooltip)
+    assert.matches("connecting it hands it back", item.tooltip)
+    -- Still clickable: the click is one of the things that hands it back.
+    assert.same({ kind = "connect", id = "gp" }, item.action)
+  end)
+
+  it("says it on a tunnel that is still up, which is the case worth saying it in", function()
+    -- GlobalProtect's tunnel outlives its app, so there is nothing to see until
+    -- the moment it drops and nothing brings it back.
+    local item = menu.build(cfg({ gp }), { gp = "connected" }, nil, closed)[1]
+    assert.matches("leaving it alone since GlobalProtect was quit", item.tooltip)
+  end)
+
+  it("says nothing of the sort while the client is where it was", function()
+    local item = menu.build(cfg({ gp }), { gp = "disconnected" })[1]
+    assert.is_nil(item.tooltip:find("leaving it alone", 1, true))
+    assert.is_nil(deep(menu.build(cfg({ gp }), {}), "Resume autoconnect"))
+  end)
+
+  it("offers the way back, naming the client rather than the connection", function()
+    local item = deep(menu.build(cfg({ gp }), {}, nil, closed), "Resume autoconnect")
+    assert.equals("Resume autoconnect for GlobalProtect", item.title)
+    assert.same({ kind = "resume", id = "gp" }, item.action)
+    assert.matches("may come up on their own again", item.tooltip)
+  end)
+
+  it("holds every connection through the one client that was closed", function()
+    local items = menu.build(cfg({ gp, gp2 }), {}, nil, closed)
+    assert.matches("GlobalProtect was quit", items[3].tooltip)
+    assert.matches("GlobalProtect was quit", items[4].tooltip)
+  end)
+
+  it("cannot hold a connection that has no application at all", function()
+    local item = menu.build(cfg({ plain }), {}, nil, { ["A"] = true, GlobalProtect = true })[1]
+    assert.is_nil(item.tooltip:find("leaving it alone", 1, true))
+  end)
+
+  it("says in the quit rows themselves what the quit costs", function()
+    local one = deep(menu.build(cfg({ gp }), {}), "Quit GlobalProtect")
+    assert.matches("until you connect one again", one.tooltip)
+    local all = find(menu.build(cfg({ gp }), {}), "Quit every VPN app")
+    assert.matches("until you connect one again", all.tooltip)
+  end)
+end)
