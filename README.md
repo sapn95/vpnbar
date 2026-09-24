@@ -400,8 +400,11 @@ write the rule, not the example.
 
 Half of that is enforced. `scripts/leak-lint.sh` runs in CI and in `make lint`,
 and fails on any IPv4 address in the tree that is not from a documentation or
-private range. An **allowlist**, so it contains nothing worth hiding and fails
-closed — the reasoning is
+private range. Files nobody has added yet are searched as well, so a new one is
+caught before it is committed. A run that could not look fails instead of
+reporting a clean tree: if git will not list the files, or grep cannot read one
+of them, the lint stops there. An **allowlist**, so it contains nothing worth
+hiding and fails closed — the reasoning is
 [container-commander's ADR 0011](https://github.com/sapn95/container-commander/blob/main/docs/adr/0011-employer-neutral-public-repo.md).
 
 The other half cannot easily be: a VPN profile named after an employer looks
