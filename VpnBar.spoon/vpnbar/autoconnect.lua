@@ -148,6 +148,46 @@ local function isDown(state)
   return state == "disconnected" or state == "login"
 end
 
+--- May autoconnect ask this connection to come up at all?
+---
+--- Two ways the answer is no, and both are about the application rather than
+--- about the tunnel.
+---
+--- `appRunning` is what the adapter measured. Every way into these clients goes
+--- through their own user interface — a menu-bar panel, a window with a row in
+--- it — so an application that is not running is one there is nothing to click
+--- in, and an attempt made anyway spends a backoff on a failure that was
+--- certain before it was made.
+---
+--- `quitByHand` is an application somebody closed from this menu. That is a
+--- decision, and autoconnect does not overrule it: the client coming back does
+--- not undo it either, which matters because GlobalProtect's own launch agent
+--- reopens it within seconds
+--- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+---
+--- Both are keyed by application name rather than by profile, because a client
+--- is shared: one AWS profile per endpoint and one application behind all of
+--- them, which is the same reason `protected` is asked about per application in
+--- [ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md). A
+--- connection that names no application cannot be held by either, and a context
+--- that measured nothing holds nothing — only an explicit `false` in
+--- `appRunning` counts, so every caller that knows nothing about applications
+--- goes on getting the old answer.
+--- @param profile table
+--- @param context table|nil { appRunning = { [app] = boolean }, quitByHand = { [app] = boolean } }
+--- @return boolean
+function autoconnect.mayStart(profile, context)
+  local app = type(profile) == "table" and profile.app or nil
+  if app == nil then
+    return true
+  end
+  context = context or {}
+  if context.quitByHand and context.quitByHand[app] then
+    return false
+  end
+  return not (context.appRunning and context.appRunning[app] == false)
+end
+
 --- The ranking autoconnect works from: the order in the menu, with one
 --- exception. A connection somebody switched to goes first, whatever its
 --- `order`, for as long as the preference stands. The order itself is not
@@ -187,7 +227,8 @@ end
 --- @param memory table the caller's memory of what has been tried
 --- @param now number seconds
 --- @param context table|nil what the adapter knows about the person, see
----   `wouldInterrupt`, plus `preferred`: the id somebody switched to, see `ranked`
+---   `wouldInterrupt`, plus `preferred`: the id somebody switched to, see
+---   `ranked`, plus `appRunning` and `quitByHand`, see `mayStart`
 --- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
 function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
@@ -294,6 +335,8 @@ function autoconnect.plan(cfg, states, memory, now, context)
         local attempts = attemptsFor(memory, profile.id)
         local last = lastTryFor(memory, profile.id)
         local ready = last == nil or (now - last) >= autoconnect.cooldown(attempts)
+        -- Its client has to be there, and not one somebody closed on purpose.
+        local mayStart = autoconnect.mayStart(profile, context)
 
         if not blocked then
           -- The one somebody chose is asked for whenever its own backoff allows
@@ -303,7 +346,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- up the preferred connection was never tried again and the machine
           -- stayed on second best. A fallback is there to carry traffic while
           -- the preferred one is unavailable, not to replace the preference.
-          if ready and not autoconnect.wouldInterrupt(state, context) then
+          if mayStart and ready and not autoconnect.wouldInterrupt(state, context) then
             return { id = profile.id, verb = "connect", reason = "wanted" }
           end
 
@@ -317,14 +360,22 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- preferred connection waits for a quiet moment, and the supersede
           -- rule takes the stand-in down again once the preferred one arrives.
           local wantsFallback = settings.fallback and profile.fallback ~= nil
-          if wantsFallback and attempts >= autoconnect.ATTEMPTS_BEFORE_FALLBACK then
+          -- A client that is closed is not going to answer this pass however
+          -- many times it has been asked, so its stand-in gets its turn now
+          -- rather than after a failure that will never be recorded. Everywhere
+          -- else the threshold stands: one real attempt first.
+          local exhausted = not mayStart or attempts >= autoconnect.ATTEMPTS_BEFORE_FALLBACK
+          if wantsFallback and exhausted then
             local fallback = store.get(cfg, profile.fallback)
             local fallbackState = states[profile.fallback] or "unknown"
             -- Down, not merely "not up". `unknown` means nobody could read it,
             -- and asking an unreadable connection to connect is the thing
             -- [ADR 0013] says not to do — the rule was stated for the wanted
             -- connection and quietly not applied to its stand-in.
-            if fallback and isDown(fallbackState) then
+            --
+            -- And startable, for the same reasons the preferred one has to be:
+            -- a stand-in whose client somebody closed is not a stand-in.
+            if fallback and isDown(fallbackState) and autoconnect.mayStart(fallback, context) then
               local fallbackAttempts = attemptsFor(memory, profile.fallback)
               local fallbackLast = lastTryFor(memory, profile.fallback)
               local fallbackReady = fallbackLast == nil

@@ -749,3 +749,129 @@ describe("autoconnect.plan, a preferred connection", function()
     assert.same({ id = "alt", verb = "supersede", reason = "outranked by aws" }, plan)
   end)
 end)
+
+describe("autoconnect.mayStart", function()
+  local gp = { id = "gp", app = "GlobalProtect" }
+
+  it("holds a connection whose client is not running", function()
+    assert.is_false(autoconnect.mayStart(gp, { appRunning = { GlobalProtect = false } }))
+    assert.is_true(autoconnect.mayStart(gp, { appRunning = { GlobalProtect = true } }))
+  end)
+
+  it("holds a client somebody quit, running or not", function()
+    assert.is_false(autoconnect.mayStart(gp, { quitByHand = { GlobalProtect = true } }))
+    -- The launch agent reopens GlobalProtect within seconds of a quit. The
+    -- decision is what is being held, not the process.
+    assert.is_false(autoconnect.mayStart(gp, {
+      quitByHand = { GlobalProtect = true },
+      appRunning = { GlobalProtect = true },
+    }))
+  end)
+
+  it("holds nothing when nobody measured anything", function()
+    assert.is_true(autoconnect.mayStart(gp, nil))
+    assert.is_true(autoconnect.mayStart(gp, {}))
+    assert.is_true(autoconnect.mayStart(gp, { appRunning = {}, quitByHand = {} }))
+  end)
+
+  it("has nothing to hold a connection with no application by", function()
+    local scutil = { id = "a" }
+    assert.is_true(autoconnect.mayStart(scutil, { appRunning = { GlobalProtect = false } }))
+    assert.is_true(autoconnect.mayStart(scutil, { quitByHand = { GlobalProtect = true } }))
+  end)
+end)
+
+describe("autoconnect.plan, a client that is closed", function()
+  --- The two real clients: GlobalProtect first, the AWS one as its stand-in.
+  local function clients(overrides)
+    local gp = {
+      id = "gp",
+      name = "GP",
+      backend = "globalprotect",
+      app = "GlobalProtect",
+      autoconnect = true,
+      fallback = "aws",
+      order = 10,
+    }
+    for key, value in pairs(overrides or {}) do
+      gp[key] = value
+    end
+    return assert(store.normalise({
+      profiles = {
+        gp,
+        { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "w", order = 20 },
+      },
+    }))
+  end
+
+  --- The same two, with nothing to fall back to. A nil in `overrides` is not an
+  --- override at all — `pairs` never reaches it — so clearing the field takes
+  --- `store.REMOVE`.
+  local function noStandIn()
+    return assert(store.update(clients(), "gp", { fallback = store.REMOVE }))
+  end
+
+  local down = { gp = "disconnected", aws = "disconnected" }
+
+  it("asks for it as usual while its client is running", function()
+    local context = { appRunning = { GlobalProtect = true, ["AWS VPN Client"] = true } }
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(clients(), down, {}, 1000, context)
+    )
+  end)
+
+  it("does not ask an application that is not running", function()
+    local context = { appRunning = { GlobalProtect = false, ["AWS VPN Client"] = false } }
+    assert.is_nil(autoconnect.plan(clients(), down, {}, 1000, context))
+  end)
+
+  it("does not ask a client somebody quit", function()
+    local context = { quitByHand = { GlobalProtect = true }, appRunning = { GlobalProtect = true } }
+    -- Its stand-in is out of the way for this one: `fallback` is what the next
+    -- test is about.
+    assert.is_nil(autoconnect.plan(noStandIn(), down, {}, 1000, context))
+  end)
+
+  it("spends no attempt on the connect it held, so nothing has to wait for it", function()
+    local memory = {}
+    local context = { quitByHand = { GlobalProtect = true }, appRunning = { ["AWS VPN Client"] = true } }
+    autoconnect.plan(noStandIn(), down, memory, 1000, context)
+    assert.same({}, memory, "a plan writes nothing; a held connect must not even be returned")
+  end)
+
+  it("gives the stand-in its turn at once, without waiting for a failure that cannot happen", function()
+    -- The threshold is one real attempt, and a closed client never records one.
+    local context = { quitByHand = { GlobalProtect = true }, appRunning = { ["AWS VPN Client"] = true } }
+    assert.same(
+      { id = "aws", verb = "connect", reason = "fallback" },
+      autoconnect.plan(clients(), down, {}, 1000, context)
+    )
+  end)
+
+  it("will not reach for a stand-in whose own client is closed", function()
+    local context = { quitByHand = { GlobalProtect = true, ["AWS VPN Client"] = true } }
+    assert.is_nil(autoconnect.plan(clients(), down, {}, 1000, context))
+  end)
+
+  it("takes it up again the moment the client is back, with no cooldown to serve", function()
+    -- No stand-in, so the held connect is the only thing under test: with one
+    -- configured the first pass would rightly hand the turn to it.
+    local cfg, memory = noStandIn(), {}
+    assert.is_nil(autoconnect.plan(cfg, down, memory, 1000, { appRunning = { GlobalProtect = false } }))
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(cfg, down, memory, 1001, { appRunning = { GlobalProtect = true } })
+    )
+  end)
+
+  it("still takes a tunnel down that outranks nothing, client or no client", function()
+    -- Closing an app is not a reason to leave two tunnels up: one at a time is
+    -- about what is running, and this one is running.
+    local cfg = assert(store.setSettings(clients(), { exclusive = true }))
+    local plan = autoconnect.plan(cfg, { gp = "connected", aws = "connected" }, {}, 1000, {
+      quitByHand = { GlobalProtect = true, ["AWS VPN Client"] = true },
+    })
+    assert.same({ id = "aws", verb = "supersede", reason = "outranked by gp" }, plan)
+  end)
+end)

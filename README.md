@@ -122,7 +122,8 @@ up. It never stops. The gap between attempts doubles instead, from one minute up
 fifteen, and stays there for as long as it takes
 ([ADR 0024](docs/adr/0024-autoconnect-backs-off-it-does-not-give-up.md)). An
 always-on VPN that is down while the thing meant to bring it up has decided not
-to is the state this is here to remove.
+to is the state this is here to remove. One thing does stop it asking, and that
+is a client nobody has open: *Quitting and restarting the clients*, below.
 
 A connection that **needs your login** is the one exception. Its session has
 ended, so a retry opens a login window and nothing else, and a login window
@@ -225,6 +226,22 @@ this is offered on a **protected** connection, the one whose only repair it is
 the AWS client ends the session, because that client is the tunnel's own parent,
 so on a protected connection those two rows are absent: a button that
 disconnects a protected tunnel is the one thing this menu does not have.
+
+Quitting is a decision, so autoconnect stops asking. Every connection through
+that client is left alone from then on, and the client coming back does not
+change that: GlobalProtect's launch agent reopens it within seconds, and a rule
+that went by what was running would have reconnected the tunnel you had just
+closed. The rows say so for as long as it lasts, and **Resume autoconnect for
+`<app>`** hands them back. So does connecting one of them, switching to one,
+restarting the client, or the connection coming up on its own. Restarting vpnbar
+forgets it ([ADR 0031](docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+
+A client that is merely closed is held for a smaller reason: there is nothing to
+click in, so the attempt fails and spends its backoff, and a client closed for a
+quarter of an hour would be a connection that waits a quarter of an hour after it
+comes back. Its fallback gets the turn instead, as long as that one's client is
+open. This is also the only way a quit made outside this menu is noticed, which
+for the AWS client is the only quit there is.
 
 ## The probe
 
