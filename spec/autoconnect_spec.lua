@@ -781,6 +781,34 @@ describe("autoconnect.mayStart", function()
   end)
 end)
 
+describe("autoconnect.arrived", function()
+  it("is a connection that was down and is now up", function()
+    assert.is_true(autoconnect.arrived("disconnected", "connected"))
+    assert.is_true(autoconnect.arrived("login", "connected"))
+    assert.is_true(autoconnect.arrived("connecting", "connected"))
+  end)
+
+  it("is not a connection that was already up", function()
+    -- Quitting GlobalProtect leaves its tunnel up, so this reading is the one
+    -- that must not count: it is the steady state of a client somebody closed.
+    assert.is_false(autoconnect.arrived("connected", "connected"))
+  end)
+
+  it("is not a reading that follows one nobody could take", function()
+    -- A panel that cannot be read while the tunnel stays up reads `unknown`,
+    -- and then `connected` again once the client is back. Same tunnel, two
+    -- readings, nothing arrived.
+    assert.is_false(autoconnect.arrived("unknown", "connected"))
+    assert.is_false(autoconnect.arrived(nil, "connected"))
+  end)
+
+  it("is nothing at all while the connection is still down", function()
+    assert.is_false(autoconnect.arrived("disconnected", "connecting"))
+    assert.is_false(autoconnect.arrived("connecting", "disconnected"))
+    assert.is_false(autoconnect.arrived("disconnected", "unknown"))
+  end)
+end)
+
 describe("autoconnect.plan, a client that is closed", function()
   --- The two real clients: GlobalProtect first, the AWS one as its stand-in.
   local function clients(overrides)

@@ -57,6 +57,14 @@ brought it up, so the hold goes. That is checked as a *transition* into
 `connected` would drop the hold one refresh after the quit took it, and the one
 client whose app outlives its tunnel would be the one client this could not hold.
 
+The transition is `connecting` or a down state into `connected`, and `unknown`
+is deliberately not one of them. A closed client is also a panel nobody can
+read, so the same surviving tunnel reads `connected`, then `unknown`, then
+`connected` again as the client goes and comes back, and counting that as an
+arrival would hand the connection back on the strength of a probe that failed.
+The rule is `autoconnect.arrived`, in the core and under test, rather than a
+comparison in the adapter.
+
 ## Why the hold follows the click and not the kill
 
 `pkill` against an agent with `KeepAlive` set races its own launch agent: the
@@ -67,6 +75,19 @@ answer. What somebody asked for has one, so the hold is taken when the
 confirmation is accepted. A quit that failed therefore leaves a running client
 autoconnect will not touch — which the connection's row says, and **Resume
 autoconnect** undoes.
+
+## Why handing a client back clears the backoff
+
+A held connection records no attempts, so the failures in the memory are the
+ones from before the quit. Leaving them there meant **Resume autoconnect** could
+be answered with up to fifteen minutes of a cooldown somebody earned before they
+closed the client, which is the delay this decision exists to remove. Every
+connection through that client is cleared, because the quit held all of them.
+
+What is cleared is the failure record, not `started`: who opened a tunnel is what
+says whether this menu may close it again
+([ADR 0015](0015-one-at-a-time-is-a-setting-not-a-rule.md)), and a resume is no
+answer to that question.
 
 ## Why the fallback gets its turn immediately
 

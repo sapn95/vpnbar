@@ -452,8 +452,25 @@ end
 --- @param id string a profile id
 function obj:resume(id)
   local profile = store.get(self.config, id)
-  if profile and profile.app then
-    self.quitByHand[profile.app] = nil
+  local app = profile and profile.app or nil
+  if app == nil or not self.quitByHand[app] then
+    return
+  end
+  self.quitByHand[app] = nil
+  -- Handed back means tried now. A held connection records no attempts, so what
+  -- the memory still holds is whatever failed before the quit, and asking
+  -- somebody to wait out a fifteen-minute cooldown they earned before they
+  -- closed the client is the delay this whole rule was written to remove.
+  --
+  -- `succeeded` rather than `forget`, because who started a tunnel is not a
+  -- failure record and the supersede rule of
+  -- [ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)
+  -- turns on it. Every connection through the client, since the quit held all
+  -- of them.
+  for _, other in ipairs(store.list(self.config, true)) do
+    if other.app == app then
+      autoconnect.succeeded(self.attempts, other.id)
+    end
   end
 end
 
@@ -590,14 +607,10 @@ function obj:refresh(options)
     states[profile.id] = backends.status(profile, runtime)
   end
   -- A tunnel that has just arrived was not being left alone by anybody: whoever
-  -- brought it up, the quit that held it has been overtaken by events.
-  --
-  -- The arrival and not the state, on purpose. Quitting GlobalProtect leaves its
-  -- tunnel up, so a rule that read "connected" would drop the hold one tick
-  -- after the quit took it, and the one client whose app outlives its tunnel
-  -- would be the one client this could not hold.
+  -- brought it up, the quit that held it has been overtaken by events. Which
+  -- readings count as an arrival is `autoconnect.arrived`, not this loop.
   for _, profile in ipairs(store.list(self.config, true)) do
-    if profile.app and states[profile.id] == "connected" and (self.states or {})[profile.id] ~= "connected" then
+    if profile.app and autoconnect.arrived((self.states or {})[profile.id], states[profile.id]) then
       self.quitByHand[profile.app] = nil
     end
   end

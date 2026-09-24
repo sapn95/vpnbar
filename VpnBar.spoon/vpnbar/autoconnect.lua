@@ -188,6 +188,26 @@ function autoconnect.mayStart(profile, context)
   return not (context.appRunning and context.appRunning[app] == false)
 end
 
+--- Has this connection just arrived, rather than having been up all along?
+---
+--- The question a quit turns on: a tunnel that comes up while autoconnect is
+--- leaving it alone was wanted by somebody, whoever that was, so the hold goes
+--- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+---
+--- Both halves are strict, and each for its own reason. `connected` on its own
+--- says nothing, because GlobalProtect's tunnel survives the quit that closed
+--- its panel ([ADR 0001](../../docs/adr/0001-globalprotect-is-not-a-scutil-vpn.md)),
+--- so a rule reading the state would drop the hold one refresh after it was
+--- taken. A previous `unknown` is no evidence either: a probe that could not
+--- answer while the tunnel stayed up would read as an arrival the moment it
+--- could answer again, which is the same tunnel and a different reading.
+--- @param previous string|nil what the refresh before this one read
+--- @param current string|nil what this refresh read
+--- @return boolean
+function autoconnect.arrived(previous, current)
+  return current == "connected" and (isDown(previous) or previous == "connecting")
+end
+
 --- The ranking autoconnect works from: the order in the menu, with one
 --- exception. A connection somebody switched to goes first, whatever its
 --- `order`, for as long as the preference stands. The order itself is not
