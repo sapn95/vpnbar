@@ -22,7 +22,7 @@ usually one that is already connected.
 
 ## The decision
 
-Connecting a named profile is three steps, all keyboard: set the chooser to the
+Connecting a named profile is two steps, all keyboard: set the chooser to the
 profile, then press Connect. Disconnecting stays what it was, the button inside
 that profile's own block. `vpnbar/awsui.lua` decides which control each of those
 is, from a flat list of roles and strings, so the part that can be wrong is
