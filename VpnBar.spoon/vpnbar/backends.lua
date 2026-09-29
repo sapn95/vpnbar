@@ -218,18 +218,20 @@ function shell.force(profile, runtime)
   return outcome(ok, "the force command failed")
 end
 
--- The AWS VPN Client. Its window lists one row per profile, and the management
--- interface behind it cannot say which of them is up — `state` reports that a
--- session exists, not whose. So the two halves are answered by two different
--- things: the state by a command that costs nothing and opens no window, the
--- clicking by the row itself.
+-- The AWS VPN Client. The state comes from a command that costs nothing and
+-- opens no window, because the client cannot be asked which profile is up
+-- ([ADR 0027](../../docs/adr/0027-the-aws-client-stopped-having-a-management-interface.md)).
+-- The two directions are not symmetrical in its window: a connection that is up
+-- has a block of its own with a Disconnect in it, while starting one means
+-- setting a chooser and pressing the single Connect beside it
+-- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
 local awsvpn = {}
 
 awsvpn.status = shell.status
 awsvpn.force = shell.force
 
 function awsvpn.connect(profile, runtime)
-  return runtime.pressRow(profile.app, profile.row, "Connect")
+  return runtime.connectRow(profile.app, profile.row)
 end
 
 function awsvpn.disconnect(profile, runtime)

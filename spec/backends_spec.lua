@@ -383,14 +383,21 @@ describe("the awsvpn backend", function()
       runtime.rows[#runtime.rows + 1] = { app = app, row = row, button = button }
       return true, nil
     end
+    runtime.connectRow = function(app, row)
+      runtime.rows[#runtime.rows + 1] = { app = app, row = row, button = "connectRow" }
+      return true, nil
+    end
     return runtime
   end
 
-  it("clicks the named row's own button", function()
+  it("asks for the named profile, and takes it down by its own button", function()
+    -- Not symmetrical, because the client is not: a connection that is up has a
+    -- Disconnect of its own, and starting one goes through the chooser
+    -- ([ADR 0032]).
     local runtime = runtimeWithRows()
     backends.act(profile, "connect", runtime)
     backends.act(profile, "disconnect", runtime)
-    assert.same({ app = "AWS VPN Client", row = "work", button = "Connect" }, runtime.rows[1])
+    assert.same({ app = "AWS VPN Client", row = "work", button = "connectRow" }, runtime.rows[1])
     assert.same({ app = "AWS VPN Client", row = "work", button = "Disconnect" }, runtime.rows[2])
   end)
 
