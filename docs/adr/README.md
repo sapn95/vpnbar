@@ -37,3 +37,4 @@ whether their idea was considered or simply missed.
 | [0029](0029-an-attempt-that-needs-a-person-waits-for-one.md) | An attempt that needs a person waits for one |
 | [0030](0030-a-switch-is-a-preference-not-an-order.md) | A switch is a preference, not an order |
 | [0031](0031-autoconnect-does-not-undo-a-quit.md) | Autoconnect does not undo a quit |
+| [0032](0032-the-aws-client-is-driven-by-keyboard.md) | The AWS client is driven by keyboard |

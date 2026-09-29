@@ -70,16 +70,25 @@ offers to list it; it never writes back.
 | --- | --- | --- | --- |
 | `scutil` | Anything in `scutil --nc list` | `scutil --nc start` / `stop` | `scutil --nc status` |
 | `globalprotect` | The Palo Alto agent | Clicks its own menu-bar panel through the accessibility API | An interface probe, or the panel's own status line on demand |
-| `awsvpn` | The AWS VPN Client | Clicks the row for the profile you name | A command you give |
+| `awsvpn` | The AWS VPN Client | Sets its profile chooser and presses Connect, by keyboard | A command you give |
 | `shell` | Everything else | Two commands you give | A third command you give, if you give one |
 
-The AWS client has no `scutil` service and no command line, so `awsvpn` clicks
-the row you name and reads the state from a cheap command that opens no window
+The AWS client has no `scutil` service and no command line, so it is driven
+through its window and read from a cheap command that opens no window
 ([ADR 0009](docs/adr/0009-the-aws-vpn-client-is-driven-through-openvpns-management-interface.md)).
 Version 6 of the client dropped OpenVPN and with it the management interface the
-helper used to ask, so the state now comes from the client's own log — which,
+helper used to ask, so the state now comes from the client's own log, which,
 unlike the interface it replaces, says *which* profile is up
 ([ADR 0027](docs/adr/0027-the-aws-client-stopped-having-a-management-interface.md)).
+
+Its window is a web view, and the two directions through it are not the same
+shape. A connection that is up has a block of its own with a Disconnect in it.
+Starting one goes through a single chooser naming the profile and a single
+Connect beside it, so connecting `work` means setting the chooser to `work`
+first. All of it is keyboard: `AXPress` does nothing in this client, while the
+control answers the key a person would press, and a key can be addressed to an
+application that is in the background, so nothing is brought to the front and no
+focus is taken ([ADR 0032](docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
 
 The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
 never heard of needs a config entry, not a patch.
@@ -375,17 +384,18 @@ menu:
   identifies a live tunnel. The Spoon itself loads in Hammerspoon, reads a
   config, polls both backends, renders its glyph in the menu bar and stops
   again without leaving anything behind.
-- **Proved for the AWS VPN Client.** No `scutil` entry, no accessibility tree,
-  no command line; OpenVPN's management interface on `127.0.0.1:35001` with a
-  session password file, taken from a real session's own logs. The helper is
-  covered by a suite of its own against a stubbed socket.
-- **Not yet exercised against a live tunnel.** Two write paths: the click that
-  disconnects GlobalProtect, and `signal SIGTERM` to the AWS management
-  interface. The GlobalProtect panel was read while it was *connecting*, and
-  the control that appears once connected was not captured — so the code looks
-  for a control whose text contains `disconnect` anywhere in the panel *and* in
-  the options menu, rather than at a remembered position. Both read paths are
-  proved; both write paths are still first-time code.
+- **Proved for the AWS VPN Client.** No `scutil` entry and no command line. Its
+  window is a web view whose controls sit ten levels down, `AXPress` does
+  nothing on any of them, and focusing a control and sending it a key works
+  with the application in the background: the chooser opens, its highlight
+  moves under the arrow keys, and the selection sticks. The state comes from
+  the client's own log, and the helper that reads it has a suite of its own.
+- **Not yet exercised against a live tunnel.** Three write paths: the click
+  that disconnects GlobalProtect, the Disconnect inside an AWS connection's
+  block, and the Connect that follows the chooser. That last keystroke starts a
+  real session and a SAML login, so it was left for the first real use rather
+  than tried on a working machine to see what happens. Every read path is
+  proved.
 - **Deliberately not done.** Nothing here presses *Disable*: on a GlobalProtect
   panel that is a different action with a different meaning, and this menu
   cannot undo it.

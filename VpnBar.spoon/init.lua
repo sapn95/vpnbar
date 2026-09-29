@@ -26,6 +26,7 @@ local backends = require("vpnbar.backends")
 local form = require("vpnbar.form")
 local icon = require("vpnbar.icon")
 local work = require("vpnbar.work")
+local awsui = require("vpnbar.awsui")
 
 --- VpnBar.configPath
 --- Variable
@@ -163,11 +164,22 @@ local function textOf(element)
   return table.concat(parts, " "):lower()
 end
 
---- Depth-first walk, calling `visit` on every element. Bounded, because an
---- accessibility tree with a cycle in it would otherwise hang Hammerspoon.
+--- How deep a window's tree is followed.
+---
+--- Eight was enough for a panel and not for a web view. The AWS client draws
+--- its window in one, and its own controls sit at depth nine and ten behind
+--- seven nested groups, so a walk that stopped at eight found the groups, none
+--- of the buttons, and reported a client that offered nothing
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+--- Twenty is past anything either client draws and still a number, which is
+--- what the bound is for: a tree with a cycle in it would otherwise hang
+--- Hammerspoon.
+local WALK_DEPTH = 20
+
+--- Depth-first walk, calling `visit` on every element.
 local function walk(element, visit, depth)
   depth = depth or 0
-  if depth > 8 or not element then
+  if depth > WALK_DEPTH or not element then
     return nil
   end
   local found = visit(element)
@@ -287,13 +299,29 @@ end
 --- The AWS client keeps running without one, and with no window its
 --- accessibility tree is empty — which is what made an earlier version of this
 --- project conclude it had none at all.
+--- The first thing in a list of windows that is actually a window.
+---
+--- A client with no window open still answers `AXWindows` with one entry, and
+--- that entry has the role `AXApplication` and a frame of nothing: a tree of
+--- menu bars rather than an interface. Taken at face value it is a window where
+--- every control is missing, which reads exactly like a client that has stopped
+--- offering them ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+local function realWindow(element)
+  for _, candidate in ipairs((element and element:attributeValue("AXWindows")) or {}) do
+    if candidate:attributeValue("AXRole") == "AXWindow" then
+      return candidate
+    end
+  end
+  return nil
+end
+
 local function windowOf(appName)
   local app = hs.application.get(appName)
   if not app then
     return nil, appName .. " is not running"
   end
   local element = hs.axuielement.applicationElement(app)
-  local window = (element:attributeValue("AXWindows") or {})[1]
+  local window = realWindow(element)
   if window then
     return window, nil
   end
@@ -301,53 +329,258 @@ local function windowOf(appName)
   -- focus where it was, and `-g` moved the focused window to the client's.
   hs.execute("/usr/bin/open -a " .. backends.shellQuote(appName))
   for _ = 1, 25 do
-    window = (element:attributeValue("AXWindows") or {})[1]
+    window = realWindow(element)
     if window then
       return window, nil
     end
     hs.timer.usleep(200000)
   end
-  return nil, appName .. " has no window to click in"
+  -- Measured on the AWS client: once its window has been closed, neither
+  -- `open -a` nor activating it brings one back, and it has no Window menu to
+  -- ask. Only its icon in the menu bar does, so that is what the message says
+  -- rather than a second attempt that would fail the same way.
+  return nil, ("%s has no window to click in; its menu bar icon opens one"):format(appName)
 end
 
---- Press a button on the row belonging to one name.
+--- Every element of a window in the order the tree yields them, as plain data
+--- beside the elements themselves.
 ---
---- The tree runs name, state, button per row, so: walk it in order, remember
---- when the name matches, and take the first button of the right title within
---- the few elements that follow. Bounded on purpose — a row that does not
---- offer the button being asked for must not reach into the next row and click
---- that one instead.
----
---- Done here rather than in the shell helper because System Events cannot read
---- this app: `entire contents of window 1` comes back empty while the window
---- plainly has ten children, and it fails silently.
-local function pressRow(appName, row, buttonTitle)
-  local window, err = windowOf(appName)
-  if not window then
-    return false, err
-  end
-  local matched, since = false, 0
-  local target = walk(window, function(element)
-    local role = element:attributeValue("AXRole")
-    if role == "AXStaticText" then
-      if element:attributeValue("AXValue") == row then
-        matched, since = true, 0
-        return nil
-      end
-    elseif role == "AXButton" and matched and since <= 4 then
-      if element:attributeValue("AXTitle") == buttonTitle then
-        return element
-      end
-    end
-    if matched then
-      since = since + 1
-    end
+--- The data half is what `vpnbar/awsui.lua` reads, so which button belongs to
+--- which profile is decided by a pure function and tested without a client;
+--- the element half is what gets pressed.
+--- @param root table an accessibility element
+--- @return table nodes, table elements
+local function flatten(root)
+  local nodes, elements = {}, {}
+  walk(root, function(element)
+    nodes[#nodes + 1] = {
+      role = element:attributeValue("AXRole"),
+      title = element:attributeValue("AXTitle"),
+      value = element:attributeValue("AXValue"),
+      selected = element:attributeValue("AXSelected") == true,
+      focused = element:attributeValue("AXFocused") == true,
+    }
+    elements[#elements + 1] = element
     return nil
   end)
-  if not target then
+  return nodes, elements
+end
+
+--- Press one control, by focusing it and sending it a key.
+---
+--- `AXPress` is what this used to do and it does nothing at all in this client:
+--- measured on its profile chooser, on a plain button and on a menu item, the
+--- action is accepted and no click happens. What does work is the keyboard the
+--- control already answers to, and it works with the application in the
+--- background, so nothing is brought to the front and no focus is taken
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+---
+--- The key is addressed to the application rather than to the system, so a
+--- focus that did not take sends a keystroke the client ignores, never a space
+--- into whatever somebody is typing in.
+--- @param appName string
+--- @param element table|nil
+--- @param key string "return" presses a button, "space" opens the chooser
+--- @return boolean
+local function pressElement(appName, element, key)
+  local app = hs.application.get(appName)
+  if not app or not element then
+    return false
+  end
+  pcall(function()
+    element:setAttributeValue("AXFocused", true)
+  end)
+  hs.timer.usleep(150000)
+  hs.eventtap.keyStroke({}, key, 0, app)
+  return true
+end
+
+--- Every real window of an application, the chooser's included.
+local function windowsOf(appName)
+  local app = hs.application.get(appName)
+  local element = app and hs.axuielement.applicationElement(app)
+  local windows = {}
+  for _, candidate in ipairs((element and element:attributeValue("AXWindows")) or {}) do
+    if candidate:attributeValue("AXRole") == "AXWindow" then
+      windows[#windows + 1] = candidate
+    end
+  end
+  return windows
+end
+
+--- The window with the client in it, as opposed to a chooser hanging open.
+---
+--- An open chooser is a window of the application in its own right, and it
+--- comes first in the list, so the plain "first window" this used to take was
+--- whichever of the two happened to be there.
+local function clientWindow(appName)
+  local _, err = windowOf(appName)
+  if err then
+    return nil, nil, err
+  end
+  for _, candidate in ipairs(windowsOf(appName)) do
+    local nodes, elements = flatten(candidate)
+    if #awsui.offered(nodes) == 0 then
+      return nodes, elements, nil
+    end
+  end
+  return nil, nil, ("%s has only a chooser open"):format(appName)
+end
+
+--- The chooser's own window, once it is open, or nil while it is not.
+local function chooserWindow(appName)
+  for _, candidate in ipairs(windowsOf(appName)) do
+    local nodes, elements = flatten(candidate)
+    if #awsui.offered(nodes) > 0 then
+      return nodes, elements
+    end
+  end
+  return nil, nil
+end
+
+--- How many times a step of the chooser is looked at before it is called
+--- failed, and how long each look is apart. Two seconds all told: the list is
+--- drawn by a web view, so it is neither instant nor slow.
+local CHOOSER_TRIES, CHOOSER_WAIT = 20, 100000
+
+local function settle(check)
+  for _ = 1, CHOOSER_TRIES do
+    local value = check()
+    if value then
+      return value
+    end
+    hs.timer.usleep(CHOOSER_WAIT)
+  end
+  return nil
+end
+
+--- Set the chooser to one profile, leaving it closed either way.
+---
+--- Opened with a space, walked with arrow keys and taken with a return, which
+--- is what the control answers to. The walk re-reads the highlight after every
+--- press rather than counting the presses out in advance: the list is short,
+--- the highlight is readable, and a count that was one out would connect a
+--- different VPN than the one somebody asked for.
+--- @return boolean ok, string|nil err
+local function chooseProfile(appName, chooser, row)
+  local app = hs.application.get(appName)
+  local function escape()
+    if app then
+      hs.eventtap.keyStroke({}, "escape", 0, app)
+    end
+  end
+
+  pressElement(appName, chooser, "space")
+  local nodes = settle(function()
+    return (chooserWindow(appName))
+  end)
+  if not nodes then
+    return false, ("%s did not open its profile chooser"):format(appName)
+  end
+
+  local offered = awsui.offered(nodes)
+  local _, steps = awsui.stepsTo(offered, awsui.highlighted(nodes), row)
+  if steps == 0 and awsui.highlighted(nodes) ~= row then
+    escape()
+    -- The chooser lists what can still be connected, so a name that is not in
+    -- it is either one the client does not have or one that is already up, and
+    -- the second was ruled out before we got here.
+    return false, ("%s does not offer a profile called %s"):format(appName, tostring(row))
+  end
+
+  for _ = 1, #offered do
+    local highlighted = awsui.highlighted(nodes)
+    if highlighted == row then
+      break
+    end
+    local direction = awsui.stepsTo(offered, highlighted, row)
+    if not direction or not app then
+      break
+    end
+    hs.eventtap.keyStroke({}, direction, 0, app)
+    hs.timer.usleep(CHOOSER_WAIT)
+    nodes = chooserWindow(appName) or nodes
+  end
+  if awsui.highlighted(nodes) ~= row then
+    escape()
+    return false, ("%s would not move its chooser to %s"):format(appName, tostring(row))
+  end
+
+  if app then
+    hs.eventtap.keyStroke({}, "return", 0, app)
+  end
+  local chosen = settle(function()
+    local current = clientWindow(appName)
+    return (current and awsui.chosen(current) == row) or nil
+  end)
+  if not chosen then
+    escape()
+    return false, ("%s did not settle on %s"):format(appName, tostring(row))
+  end
+  return true, nil
+end
+
+--- Press a button on the block belonging to one name.
+---
+--- Which button that is comes from `awsui`; this only presses it. The block is
+--- bounded there, so a profile that does not offer the button being asked for
+--- cannot reach into the next one and press that.
+local function pressRow(appName, row, buttonTitle)
+  local nodes, elements, err = clientWindow(appName)
+  if not nodes then
+    return false, err
+  end
+  local at = awsui.rowButton(nodes, row, buttonTitle)
+  if not at then
     return false, ("%s offers no %s on a row called %s"):format(appName, buttonTitle, tostring(row))
   end
-  target:performAction("AXPress")
+  pressElement(appName, elements[at], "return")
+  return true, nil
+end
+
+--- Set the chooser to one profile and press Connect.
+---
+--- There is no Connect on a profile in this client. There is one chooser saying
+--- what will be connected and one Connect beside it, so connecting a named
+--- profile means setting the chooser first, and the chooser is a list that only
+--- an arrow key moves
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+local function connectRow(appName, row)
+  local nodes, elements, err = clientWindow(appName)
+  if not nodes then
+    return false, err
+  end
+  if awsui.isConnected(nodes, row) then
+    -- Nothing to press. The client answers a second Connect on a live profile
+    -- with a dialog, and a read that lagged behind is a normal thing to have.
+    return true, nil
+  end
+  local connect, chooser = awsui.connectAt(nodes)
+  if not connect then
+    return false, ("%s offers no Connect right now"):format(appName)
+  end
+
+  if awsui.chosen(nodes) ~= row then
+    if not chooser then
+      return false, ("%s has no profile chooser to pick %s with"):format(appName, tostring(row))
+    end
+    local ok, chooseErr = chooseProfile(appName, elements[chooser], row)
+    if not ok then
+      return false, chooseErr
+    end
+    -- The window is rebuilt around the new selection, so the elements read
+    -- before it are stale.
+    nodes, elements = clientWindow(appName)
+    if not nodes then
+      return false, appName .. " closed its window mid-way"
+    end
+    connect = awsui.connectAt(nodes)
+    if not connect then
+      return false, ("%s offers no Connect right now"):format(appName)
+    end
+  end
+
+  pressElement(appName, elements[connect], "return")
   return true, nil
 end
 
@@ -418,6 +651,11 @@ function obj:runtime(allowPanelReads)
     pressRow = function(app, row, buttonTitle)
       return keepingFocus(function()
         return pressRow(app, row, buttonTitle)
+      end)
+    end,
+    connectRow = function(app, row)
+      return keepingFocus(function()
+        return connectRow(app, row)
       end)
     end,
   }
