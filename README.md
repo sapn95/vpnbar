@@ -268,8 +268,8 @@ getting that far leaves them pointing at an interface that is down, and every
 address it had claimed then goes nowhere: the machine looks connected and
 reaches none of it.
 
-vpnbar notices this by itself. When a tunnel is down and routes still point at
-it, and have for a minute, one dialog says how many there are and what removing
+vpnbar notices this by itself. When routes point at a tunnel that is down, and
+have for a minute, one dialog says how many there are and what removing
 them means, and accepting asks macOS for the password once. Nothing is installed
 to make that possible: no helper, no `sudoers` entry, no daemon
 ([ADR 0035](docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)). Restarting

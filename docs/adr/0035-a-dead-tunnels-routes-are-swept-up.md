@@ -6,8 +6,8 @@ gave `vpnbar clean` to a person who already knew what had gone wrong.
 
 ## The decision
 
-Every refresh, when `ifconfig` says a tunnel is down, vpnbar reads the route
-table. Routes that point at a tunnel which is down, and have for a minute, are
+Every refresh, vpnbar reads the route table. Routes that point at a tunnel
+which is down, and have for a minute, are
 offered up in one dialog that says what they are and what will happen. Accepting
 runs `vpnbar clean --yes` through `with administrator privileges`, which is one
 macOS password dialog and nothing left behind.
