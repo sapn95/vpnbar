@@ -930,15 +930,14 @@ function obj:refresh(options)
   -- when `ifconfig`, which was read for the probes anyway, says some tunnel is
   -- down: on a machine where everything is up there is no route table to read
   -- ([ADR 0035](../../docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)).
-  local offer
+  -- The route table is read every time rather than only when `ifconfig` shows a
+  -- tunnel that is down, because the worst case is a tunnel that is not in
+  -- `ifconfig` at all: destroyed, with its routes still installed. A guard that
+  -- asked `ifconfig` first could not see that one. Measured at 30 ms for both
+  -- families, against a refresh that already runs several commands.
   local interfaces = require("vpnbar.parse").ifconfigInterfaces(runtime.ifconfig())
-  if routes.anyTunnelDown(interfaces) then
-    local stranded, names = routes.stranded(routes.parse(runtime.routeTable()), interfaces)
-    offer = routes.offer(stranded, names, self.routeMemory, os.time())
-  else
-    -- Says the condition is over, which is what clears the clock behind it.
-    routes.offer({}, {}, self.routeMemory, os.time())
-  end
+  local stranded, names = routes.stranded(routes.parse(runtime.routeTable()), interfaces)
+  local offer = routes.offer(stranded, names, self.routeMemory, os.time())
 
   -- At most one connection is started per refresh, and only from this one
   -- place. The policy — cooldown, how many tries before the fallback, when to

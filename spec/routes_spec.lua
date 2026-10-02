@@ -49,6 +49,16 @@ describe("routes.parse", function()
 end)
 
 describe("routes.stranded", function()
+  it("finds routes whose interface is not in ifconfig at all", function()
+    -- The worst case, and the reason the route table is read every refresh
+    -- rather than only when ifconfig shows a tunnel that is down: a tunnel
+    -- that was destroyed with its routes still installed is in no ifconfig
+    -- output to ask about.
+    local stranded, names = routes.stranded(routes.parse(NETSTAT), { en0 = { up = true, addresses = {} } })
+    assert.equals(4, #stranded)
+    assert.same({ "utun1", "utun4" }, names)
+  end)
+
   it("finds the routes on the tunnel that is down, and names it", function()
     local stranded, names = routes.stranded(routes.parse(NETSTAT), interfaces())
     assert.equals(3, #stranded)
@@ -72,15 +82,6 @@ describe("routes.stranded", function()
   it("goes by the flag and not by the address, which outlives the tunnel", function()
     local held = interfaces({ utun4 = { up = false, addresses = { "10.245.0.225" } } })
     assert.equals(3, #routes.stranded(routes.parse(NETSTAT), held))
-  end)
-end)
-
-describe("routes.anyTunnelDown", function()
-  it("is the cheap question asked before the route table is read at all", function()
-    assert.is_true(routes.anyTunnelDown(interfaces()))
-    assert.is_false(routes.anyTunnelDown(interfaces({ utun4 = { up = true } })))
-    assert.is_false(routes.anyTunnelDown({ en0 = { up = false } }), "a physical interface is not a tunnel")
-    assert.is_false(routes.anyTunnelDown(nil))
   end)
 end)
 

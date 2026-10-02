@@ -75,20 +75,6 @@ function routes.isDown(interfaces, name)
   return interface == nil or interface.up ~= true
 end
 
---- Is any tunnel down at all? Asked first, because it is free: the adapter has
---- already read `ifconfig` for the probes, and a machine with every tunnel up
---- has no reason to read the route table at all.
---- @param interfaces table
---- @return boolean
-function routes.anyTunnelDown(interfaces)
-  for name, interface in pairs(interfaces or {}) do
-    if isTunnel(name) and interface.up ~= true then
-      return true
-    end
-  end
-  return false
-end
-
 --- The routes that point at a tunnel which is down.
 --- @param parsed table from `routes.parse`
 --- @param interfaces table from `parse.ifconfigInterfaces`

@@ -51,6 +51,17 @@ delete is indistinguishable from the cable being pulled out. The default route
 on a physical interface, which is the route still working while all this is
 happening, is not a candidate under any reading.
 
+## Why the route table is read every time
+
+The first version asked `ifconfig` first and read the route table only when it
+showed a tunnel that was down, which is free because the probes have read
+`ifconfig` already. It also could not see the worst case: a tunnel that is not
+in `ifconfig` at all, destroyed with its routes still installed. A guard that
+asks about interfaces cannot find routes belonging to an interface that is
+gone. Both families of the route table cost 30 ms, against a refresh that
+already runs several commands, so the guard bought nothing worth that blind
+spot.
+
 ## Why it waits a minute, and takes no for an answer
 
 A tunnel coming up is briefly not up yet with its routes already installed.
