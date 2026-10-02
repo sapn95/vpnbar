@@ -506,14 +506,12 @@ describe("menu.build, restarting the agent", function()
     assert.matches("leaves it closed", item.tooltip)
   end)
 
-  it("is withheld from a protected connection, because it ends the session", function()
-    -- This used to be offered, on the reasoning that restarting an application
-    -- does not reach the tunnel. Measured, it does: the agent exits, and two
-    -- seconds later the gateway has logged the user out
-    -- ([ADR 0033]). A repair that costs the session is a disconnect, and
-    -- protection refuses those from every row in the menu.
+  it("stays on a protected connection, while the quit beside it goes", function()
+    -- Restarting ends with the client running, so it is the repair. Quitting
+    -- leaves the connection down, and stopping this agent is now known to end
+    -- the session ([ADR 0033], [ADR 0034]).
     local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", protected = true })
-    assert.is_nil(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
+    assert.is_table(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
     assert.is_nil(deep(menu.build(cfg, { gp = "connected" }), "Quit GlobalProtect"))
   end)
 
@@ -536,7 +534,10 @@ describe("menu.build, restarting the agent", function()
       protected = true,
     })
     assert.is_nil(deep(menu.build(aws, { aws = "connected" }), "Quit AWS VPN Client"))
-    assert.is_nil(deep(menu.build(aws, { aws = "connected" }), "Restart AWS VPN Client"))
+    -- The restart is still there: it ends with the client running, which is
+    -- the one repair this menu has for a client that stopped answering
+    -- ([ADR 0034]).
+    assert.is_table(deep(menu.build(aws, { aws = "connected" }), "Restart AWS VPN Client"))
   end)
 
   it("is not offered for a backend with no application at all", function()

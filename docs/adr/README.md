@@ -39,3 +39,4 @@ whether their idea was considered or simply missed.
 | [0031](0031-autoconnect-does-not-undo-a-quit.md) | Autoconnect does not undo a quit |
 | [0032](0032-the-aws-client-is-driven-by-keyboard.md) | The AWS client is driven by keyboard |
 | [0033](0033-stopping-an-agent-that-launchd-restarts.md) | Stopping an agent that launchd restarts |
+| [0034](0034-a-protected-connection-keeps-its-repair.md) | A protected connection keeps its repair |
