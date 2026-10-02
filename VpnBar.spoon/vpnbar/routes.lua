@@ -121,10 +121,20 @@ end
 --- @return table|nil { count = number, interfaces = table }
 function routes.offer(stranded, names, memory, now)
   stranded = stranded or {}
+  names = names or {}
   memory = memory or {}
   if #stranded == 0 then
-    memory.since, memory.declined = nil, nil
+    memory.since, memory.declined, memory.key = nil, nil, nil
     return nil
+  end
+  -- A second tunnel that has only just started coming up must serve its own
+  -- settling time, not inherit the one the first tunnel has already served.
+  -- Keyed on which tunnels are in the set rather than on how many routes they
+  -- have: another route on a tunnel that is already known to be dead is the
+  -- same occurrence, a new tunnel is not.
+  local key = table.concat(names, ",")
+  if memory.key ~= key then
+    memory.key, memory.since, memory.declined = key, now, nil
   end
   memory.since = memory.since or now
   if now - memory.since < routes.SETTLE then

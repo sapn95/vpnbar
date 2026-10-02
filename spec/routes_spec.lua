@@ -111,9 +111,28 @@ describe("routes.offer", function()
   end)
 
   it("takes no for an answer for a quarter of an hour", function()
-    local memory = { since = 0, declined = 1000 }
+    local memory = { since = 0, declined = 1000, key = "utun4" }
     assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.COOLDOWN - 1))
     assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.COOLDOWN))
+  end)
+
+  it("starts the clock again when another tunnel joins the set", function()
+    -- A second tunnel that has only just started coming up must serve its own
+    -- settling time. Inheriting the first one's would sweep away the routes of
+    -- a connection that is still starting, which is the one thing the wait is
+    -- for.
+    local memory, four = {}, { {}, {}, {}, {} }
+    routes.offer(stranded, names, memory, 1000)
+    assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.SETTLE))
+    local both = { "utun4", "utun5" }
+    assert.is_nil(routes.offer(four, both, memory, 1000 + routes.SETTLE + 1))
+    assert.is_table(routes.offer(four, both, memory, 1000 + 2 * routes.SETTLE + 1))
+  end)
+
+  it("does not restart the clock for another route on the same tunnel", function()
+    local memory = {}
+    routes.offer(stranded, names, memory, 1000)
+    assert.is_table(routes.offer({ {}, {}, {}, {} }, names, memory, 1000 + routes.SETTLE))
   end)
 end)
 

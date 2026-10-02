@@ -730,9 +730,16 @@ function obj:offerCleanup(offer)
   end
   -- macOS asks for the password itself, once, and nothing is left behind with
   -- standing privileges: no helper, no sudoers entry, no daemon.
-  local template = 'do shell script "%s clean --yes" with administrator privileges'
+  -- Two quotings, because there are two languages here. The shell sees the
+  -- path inside single quotes, so a space or a semicolon in it is a character
+  -- rather than a command; AppleScript then sees that whole command as a
+  -- double-quoted string, where a backslash and a double quote are what need
+  -- escaping.
+  local command = backends.shellQuote(cli) .. " clean --yes"
+  local literal = command:gsub("\\", "\\\\"):gsub('"', '\\"')
+  local template = 'do shell script "%s" with administrator privileges'
     .. ' with prompt "vpnbar is removing %d route(s) that point at a tunnel which is down."'
-  local script = template:format(cli:gsub('"', '\\"'), offer.count)
+  local script = template:format(literal, offer.count)
   local ok, _, raw = hs.osascript.applescript(script)
   self.routeMemory.since, self.routeMemory.declined = nil, os.time()
   if not ok then
