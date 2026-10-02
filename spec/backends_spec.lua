@@ -234,22 +234,20 @@ end)
 describe("the globalprotect backend, restarting the agent", function()
   local profile = { id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GlobalProtect" }
 
-  it("asks it to quit, insists, and then opens it again", function()
+  it("unloads the agent and loads its plist again", function()
     local runtime = fakeRuntime()
     assert.is_true((backends.act(profile, "restart", runtime)))
     local command = runtime.calls.exec[1]
     assert.equals(1, #runtime.calls.exec)
-    -- TERM first: an agent that is merely wedged in its panel may still shut
-    -- down cleanly, and a clean shutdown is the one that leaves its own state
-    -- tidy.
-    assert.matches("^/usr/bin/pkill %-x 'GlobalProtect'", command)
-    assert.matches("pkill %-9 %-x 'GlobalProtect'", command)
-    -- Opening it again is last, so it is the exit status that reaches the caller.
-    assert.matches("/usr/bin/open %-a 'GlobalProtect'$", command)
-    assert.is_true(command:find("pkill %-x") < command:find("pkill %-9"))
+    assert.matches("^/bin/launchctl bootout gui/", command)
+    assert.matches("com%.paloaltonetworks%.gp%.pangpa", command)
+    -- The check that it came back is last, so it is the exit status that
+    -- reaches the caller.
+    assert.matches("/usr/bin/pgrep %-x 'GlobalProtect' >/dev/null$", command)
+    assert.is_true(command:find("bootout", 1, true) < command:find("bootstrap", 1, true))
   end)
 
-  it("waits between the two, and again before it opens it", function()
+  it("waits after the unload, and again before it asks whether it is back", function()
     local runtime = fakeRuntime()
     backends.act(profile, "restart", runtime)
     local _, sleeps = runtime.calls.exec[1]:gsub("/bin/sleep", "")
@@ -262,6 +260,13 @@ describe("the globalprotect backend, restarting the agent", function()
     assert.matches("open %-a 'Some Agent'$", command)
   end)
 
+  it("asks the domain for the uid rather than remembering one", function()
+    -- A uid baked in at load time is a uid that is wrong for anybody else, and
+    -- the shell already knows it.
+    local command = backends.bootoutCommand({ label = "a.b.c", plist = "/p.plist" }, "App")
+    assert.matches("gui/%$%(/usr/bin/id %-u%)/a%.b%.c", command)
+  end)
+
   it("reports the failure of the reopen, not of the kill", function()
     -- `pkill` exits non-zero when nothing matched, so an agent that had already
     -- crashed would otherwise be reported as an error while it was being fixed.
@@ -271,25 +276,27 @@ describe("the globalprotect backend, restarting the agent", function()
     assert.matches("could not open GlobalProtect again", err)
   end)
 
-  it("is allowed on a protected connection, unlike every other write", function()
+  it("is refused on a protected connection, like every other write", function()
+    -- It was allowed here for two years, on the reasoning that restarting the
+    -- application cannot reach the tunnel. Measured, it ends the session
+    -- ([ADR 0033]), so it is a disconnect under another name and a protected
+    -- connection refuses it with the rest.
     local locked = { id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GP", protected = true }
     local runtime = fakeRuntime()
-    assert.is_true((backends.act(locked, "restart", runtime)))
-    assert.equals(1, #runtime.calls.exec)
-    for _, verb in ipairs({ "disconnect", "force" }) do
-      assert.is_false((backends.act(locked, verb, runtime)))
+    for _, verb in ipairs({ "restart", "quit", "disconnect", "force" }) do
+      assert.is_false((backends.act(locked, verb, runtime)), verb)
     end
-    assert.equals(1, #runtime.calls.exec)
+    assert.equals(0, #runtime.calls.exec)
   end)
 end)
 
 describe("backends.canRestart", function()
-  it("is true for the one backend whose tunnel outlives its app", function()
+  it("is true for an agent that is an application, while nothing is protected", function()
     assert.is_true(backends.canRestart({ id = "g", backend = "globalprotect", app = "GlobalProtect" }))
   end)
 
-  it("is true even when the connection is protected", function()
-    assert.is_true(backends.canRestart({ id = "g", backend = "globalprotect", app = "GP", protected = true }))
+  it("is false when the connection is protected, because it ends the session", function()
+    assert.is_false(backends.canRestart({ id = "g", backend = "globalprotect", app = "GP", protected = true }))
   end)
 
   it("is false where quitting the app would take the tunnel with it", function()
@@ -471,13 +478,37 @@ describe("quitting and restarting an application", function()
     return fakeRuntime()
   end
 
-  it("asks the app to quit, then insists, and does not reopen it", function()
+  it("unloads an agent launchd would restart, and does not load it again", function()
+    -- A kill is a race against `KeepAlive`, which this agent has set: it is
+    -- back within seconds and the Quit looks like it did nothing
+    -- ([ADR 0033]).
     local runtime = fake()
     assert.is_true((backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "quit", runtime)))
     local ran = runtime.calls.exec[1]
-    assert.is_truthy(ran:find("pkill -x 'GP'", 1, true), ran)
-    assert.is_truthy(ran:find("pkill -9 -x 'GP'", 1, true), ran)
+    assert.is_truthy(ran:find("launchctl bootout gui/", 1, true), ran)
+    assert.is_truthy(ran:find("com.paloaltonetworks.gp.pangpa", 1, true), ran)
+    assert.is_nil(ran:find("pkill", 1, true), "a kill is the thing that does not stick")
+    assert.is_nil(ran:find("bootstrap", 1, true), "quit does not start it again")
+  end)
+
+  it("asks a plain application to quit, then insists, and does not reopen it", function()
+    local runtime = fake()
+    local aws = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "w" }
+    assert.is_true((backends.act(aws, "quit", runtime)))
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("pkill -x 'AWS VPN Client'", 1, true), ran)
+    assert.is_truthy(ran:find("pkill -9 -x 'AWS VPN Client'", 1, true), ran)
     assert.is_nil(ran:find("open -a", 1, true), "quit does not start it again")
+  end)
+
+  it("loads the agent's own plist again rather than opening the app beside it", function()
+    local runtime = fake()
+    assert.is_true((backends.act({ id = "g", name = "G", backend = "globalprotect", app = "GP" }, "restart", runtime)))
+    local ran = runtime.calls.exec[1]
+    assert.is_truthy(ran:find("bootout gui/", 1, true), ran)
+    assert.is_truthy(ran:find("bootstrap gui/", 1, true), ran)
+    assert.is_truthy(ran:find("com.paloaltonetworks.gp.pangpa.plist", 1, true), ran)
+    assert.is_nil(ran:find("open -a", 1, true), "`open -a` would start it outside launchd")
   end)
 
   -- An app that was not running is an app that is now closed, and the command
@@ -508,14 +539,26 @@ describe("quitting and restarting an application", function()
     assert.is_false(backends.canQuit(nil))
   end)
 
-  -- The distinction the whole thing turns on: closing GlobalProtect closes a
-  -- window, closing the AWS client ends the session.
-  it("still closes a protected agent whose tunnel outlives it", function()
+  -- Both of these clients end their session when they are closed, which is
+  -- what `appOwnsTunnel` says and what a protected connection refuses. For
+  -- GlobalProtect that was measured two years after the opposite was written
+  -- down: the agent exits, the tunnel drops, the gateway logs the user out
+  -- ([ADR 0033]).
+  it("refuses to close a protected agent, since closing it logs the session out", function()
     local locked = { id = "g", name = "G", backend = "globalprotect", app = "GP", protected = true }
-    assert.is_true(backends.canQuit(locked))
-    assert.is_true(backends.canRestart(locked))
-    assert.is_true((backends.act(locked, "quit", fake())))
-    assert.is_true((backends.act(locked, "restart", fake())))
+    assert.is_false(backends.canQuit(locked))
+    assert.is_false(backends.canRestart(locked))
+    local ok, err = backends.act(locked, "quit", fake())
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("protected", 1, true), tostring(err))
+  end)
+
+  it("closes that same agent while it is not protected", function()
+    local open = { id = "g", name = "G", backend = "globalprotect", app = "GP" }
+    assert.is_true(backends.canQuit(open))
+    assert.is_true(backends.canRestart(open))
+    assert.is_true((backends.act(open, "quit", fake())))
+    assert.is_true((backends.act(open, "restart", fake())))
   end)
 
   it("refuses to close a protected client that is its own tunnel", function()

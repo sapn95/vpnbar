@@ -1204,9 +1204,14 @@ function obj:controlApp(id, verb)
   -- A quit is a decision (ADR 0031), and the dialog is where it has to be said.
   local safety = " Autoconnect leaves this client's connections alone afterwards, until you connect one again."
   if verb ~= "quit" then
-    safety = (not owns and profile.autoconnect)
-        and " If the connection does drop after all, autoconnect brings it back."
-      or ""
+    if owns then
+      -- Measured on GlobalProtect: the agent exits, the tunnel drops and the
+      -- gateway logs the session out, so what comes back is a client asking to
+      -- log in rather than a tunnel ([ADR 0033]).
+      safety = " It comes back when the client has started again, which may ask you to log in."
+    else
+      safety = profile.autoconnect and " If the connection does drop after all, autoconnect brings it back." or ""
+    end
   end
   local button = verb == "quit" and "Quit" or "Restart"
   local question = verb == "quit" and ("Quit %s?"):format(app) or ("Restart %s?"):format(app)

@@ -631,3 +631,161 @@ SH
   [[ "${output}" == *"did not answer"* ]]
   [[ "${output}" != *"Nothing to fix"* ]]
 }
+
+# -------------------------------------------------------------------- clean
+#
+# What a VPN leaves behind when it dies badly: routes pointing at an interface
+# that is down. The machine looks connected and reaches nothing, and the first
+# time this happened only a reboot cleared it.
+
+stub_network() {
+  # `ifconfig` from NET_IFCONFIG, `netstat` from NET_ROUTES (a file the route
+  # stub edits, so a delete is visible to the check that follows it).
+  export NET_IFCONFIG="${TMP}/ifconfig"
+  export NET_ROUTES="${TMP}/routes"
+  export NET_ROUTE_CALLS="${TMP}/route-calls"
+  : >"${NET_ROUTE_CALLS}"
+  cat >"${STUB}/ifconfig" <<'EOF'
+#!/usr/bin/env bash
+cat "${NET_IFCONFIG}"
+EOF
+  cat >"${STUB}/netstat" <<'EOF'
+#!/usr/bin/env bash
+family="inet"
+while [ $# -gt 0 ]; do
+  case "$1" in -f) family="$2"; shift ;; esac
+  shift
+done
+printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\n'
+grep -E "^${family} " "${NET_ROUTES}" 2>/dev/null | sed "s/^${family} //" || true
+EOF
+  cat >"${STUB}/route" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${NET_ROUTE_CALLS}"
+[ "${STUB_ROUTE_EXIT:-0}" = "0" ] || exit "${STUB_ROUTE_EXIT}"
+# The destination is the argument after -host or -net.
+destination=""
+previous=""
+for argument in "$@"; do
+  case "${previous}" in -host | -net) destination="${argument}" ;; esac
+  previous="${argument}"
+done
+[ -n "${destination}" ] || exit 0
+grep -v -E "^[a-z6]+ ${destination} " "${NET_ROUTES}" >"${NET_ROUTES}.next" || true
+mv "${NET_ROUTES}.next" "${NET_ROUTES}"
+EOF
+  cat >"${STUB}/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" != "-v" ] || exit 0
+exec "$@"
+EOF
+  cat >"${STUB}/systemextensionsctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_EXTENSIONS:-}"
+EOF
+  chmod +x "${STUB}/ifconfig" "${STUB}/netstat" "${STUB}/route" "${STUB}/sudo" "${STUB}/systemextensionsctl"
+  printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
+  : >"${NET_ROUTES}"
+}
+
+# One tunnel that is down, one that is up, and a route on each.
+stub_one_dead_tunnel() {
+  {
+    printf '%s\n' 'utun4: flags=8050<POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
+    printf '%s\n' 'utun1: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
+  } >>"${NET_IFCONFIG}"
+  {
+    printf '%s\n' 'inet 10                 10.245.0.225       UGSc                utun4'
+    printf '%s\n' 'inet 10.124.216.29      10.245.0.225       UGHS                utun4'
+    printf '%s\n' 'inet 192.168.1.0/24     link#12            UCS                 utun4'
+    printf '%s\n' 'inet 172.16.0.0         10.9.9.9           UGSc                utun1'
+    printf '%s\n' 'inet default            192.168.1.1        UGScg               en0'
+  } >>"${NET_ROUTES}"
+}
+
+@test "clean says so when nothing was left behind" {
+  stub_network
+  run "${SCRIPT}" clean
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No routes point at a tunnel that is down."* ]]
+}
+
+@test "clean lists only the routes on the tunnel that is down" {
+  stub_network
+  stub_one_dead_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 route(s)"* ]]
+  [[ "$output" == *"10.124.216.29"* ]]
+  # The live tunnel's route and the default route on en0 are nobody's business
+  # here: a route table is the one place where a wrong delete looks exactly
+  # like the cable being pulled out.
+  [[ "$output" != *"172.16.0.0"* ]]
+  [[ "$output" != *"192.168.1.1"* ]]
+}
+
+@test "clean tells a host route from a net route, and a link gateway from an address" {
+  stub_network
+  stub_one_dead_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"route -n delete -inet -net 10 10.245.0.225"* ]]
+  [[ "$output" == *"route -n delete -inet -host 10.124.216.29 10.245.0.225"* ]]
+  [[ "$output" == *"route -n delete -inet -net 192.168.1.0/24 -interface utun4"* ]]
+}
+
+@test "clean deletes nothing on a dry run" {
+  stub_network
+  stub_one_dead_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "clean deletes them when it is told to, and says the table is clean" {
+  stub_network
+  stub_one_dead_tunnel
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 3 ]
+  [[ "$output" == *"The route table is clean."* ]]
+  # The two that were never in scope are still there.
+  grep -q "172.16.0.0" "${NET_ROUTES}"
+  grep -q "default" "${NET_ROUTES}"
+}
+
+@test "clean reports a route the command refused rather than claiming it went" {
+  stub_network
+  stub_one_dead_tunnel
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"kept"* ]]
+  [[ "$output" == *"still there"* ]]
+}
+
+@test "doctor fails on routes left behind and names the command" {
+  stub_network
+  stub_one_dead_tunnel
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"point at a tunnel that is down"* ]]
+  [[ "$output" == *"vpnbar clean"* ]]
+}
+
+@test "doctor fails on a network extension that is running but not approved" {
+  stub_network
+  # The state a VPN cannot recover from, as `systemextensionsctl list` prints
+  # it: active, not enabled, waiting for somebody to approve it.
+  STUB_EXTENSIONS="$(printf '\t*\tTEAMID\tcom.example.vpn.extension (1.0/1)\tExampleExtension\t[activated waiting for user]')" \
+    run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ExampleExtension is running but not approved"* ]]
+  [[ "$output" == *"Network"* ]]
+}
+
+@test "doctor leaves an approved extension alone" {
+  stub_network
+  STUB_EXTENSIONS="$(printf '*\t*\tTEAMID\tcom.example.vpn.extension (1.0/1)\tExampleExtension\t[activated enabled]')" \
+    run "${SCRIPT}" doctor
+  [[ "$output" != *"not approved"* ]]
+}

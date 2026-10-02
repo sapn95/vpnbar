@@ -432,8 +432,9 @@ function menu.build(cfg, states, preferred, quitByHand)
     local state = states[profile.id] or "unknown"
     -- Added to every row rather than only to the ones that are down. A tunnel
     -- that is still up with its client closed is the case worth saying it in:
-    -- GlobalProtect's tunnel outlives its app, and the moment it drops nothing
-    -- is going to bring it back.
+    -- a quit made outside this menu leaves the connection up for as long as the
+    -- client's own service holds it, and the moment it drops nothing is going
+    -- to bring it back.
     local note = standingDownNote(profile, quitByHand)
     if profile.protected and not isDown(state) then
       -- Protected means protected from being brought *down*: an always-on

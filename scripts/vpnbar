@@ -435,6 +435,173 @@ bartender_state() {
   esac
 }
 
+# ---------------------------------------------------------- the tunnel itself
+#
+# What a VPN leaves behind when it dies badly. The routes it installed outlive
+# the interface they point at, so every address it had claimed goes to a tunnel
+# that is not carrying anything: the machine looks connected and reaches
+# nothing. Only a reboot cleared it the first time this happened, which is the
+# reason these two live here — see
+# docs/adr/0033-stopping-an-agent-that-launchd-restarts.md.
+
+# Tunnel interfaces that are not up. An address outlives the tunnel it belonged
+# to, so the address is no evidence; the UP flag is.
+tunnel_interfaces_down() {
+  ifconfig -a 2>/dev/null | awk '
+    /^[a-zA-Z0-9]+:/ {
+      name = $1
+      sub(/:$/, "", name)
+      up = 0
+      if (match($0, /<[^>]*>/)) {
+        flags = "," substr($0, RSTART + 1, RLENGTH - 2) ","
+        if (index(flags, ",UP,") > 0) { up = 1 }
+      }
+      if (name ~ /^utun[0-9]+$/ && up == 0) { print name }
+    }
+  '
+}
+
+# Every route bound to one of those, as `family|destination|gateway|flags|netif`.
+#
+# Bounded twice on purpose: the interface has to be a tunnel, and that tunnel
+# has to be down. A route table is the one file on a machine where a wrong
+# delete is indistinguishable from pulling the cable out.
+stale_routes() {
+  local down
+  down="$(tunnel_interfaces_down | tr '\n' ' ')"
+  [ -n "${down# }" ] || return 0
+  local family
+  for family in inet inet6; do
+    netstat -rn -f "${family}" 2>/dev/null | awk -v down=" ${down} " -v family="${family}" '
+      NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(down, " " $4 " ") > 0 {
+        printf "%s|%s|%s|%s|%s\n", family, $1, $2, $3, $4
+      }
+    '
+  done
+}
+
+# The `route` call that removes one of them.
+#
+# A gateway that is a link address belongs to no address family anybody can
+# name, so those go by interface. Everything else goes by its own gateway,
+# which is what makes the delete specific rather than a prefix nobody checked.
+route_delete_command() {
+  local family="$1" destination="$2" gateway="$3" flags="$4" netif="$5"
+  local kind="-net"
+  case "${flags}" in *H*) kind="-host" ;; esac
+  case "${gateway}" in
+    link#* | "${netif}")
+      printf 'route -n delete -%s %s %s -interface %s' "${family}" "${kind}" "${destination}" "${netif}"
+      ;;
+    *)
+      printf 'route -n delete -%s %s %s %s' "${family}" "${kind}" "${destination}" "${gateway}"
+      ;;
+  esac
+}
+
+cmd_clean() {
+  local dry=0 assume_yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      --yes | -y) assume_yes=1 ;;
+      *)
+        echo "usage: ${0##*/} clean [--dry-run] [--yes]" >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  local routes
+  routes="$(stale_routes)"
+  if [ -z "${routes}" ]; then
+    echo "No routes point at a tunnel that is down."
+    return 0
+  fi
+
+  local count
+  count="$(printf '%s\n' "${routes}" | wc -l | tr -d ' ')"
+  echo "${count} route(s) point at a tunnel that is down:"
+  local line family destination gateway flags netif
+  while IFS='|' read -r family destination gateway flags netif; do
+    [ -n "${family}" ] || continue
+    printf '  %-6s %-22s via %-22s %s\n' "${family}" "${destination}" "${gateway}" "${netif}"
+  done <<EOF
+${routes}
+EOF
+
+  if [ "${dry}" -eq 1 ]; then
+    echo
+    echo "What it would run:"
+    while IFS='|' read -r family destination gateway flags netif; do
+      [ -n "${family}" ] || continue
+      printf '  sudo %s\n' "$(route_delete_command "${family}" "${destination}" "${gateway}" "${flags}" "${netif}")"
+    done <<EOF
+${routes}
+EOF
+    return 0
+  fi
+
+  if [ "${assume_yes}" -ne 1 ]; then
+    printf 'Delete them? [y/N] '
+    local answer=""
+    read -r answer </dev/tty || true
+    case "${answer}" in
+      y | Y | yes | YES) ;;
+      *)
+        echo "Left alone."
+        return 0
+        ;;
+    esac
+  fi
+
+  # One `sudo` for the lot, so the password is asked for once.
+  local failures=0
+  sudo -v || true
+  while IFS='|' read -r family destination gateway flags netif; do
+    [ -n "${family}" ] || continue
+    # shellcheck disable=SC2086
+    if sudo $(route_delete_command "${family}" "${destination}" "${gateway}" "${flags}" "${netif}") >/dev/null 2>&1; then
+      printf '  gone  %s %s\n' "${destination}" "${netif}"
+    else
+      printf '  kept  %s %s (the route command refused it)\n' "${destination}" "${netif}"
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+${routes}
+EOF
+
+  local left
+  left="$(stale_routes | wc -l | tr -d ' ')"
+  echo
+  if [ "${left}" = "0" ]; then
+    echo "The route table is clean."
+  else
+    echo "${left} route(s) are still there."
+    note "A tunnel whose system extension has stopped answering keeps its"
+    note "routes until the machine reboots. vpnbar doctor says whether that"
+    note "is what this is."
+    exit 1
+  fi
+  [ "${failures}" -eq 0 ] || exit 1
+}
+
+# Network extensions that are activated but not enabled.
+#
+# This is the state a GlobalProtect that only a reboot could fix was in:
+# `[activated waiting for user]`, which is the extension running now and not
+# approved, so once its IPC drops nothing in userland can start it again.
+extensions_waiting() {
+  systemextensionsctl list 2>/dev/null | awk -F'\t' '
+    NF >= 6 && $2 == "*" && $1 != "*" {
+      state = $6
+      gsub(/^\[|\]$/, "", state)
+      printf "%s|%s\n", $5, state
+    }
+  '
+}
+
 cmd_doctor() {
   local failures=0
 
@@ -544,6 +711,36 @@ cmd_doctor() {
       ;;
   esac
 
+  echo "The tunnel"
+  local stale
+  stale="$(stale_routes)"
+  if [ -z "${stale}" ]; then
+    ok "no routes left behind by a tunnel that is down"
+  else
+    local count
+    count="$(printf '%s\n' "${stale}" | wc -l | tr -d ' ')"
+    bad "${count} route(s) point at a tunnel that is down — run: vpnbar clean"
+    note "Every address they cover goes to an interface that carries nothing,"
+    note "so the machine looks connected and reaches none of it."
+    failures=$((failures + 1))
+  fi
+  local waiting
+  waiting="$(extensions_waiting)"
+  if [ -n "${waiting}" ]; then
+    local name state
+    while IFS='|' read -r name state; do
+      [ -n "${name}" ] || continue
+      bad "${name} is running but not approved (${state})"
+      failures=$((failures + 1))
+    done <<EOF
+${waiting}
+EOF
+    note "System Settings > General > Login Items & Extensions > Network"
+    note "Extensions. Unapproved is the state a VPN cannot recover from: once"
+    note "its extension stops answering, nothing short of a reboot starts it"
+    note "again, and its routes stay pointed at a dead tunnel until then."
+  fi
+
   echo "Connections"
   local config="${HOME}/.config/vpnbar/profiles.json"
   if [ -f "${config}" ]; then
@@ -569,8 +766,12 @@ case "${1:-}" in
   stop) cmd_stop ;;
   restart) cmd_restart ;;
   doctor) cmd_doctor ;;
+  clean)
+    shift
+    cmd_clean "$@"
+    ;;
   *)
-    echo "usage: ${0##*/} start|stop|restart|link|unlink|app|doctor" >&2
+    echo "usage: ${0##*/} start|stop|restart|link|unlink|app|doctor|clean" >&2
     exit 2
     ;;
 esac

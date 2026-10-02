@@ -1,6 +1,11 @@
 # 0021 — Restarting the agent is not a disconnect
 
-**Status:** accepted, 2026-09-10.
+**Status:** superseded by
+[ADR 0033](0033-stopping-an-agent-that-launchd-restarts.md), 2026-10-02. The
+measurement below was never taken: stopping the agent logs out of the gateway,
+and the tunnel goes with it two seconds later. Restarting it *is* a disconnect,
+so it is no longer offered on a protected connection. Accepted 2026-09-10, and
+kept because the reasoning is what the measurement corrected.
 
 ## The decision
 

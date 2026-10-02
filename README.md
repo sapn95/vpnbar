@@ -226,15 +226,20 @@ Any connection whose config names an `app` offers **Quit `<app>`** and **Restart
 same client are one thing to quit
 ([ADR 0028](docs/adr/0028-quit-and-restart-are-per-application.md)).
 
-It quits the app, insists if it does not go, and for a restart opens it again.
+For a client launchd keeps alive, it unloads the service and loads it back:
+`launchctl bootout` and `bootstrap` in the person's own GUI domain, no root
+needed. A kill is a race against `KeepAlive` that launchd wins within seconds,
+which is what a Quit that appears to do nothing really is
+([ADR 0033](docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
+Everything else is quit with a signal and opened again.
 
-The same command is two different promises. Closing GlobalProtect closes a user
-interface and its tunnel is held by a root service, so it survives — which is why
-this is offered on a **protected** connection, the one whose only repair it is
-([ADR 0021](docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)). Closing
-the AWS client ends the session, because that client is the tunnel's own parent,
-so on a protected connection those two rows are absent: a button that
-disconnects a protected tunnel is the one thing this menu does not have.
+Closing either of these clients ends its session. For the AWS client that was
+always clear, since it is the tunnel's own parent. For GlobalProtect it took a
+measurement: the agent logs out of the gateway on its way out, and the tunnel is
+down two seconds later, whatever the root service behind it is still doing. So
+on a **protected** connection both rows are absent for both clients. A button
+that disconnects a protected tunnel is the one thing this menu does not have,
+and a repair that costs the session is such a button.
 
 Quitting is a decision, so autoconnect stops asking. Every connection through
 that client is left alone from then on, and the client coming back does not
@@ -251,6 +256,27 @@ quarter of an hour would be a connection that waits a quarter of an hour after i
 comes back. Its fallback gets the turn instead, as long as that one's client is
 open. This is also the only way a quit made outside this menu is noticed, which
 for the AWS client is the only quit there is.
+
+## When a tunnel dies badly
+
+A VPN that is disconnected takes its routes with it. One that dies without
+getting that far leaves them pointing at an interface that is down, and every
+address it had claimed then goes nowhere: the machine looks connected and
+reaches none of it.
+
+`vpnbar clean` removes exactly those routes, and nothing else. A route qualifies
+only if its interface is a `utun` that is not UP, because an address outlives
+the tunnel it belonged to and the flag is the part that does not lie. It prints
+what it found, asks before deleting, and `--dry-run` prints the `route` commands
+without running any.
+
+`vpnbar doctor` reports the same routes, and one more thing that is easy to miss
+and impossible to work around: a network extension that is `activated` but not
+enabled. A VPN whose extension is waiting for approval cannot be rebuilt from
+userland once its connection to its own service drops, so its routes stay
+pointed at a dead tunnel until the machine reboots. Approving it is one click in
+System Settings, and nobody finds it by guessing
+([ADR 0033](docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
 
 ## The probe
 
@@ -302,6 +328,8 @@ vpnbar start      # start it inside a running Hammerspoon
 vpnbar stop       # the same as Quit in the menu
 vpnbar restart    # after brew upgrade: loads the installed code, not the cached one
 vpnbar app        # an icon in Launchpad and Spotlight that runs start
+vpnbar doctor     # what is wrong, including the route table and the extensions
+vpnbar clean      # remove the routes a dead tunnel left behind
 ```
 
 **Quit** in the menu stops the Spoon and leaves Hammerspoon running, which is
