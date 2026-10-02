@@ -51,6 +51,56 @@ EOF
   # Never let a search reach the real Hammerspoon on this machine.
   export VPNBAR_HS="${STUB}/hs"
   export PATH="${STUB}:${PATH}"
+  # Everything the doctor reads about the machine, stubbed for every test:
+  # one that reached the real network stack would report this laptop's own
+  # faults, and pass or fail with them.
+  # `ifconfig` from NET_IFCONFIG, `netstat` from NET_ROUTES (a file the route
+  # stub edits, so a delete is visible to the check that follows it).
+  export NET_IFCONFIG="${TMP}/ifconfig"
+  export NET_ROUTES="${TMP}/routes"
+  export NET_ROUTE_CALLS="${TMP}/route-calls"
+  : >"${NET_ROUTE_CALLS}"
+  cat >"${STUB}/ifconfig" <<'EOF'
+#!/usr/bin/env bash
+cat "${NET_IFCONFIG}"
+EOF
+  cat >"${STUB}/netstat" <<'EOF'
+#!/usr/bin/env bash
+family="inet"
+while [ $# -gt 0 ]; do
+  case "$1" in -f) family="$2"; shift ;; esac
+  shift
+done
+printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\n'
+grep -E "^${family} " "${NET_ROUTES}" 2>/dev/null | sed "s/^${family} //" || true
+EOF
+  cat >"${STUB}/route" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${NET_ROUTE_CALLS}"
+[ "${STUB_ROUTE_EXIT:-0}" = "0" ] || exit "${STUB_ROUTE_EXIT}"
+# The destination is the argument after -host or -net.
+destination=""
+previous=""
+for argument in "$@"; do
+  case "${previous}" in -host | -net) destination="${argument}" ;; esac
+  previous="${argument}"
+done
+[ -n "${destination}" ] || exit 0
+grep -v -E "^[a-z6]+ ${destination} " "${NET_ROUTES}" >"${NET_ROUTES}.next" || true
+mv "${NET_ROUTES}.next" "${NET_ROUTES}"
+EOF
+  cat >"${STUB}/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" != "-v" ] || exit 0
+exec "$@"
+EOF
+  cat >"${STUB}/systemextensionsctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_EXTENSIONS:-}"
+EOF
+  chmod +x "${STUB}/ifconfig" "${STUB}/netstat" "${STUB}/route" "${STUB}/sudo" "${STUB}/systemextensionsctl"
+  printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
+  : >"${NET_ROUTES}"
   export STUB_HS_ANSWER="900 32 22"
   # Bartender 7's answer to `list menu bar item details`: one object per item,
   # key order not fixed.
@@ -638,56 +688,6 @@ SH
 # that is down. The machine looks connected and reaches nothing, and the first
 # time this happened only a reboot cleared it.
 
-stub_network() {
-  # `ifconfig` from NET_IFCONFIG, `netstat` from NET_ROUTES (a file the route
-  # stub edits, so a delete is visible to the check that follows it).
-  export NET_IFCONFIG="${TMP}/ifconfig"
-  export NET_ROUTES="${TMP}/routes"
-  export NET_ROUTE_CALLS="${TMP}/route-calls"
-  : >"${NET_ROUTE_CALLS}"
-  cat >"${STUB}/ifconfig" <<'EOF'
-#!/usr/bin/env bash
-cat "${NET_IFCONFIG}"
-EOF
-  cat >"${STUB}/netstat" <<'EOF'
-#!/usr/bin/env bash
-family="inet"
-while [ $# -gt 0 ]; do
-  case "$1" in -f) family="$2"; shift ;; esac
-  shift
-done
-printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\n'
-grep -E "^${family} " "${NET_ROUTES}" 2>/dev/null | sed "s/^${family} //" || true
-EOF
-  cat >"${STUB}/route" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${NET_ROUTE_CALLS}"
-[ "${STUB_ROUTE_EXIT:-0}" = "0" ] || exit "${STUB_ROUTE_EXIT}"
-# The destination is the argument after -host or -net.
-destination=""
-previous=""
-for argument in "$@"; do
-  case "${previous}" in -host | -net) destination="${argument}" ;; esac
-  previous="${argument}"
-done
-[ -n "${destination}" ] || exit 0
-grep -v -E "^[a-z6]+ ${destination} " "${NET_ROUTES}" >"${NET_ROUTES}.next" || true
-mv "${NET_ROUTES}.next" "${NET_ROUTES}"
-EOF
-  cat >"${STUB}/sudo" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" != "-v" ] || exit 0
-exec "$@"
-EOF
-  cat >"${STUB}/systemextensionsctl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "${STUB_EXTENSIONS:-}"
-EOF
-  chmod +x "${STUB}/ifconfig" "${STUB}/netstat" "${STUB}/route" "${STUB}/sudo" "${STUB}/systemextensionsctl"
-  printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
-  : >"${NET_ROUTES}"
-}
-
 # One tunnel that is down, one that is up, and a route on each.
 stub_one_dead_tunnel() {
   {
@@ -704,14 +704,12 @@ stub_one_dead_tunnel() {
 }
 
 @test "clean says so when nothing was left behind" {
-  stub_network
   run "${SCRIPT}" clean
   [ "$status" -eq 0 ]
   [[ "$output" == *"No routes point at a tunnel that is down."* ]]
 }
 
 @test "clean lists only the routes on the tunnel that is down" {
-  stub_network
   stub_one_dead_tunnel
   run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
@@ -725,7 +723,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "clean tells a host route from a net route, and a link gateway from an address" {
-  stub_network
   stub_one_dead_tunnel
   run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
@@ -735,7 +732,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "clean deletes nothing on a dry run" {
-  stub_network
   stub_one_dead_tunnel
   run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
@@ -743,7 +739,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "clean deletes them when it is told to, and says the table is clean" {
-  stub_network
   stub_one_dead_tunnel
   run "${SCRIPT}" clean --yes
   [ "$status" -eq 0 ]
@@ -755,7 +750,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "clean reports a route the command refused rather than claiming it went" {
-  stub_network
   stub_one_dead_tunnel
   STUB_ROUTE_EXIT=1 run "${SCRIPT}" clean --yes
   [ "$status" -eq 1 ]
@@ -764,7 +758,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "doctor fails on routes left behind and names the command" {
-  stub_network
   stub_one_dead_tunnel
   run "${SCRIPT}" doctor
   [ "$status" -eq 1 ]
@@ -773,7 +766,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "doctor fails on a network extension that is running but not approved" {
-  stub_network
   # The state a VPN cannot recover from, as `systemextensionsctl list` prints
   # it: active, not enabled, waiting for somebody to approve it.
   STUB_EXTENSIONS="$(printf '\t*\tTEAMID\tcom.example.vpn.extension (1.0/1)\tExampleExtension\t[activated waiting for user]')" \
@@ -784,7 +776,6 @@ stub_one_dead_tunnel() {
 }
 
 @test "doctor leaves an approved extension alone" {
-  stub_network
   STUB_EXTENSIONS="$(printf '*\t*\tTEAMID\tcom.example.vpn.extension (1.0/1)\tExampleExtension\t[activated enabled]')" \
     run "${SCRIPT}" doctor
   [[ "$output" != *"not approved"* ]]
