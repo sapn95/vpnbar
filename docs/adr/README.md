@@ -26,7 +26,7 @@ whether their idea was considered or simply missed.
 | [0018](0018-nothing-waits-for-a-read.md) | Nothing waits for a read |
 | [0019](0019-quit-stops-the-spoon-and-nothing-else.md) | Quit stops the Spoon and nothing else |
 | [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone |
-| [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect |
+| [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect (superseded by 0033) |
 | [0022](0022-a-probe-reads-the-interface-not-just-the-address.md) | A probe reads the interface, not just the address |
 | [0023](0023-an-unlock-is-a-fresh-start.md) | An unlock is a fresh start, the same as a wake |
 | [0024](0024-autoconnect-backs-off-it-does-not-give-up.md) | Autoconnect backs off, it does not give up |
@@ -38,3 +38,4 @@ whether their idea was considered or simply missed.
 | [0030](0030-a-switch-is-a-preference-not-an-order.md) | A switch is a preference, not an order |
 | [0031](0031-autoconnect-does-not-undo-a-quit.md) | Autoconnect does not undo a quit |
 | [0032](0032-the-aws-client-is-driven-by-keyboard.md) | The AWS client is driven by keyboard |
+| [0033](0033-stopping-an-agent-that-launchd-restarts.md) | Stopping an agent that launchd restarts |

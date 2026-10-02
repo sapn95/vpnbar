@@ -123,6 +123,49 @@ function backends.restartCommand(app)
   }, " ; ")
 end
 
+--- Stop an application that launchd has been told to keep alive.
+---
+--- `pkill` against such a service is a race nobody wins. The GlobalProtect
+--- agent ships with `KeepAlive` set to true, so it is running again seconds
+--- after any kill, and from the menu bar that looks exactly like a Quit that
+--- did nothing ([ADR 0033](../../docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
+---
+--- `launchctl bootout` unloads the service instead, so there is nothing left
+--- to restart it. In the person's own GUI domain it needs no root, which was
+--- measured rather than assumed. The command still ends by asking whether the
+--- process is gone, for the same reason the `pkill` one does: `bootout` reports
+--- "not loaded" as a failure, which is the normal answer when somebody has
+--- already stopped it.
+--- @param agent table { label = string, plist = string }
+--- @param app string
+--- @return string command
+function backends.bootoutCommand(agent, app)
+  local quoted = backends.shellQuote(app)
+  return table.concat({
+    "/bin/launchctl bootout gui/$(/usr/bin/id -u)/" .. agent.label,
+    "/bin/sleep " .. tostring(backends.APP_SETTLE),
+    "! /usr/bin/pgrep -x " .. quoted .. " >/dev/null",
+  }, " ; ")
+end
+
+--- Unload a launchd agent and load it again.
+---
+--- `open -a` would start the application beside launchd rather than under it,
+--- which is a second copy with nothing keeping it alive. Loading the plist
+--- back puts the service where it was.
+--- @param agent table { label = string, plist = string }
+--- @param app string
+--- @return string command
+function backends.bootstrapCommand(agent, app)
+  local quoted = backends.shellQuote(app)
+  return table.concat({
+    backends.bootoutCommand(agent, app),
+    "/bin/launchctl bootstrap gui/$(/usr/bin/id -u) " .. backends.shellQuote(agent.plist),
+    "/bin/sleep " .. tostring(backends.APP_SETTLE),
+    "/usr/bin/pgrep -x " .. quoted .. " >/dev/null",
+  }, " ; ")
+end
+
 --- Quitting and restarting, for any backend that names an application.
 ---
 --- What it *means* differs by backend and that difference is the whole reason
@@ -133,20 +176,51 @@ end
 --- tunnel's own parent. Same command, two different promises, and only one of
 --- them may be made about a `protected` connection
 --- ([ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md)).
+--- The launchd agent behind a backend's application, where there is one.
+local function agentOf(profile)
+  local backend = backends.byName[profile.backend]
+  return backend and backend.AGENT or nil
+end
+
 local function quitApp(profile, runtime)
-  local _, ok = runtime.exec(backends.quitCommand(profile.app))
+  local agent = agentOf(profile)
+  local command = agent and backends.bootoutCommand(agent, profile.app) or backends.quitCommand(profile.app)
+  local _, ok = runtime.exec(command)
   -- The command ends by checking that nothing of that name is left, so this is
   -- "it is closed" rather than "the kill returned zero".
   return outcome(ok, tostring(profile.app) .. " is still running")
 end
 
 local function restartApp(profile, runtime)
-  local _, ok = runtime.exec(backends.restartCommand(profile.app))
+  local agent = agentOf(profile)
+  local command = agent and backends.bootstrapCommand(agent, profile.app) or backends.restartCommand(profile.app)
+  local _, ok = runtime.exec(command)
   return outcome(ok, "could not open " .. tostring(profile.app) .. " again")
 end
 
 globalprotect.quit = quitApp
 globalprotect.restart = restartApp
+
+--- The launchd agent that is the GlobalProtect application.
+---
+--- `KeepAlive` is true in this plist, so launchd starts it again within seconds
+--- of any kill. Stopping it means unloading the service, and starting it again
+--- means loading the plist rather than opening the app
+--- ([ADR 0033](../../docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
+globalprotect.AGENT = {
+  label = "com.paloaltonetworks.gp.pangpa",
+  plist = "/Library/LaunchAgents/com.paloaltonetworks.gp.pangpa.plist",
+}
+
+--- Stopping this agent ends the session.
+---
+--- Measured, after two years of this file claiming the opposite: the agent
+--- exits, and 2 seconds later the tunnel is down and the gateway has logged the
+--- user out. The service behind it keeps running and holds nothing. So closing
+--- GlobalProtect *is* a disconnect, and the next connect wants a login
+--- ([ADR 0033](../../docs/adr/0033-stopping-an-agent-that-launchd-restarts.md),
+--- which reverses [ADR 0021](../../docs/adr/0021-restarting-the-agent-is-not-a-disconnect.md)).
+globalprotect.appOwnsTunnel = true
 
 --- Where the agent writes one line per event. World-readable, and the same
 --- file that diagnosed every GlobalProtect incident in this repository.

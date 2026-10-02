@@ -506,12 +506,15 @@ describe("menu.build, restarting the agent", function()
     assert.matches("leaves it closed", item.tooltip)
   end)
 
-  it("is offered on a protected connection, which is the one that needs it", function()
-    -- Protection is about the tunnel. A panel that has stopped answering is the
-    -- app, and the connection that may not be disconnected is exactly the one
-    -- whose only repair this is.
+  it("is withheld from a protected connection, because it ends the session", function()
+    -- This used to be offered, on the reasoning that restarting an application
+    -- does not reach the tunnel. Measured, it does: the agent exits, and two
+    -- seconds later the gateway has logged the user out
+    -- ([ADR 0033]). A repair that costs the session is a disconnect, and
+    -- protection refuses those from every row in the menu.
     local cfg = only({ id = "gp", name = "Always-on VPN", backend = "globalprotect", protected = true })
-    assert.is_table(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
+    assert.is_nil(deep(menu.build(cfg, { gp = "connected" }), "Restart GlobalProtect"))
+    assert.is_nil(deep(menu.build(cfg, { gp = "connected" }), "Quit GlobalProtect"))
   end)
 
   -- The AWS client is an application like any other and may be closed, but it
@@ -576,9 +579,9 @@ describe("menu.quitApps and the one row that closes them all", function()
     assert.equals("GlobalProtect", apps[1].app)
   end)
 
-  it("keeps a protected agent whose tunnel outlives it", function()
+  it("leaves out a protected agent, since closing it logs the session out", function()
     local locked = { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", protected = true }
-    assert.equals(1, #menu.quitApps(cfg({ locked })))
+    assert.same({}, menu.quitApps(cfg({ locked })))
   end)
 
   it("is empty when nothing has an application to close", function()
