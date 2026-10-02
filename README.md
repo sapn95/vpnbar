@@ -268,7 +268,15 @@ getting that far leaves them pointing at an interface that is down, and every
 address it had claimed then goes nowhere: the machine looks connected and
 reaches none of it.
 
-`vpnbar clean` removes exactly those routes, and nothing else. A route qualifies
+vpnbar notices this by itself. When routes point at a tunnel that is down, and
+have for a minute, one dialog says how many there are and what removing
+them means, and accepting asks macOS for the password once. Nothing is installed
+to make that possible: no helper, no `sudoers` entry, no daemon
+([ADR 0035](docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)). Restarting
+the client was the first design and was measured not to work, because a client
+that has lost track of its tunnel cannot tear it down.
+
+`vpnbar clean` is the same thing from the command line, and nothing else. A route qualifies
 only if its interface is a `utun` that is not UP, because an address outlives
 the tunnel it belonged to and the flag is the part that does not lie. It prints
 what it found, asks before deleting, and `--dry-run` prints the `route` commands

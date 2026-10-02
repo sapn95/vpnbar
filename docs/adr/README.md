@@ -40,3 +40,4 @@ whether their idea was considered or simply missed.
 | [0032](0032-the-aws-client-is-driven-by-keyboard.md) | The AWS client is driven by keyboard |
 | [0033](0033-stopping-an-agent-that-launchd-restarts.md) | Stopping an agent that launchd restarts |
 | [0034](0034-a-protected-connection-keeps-its-repair.md) | A protected connection keeps its repair |
+| [0035](0035-a-dead-tunnels-routes-are-swept-up.md) | A dead tunnel's routes are swept up |

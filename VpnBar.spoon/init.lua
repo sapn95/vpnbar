@@ -27,6 +27,7 @@ local form = require("vpnbar.form")
 local icon = require("vpnbar.icon")
 local work = require("vpnbar.work")
 local awsui = require("vpnbar.awsui")
+local routes = require("vpnbar.routes")
 
 --- VpnBar.configPath
 --- Variable
@@ -635,6 +636,13 @@ function obj:runtime(allowPanelReads)
       cachedIfconfig = cachedIfconfig or hs.execute("/sbin/ifconfig")
       return cachedIfconfig or ""
     end,
+    -- Both families in one string, because `routes.parse` reads rows and does
+    -- not care which table they came from.
+    routeTable = function()
+      local four = hs.execute("/usr/sbin/netstat -rn -f inet") or ""
+      local six = hs.execute("/usr/sbin/netstat -rn -f inet6") or ""
+      return four .. "\n" .. six
+    end,
     panel = function(app)
       if not (allowPanelReads and self.panelReads) then
         return "unknown"
@@ -679,6 +687,70 @@ function obj:appsRunning()
     end
   end
   return running
+end
+
+--- Where the command line half of vpnbar is, for the one job the Spoon cannot
+--- do on its own.
+---
+--- Deleting a route needs an administrator, and `vpnbar clean` is the tested
+--- thing that knows which routes may go. Looked up through a login shell
+--- because an application started by launchd has a PATH with no Homebrew in it,
+--- and remembered, because the answer does not change while the Spoon is loaded.
+function obj:cliPath()
+  if self.cli ~= nil then
+    return self.cli ~= false and self.cli or nil
+  end
+  local found = hs.execute("command -v vpnbar", true)
+  found = found and found:gsub("%s+$", "") or ""
+  self.cli = found ~= "" and found or false
+  return self.cli ~= false and self.cli or nil
+end
+
+--- Offer to sweep up the routes a dead tunnel left behind, and do it.
+---
+--- A dialog rather than a notification, because it is a question: it needs an
+--- administrator, and the person answering it is the one whose network is
+--- broken. Said once per occurrence, with "Not now" meaning a quarter of an
+--- hour ([ADR 0035](../../docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)).
+--- @param offer table from `routes.offer`
+function obj:offerCleanup(offer)
+  local cli = self:cliPath()
+  if not cli then
+    -- Nothing to drive, so nothing to offer. Saying so once is better than a
+    -- dialog whose button cannot work.
+    self.routeMemory.declined = os.time()
+    self:complain("routes are left behind, and the vpnbar command line is not on PATH to clean them")
+    return
+  end
+  local answer =
+    hs.dialog.blockAlert("Clean up after a tunnel that is down?", routes.explain(offer), "Clean up", "Not now")
+  if answer ~= "Clean up" then
+    self.routeMemory.declined = os.time()
+    return
+  end
+  -- macOS asks for the password itself, once, and nothing is left behind with
+  -- standing privileges: no helper, no sudoers entry, no daemon.
+  -- Two quotings, because there are two languages here. The shell sees the
+  -- path inside single quotes, so a space or a semicolon in it is a character
+  -- rather than a command; AppleScript then sees that whole command as a
+  -- double-quoted string, where a backslash and a double quote are what need
+  -- escaping.
+  local command = backends.shellQuote(cli) .. " clean --yes"
+  local literal = command:gsub("\\", "\\\\"):gsub('"', '\\"')
+  local template = 'do shell script "%s" with administrator privileges'
+    .. ' with prompt "vpnbar is removing %d route(s) that point at a tunnel which is down."'
+  local script = template:format(literal, offer.count)
+  local ok, _, raw = hs.osascript.applescript(script)
+  self.routeMemory.since, self.routeMemory.declined = nil, os.time()
+  if not ok then
+    -- A cancelled password dialog is a no, not a fault worth a second window.
+    self.logger.w("route cleanup did not run: " .. tostring(raw))
+    return
+  end
+  self.logger.i(
+    ("cleanup: removed %d route(s) left behind by %s"):format(offer.count, table.concat(offer.interfaces, ", "))
+  )
+  self:refreshSoon(nil, 1)
 end
 
 --- Hand a client back to autoconnect.
@@ -854,6 +926,19 @@ function obj:refresh(options)
   end
   self.states = states
 
+  -- Routes a tunnel left behind when it died without disconnecting. Asked only
+  -- when `ifconfig`, which was read for the probes anyway, says some tunnel is
+  -- down: on a machine where everything is up there is no route table to read
+  -- ([ADR 0035](../../docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)).
+  -- The route table is read every time rather than only when `ifconfig` shows a
+  -- tunnel that is down, because the worst case is a tunnel that is not in
+  -- `ifconfig` at all: destroyed, with its routes still installed. A guard that
+  -- asked `ifconfig` first could not see that one. Measured at 30 ms for both
+  -- families, against a refresh that already runs several commands.
+  local interfaces = require("vpnbar.parse").ifconfigInterfaces(runtime.ifconfig())
+  local stranded, names = routes.stranded(routes.parse(runtime.routeTable()), interfaces)
+  local offer = routes.offer(stranded, names, self.routeMemory, os.time())
+
   -- At most one connection is started per refresh, and only from this one
   -- place. The policy — cooldown, how many tries before the fallback, when to
   -- give up — is all in vpnbar/autoconnect.lua and under test there.
@@ -905,6 +990,16 @@ function obj:refresh(options)
   end
 
   self:paint()
+
+  -- Last, and after the icon is right: the dialog blocks, and a question about
+  -- a dead tunnel must not hold up the reading that found it.
+  if offer then
+    hs.timer.doAfter(0, function()
+      if self.running then
+        self:offerCleanup(offer)
+      end
+    end)
+  end
   return states
 end
 
@@ -1462,6 +1557,10 @@ function obj:init()
   -- persisted, for the same reason `preferred` is not: it is a decision about
   -- now, and a restart of the Spoon is a fresh start for both (ADR 0031).
   self.quitByHand = {}
+  -- When routes left behind were first seen, and when somebody last said no to
+  -- clearing them up (ADR 0035). Not persisted: a reboot is one of the things
+  -- that clears them.
+  self.routeMemory = {}
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()
