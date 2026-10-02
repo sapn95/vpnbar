@@ -386,7 +386,14 @@ local function appVerb(profile, verb, cfg)
   end
   -- Where closing the app closes the tunnel, closing it is a disconnect, and a
   -- protected connection refuses those from every button in the menu.
-  if backend.appOwnsTunnel and appIsProtected(profile, cfg) then
+  --
+  -- A restart is the exception, and the direction is the reason: a quit ends
+  -- with the connection down and a restart ends with the client running, which
+  -- is the only repair in this menu for a client that has stopped answering.
+  -- The connection that may not be disconnected is the one that needs it most,
+  -- and the dialog says what it costs before anything is closed
+  -- ([ADR 0034](../../docs/adr/0034-a-protected-connection-keeps-its-repair.md)).
+  if verb ~= "restart" and backend.appOwnsTunnel and appIsProtected(profile, cfg) then
     return false
   end
   return true
@@ -469,11 +476,14 @@ function backends.act(profile, verb, runtime, cfg)
   local backendFor = backends.byName[profile.backend]
   local appIsTheTunnel = backendFor ~= nil and backendFor.appOwnsTunnel == true
   -- Closing an application that a protected connection is also using is that
-  -- connection's disconnect, whichever profile was clicked to ask for it.
-  if appIsTheTunnel and backends.APP_VERBS[verb] and appIsProtected(profile, cfg) then
+  -- connection's disconnect, whichever profile was clicked to ask for it. A
+  -- restart is the exception, because it ends with the client running
+  -- ([ADR 0034](../../docs/adr/0034-a-protected-connection-keeps-its-repair.md)).
+  local closes = backends.APP_VERBS[verb] and verb ~= "restart"
+  if appIsTheTunnel and closes and appIsProtected(profile, cfg) then
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end
-  local allowed = backends.PROTECTED_VERBS[verb] and not (appIsTheTunnel and backends.APP_VERBS[verb])
+  local allowed = backends.PROTECTED_VERBS[verb] and not (appIsTheTunnel and closes)
   if profile.protected and not allowed then
     return false, ("%s is protected from being disconnected"):format(profile.name or profile.id or "this connection")
   end

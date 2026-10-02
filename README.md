@@ -236,10 +236,14 @@ Everything else is quit with a signal and opened again.
 Closing either of these clients ends its session. For the AWS client that was
 always clear, since it is the tunnel's own parent. For GlobalProtect it took a
 measurement: the agent logs out of the gateway on its way out, and the tunnel is
-down two seconds later, whatever the root service behind it is still doing. So
-on a **protected** connection both rows are absent for both clients. A button
-that disconnects a protected tunnel is the one thing this menu does not have,
-and a repair that costs the session is such a button.
+down two seconds later, whatever the root service behind it is still doing.
+
+So on a **protected** connection the quit is gone and the restart stays, for
+both clients. The difference is where the action leaves things: a quit ends with
+the connection down and nothing planning to bring it back, a restart ends with
+the client running. Protection is protection from being left disconnected, and
+the confirmation says what the repair costs before anything closes
+([ADR 0034](docs/adr/0034-a-protected-connection-keeps-its-repair.md)).
 
 Quitting is a decision, so autoconnect stops asking. Every connection through
 that client is left alone from then on, and the client coming back does not

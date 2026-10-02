@@ -276,17 +276,19 @@ describe("the globalprotect backend, restarting the agent", function()
     assert.matches("could not open GlobalProtect again", err)
   end)
 
-  it("is refused on a protected connection, like every other write", function()
-    -- It was allowed here for two years, on the reasoning that restarting the
-    -- application cannot reach the tunnel. Measured, it ends the session
-    -- ([ADR 0033]), so it is a disconnect under another name and a protected
-    -- connection refuses it with the rest.
+  it("is the one write a protected connection still allows", function()
+    -- Restarting ends with the client running, so it is the repair rather than
+    -- a disconnect ([ADR 0034]). Quitting leaves it down, and that is refused
+    -- here now that stopping the agent is known to end the session
+    -- ([ADR 0033]).
     local locked = { id = "gp", name = "Always-on VPN", backend = "globalprotect", app = "GP", protected = true }
     local runtime = fakeRuntime()
-    for _, verb in ipairs({ "restart", "quit", "disconnect", "force" }) do
+    assert.is_true((backends.act(locked, "restart", runtime)))
+    assert.equals(1, #runtime.calls.exec)
+    for _, verb in ipairs({ "quit", "disconnect", "force" }) do
       assert.is_false((backends.act(locked, verb, runtime)), verb)
     end
-    assert.equals(0, #runtime.calls.exec)
+    assert.equals(1, #runtime.calls.exec)
   end)
 end)
 
@@ -295,8 +297,11 @@ describe("backends.canRestart", function()
     assert.is_true(backends.canRestart({ id = "g", backend = "globalprotect", app = "GlobalProtect" }))
   end)
 
-  it("is false when the connection is protected, because it ends the session", function()
-    assert.is_false(backends.canRestart({ id = "g", backend = "globalprotect", app = "GP", protected = true }))
+  it("is true even when the connection is protected, because it ends up running", function()
+    -- A quit leaves the connection down and a restart does not, which is the
+    -- line protection draws ([ADR 0034]).
+    assert.is_true(backends.canRestart({ id = "g", backend = "globalprotect", app = "GP", protected = true }))
+    assert.is_true(backends.canRestart({ id = "a", backend = "awsvpn", app = "A", row = "w", protected = true }))
   end)
 
   it("is false where quitting the app would take the tunnel with it", function()
@@ -547,7 +552,7 @@ describe("quitting and restarting an application", function()
   it("refuses to close a protected agent, since closing it logs the session out", function()
     local locked = { id = "g", name = "G", backend = "globalprotect", app = "GP", protected = true }
     assert.is_false(backends.canQuit(locked))
-    assert.is_false(backends.canRestart(locked))
+    assert.is_true(backends.canRestart(locked), "the repair ends with it running")
     local ok, err = backends.act(locked, "quit", fake())
     assert.is_false(ok)
     assert.is_truthy(tostring(err):find("protected", 1, true), tostring(err))
@@ -564,7 +569,7 @@ describe("quitting and restarting an application", function()
   it("refuses to close a protected client that is its own tunnel", function()
     local locked = { id = "a", name = "A", backend = "awsvpn", app = "AWS VPN Client", row = "w", protected = true }
     assert.is_false(backends.canQuit(locked))
-    assert.is_false(backends.canRestart(locked))
+    assert.is_true(backends.canRestart(locked), "the repair ends with it running")
     local ok, err = backends.act(locked, "quit", fake())
     assert.is_false(ok)
     assert.is_truthy(tostring(err):find("protected", 1, true), tostring(err))
@@ -600,10 +605,12 @@ describe("closing an application several connections share", function()
     return cfg.profiles[1]
   end
 
-  it("refuses through the unprotected one when a sibling is protected", function()
+  it("refuses the quit through the unprotected one when a sibling is protected", function()
     local cfg = twoProfiles(true)
     assert.is_false(backends.canQuit(clicked(cfg), cfg))
-    assert.is_false(backends.canRestart(clicked(cfg), cfg))
+    -- The restart stays, as it does on the protected connection itself: it
+    -- ends with the client running ([ADR 0034]).
+    assert.is_true(backends.canRestart(clicked(cfg), cfg))
   end)
 
   it("refuses it in the backend as well, not only in the menu", function()
