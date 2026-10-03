@@ -102,7 +102,7 @@ end
 --- is a fresh question rather than the tail of an old one.
 --- @param stranded table
 --- @param names table interface names
---- @param memory table owned by the caller
+--- @param memory table owned by the caller; set `asking` while a dialog is open
 --- @param now number seconds
 --- @return table|nil { count = number, interfaces = table }
 function routes.offer(stranded, names, memory, now)
@@ -111,6 +111,13 @@ function routes.offer(stranded, names, memory, now)
   memory = memory or {}
   if #stranded == 0 then
     memory.since, memory.declined, memory.key = nil, nil, nil
+    return nil
+  end
+  -- One question at a time. The refresh that found this runs again while the
+  -- dialog is still open and nobody has answered yet, so without this the same
+  -- question stacks up on the screen once per refresh until somebody clicks
+  -- through a pile of them. The caller sets `asking` while it has one open.
+  if memory.asking then
     return nil
   end
   -- A second tunnel that has only just started coming up must serve its own
