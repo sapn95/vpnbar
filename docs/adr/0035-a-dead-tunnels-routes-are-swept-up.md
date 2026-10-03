@@ -62,6 +62,15 @@ gone. Both families of the route table cost 30 ms, against a refresh that
 already runs several commands, so the guard bought nothing worth that blind
 spot.
 
+## Why only one question is ever open
+
+The refresh that found the routes goes on running while the dialog waits for an
+answer, and every one of those refreshes finds the same routes. The first
+version of this put a fresh copy of the question on the screen each time, so a
+minute of not answering was a stack of identical dialogs to click through. The
+memory carries an `asking` flag for as long as one is open, and `routes.offer`
+says nothing while it is set.
+
 ## Why it waits a minute, and takes no for an answer
 
 A tunnel coming up is briefly not up yet with its routes already installed.

@@ -714,6 +714,20 @@ end
 --- hour ([ADR 0035](../../docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)).
 --- @param offer table from `routes.offer`
 function obj:offerCleanup(offer)
+  -- Marked before anything can block, and cleared on every way out: the dialog
+  -- holds this function for as long as nobody answers, and the refresh behind
+  -- it goes on running.
+  self.routeMemory.asking = true
+  local ok, err = pcall(function()
+    self:askAboutCleanup(offer)
+  end)
+  self.routeMemory.asking = nil
+  if not ok then
+    error(err, 0)
+  end
+end
+
+function obj:askAboutCleanup(offer)
   local cli = self:cliPath()
   if not cli then
     -- Nothing to drive, so nothing to offer. Saying so once is better than a

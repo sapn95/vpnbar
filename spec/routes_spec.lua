@@ -111,6 +111,20 @@ describe("routes.offer", function()
     assert.is_table(routes.offer(stranded, names, memory, 1020 + routes.SETTLE))
   end)
 
+  it("asks once, however many refreshes find the same thing", function()
+    -- The refresh that found this runs again while the dialog is still open.
+    -- Without the guard the same question stacks up on the screen, one per
+    -- refresh, until somebody clicks through the pile.
+    local memory = {}
+    routes.offer(stranded, names, memory, 1000)
+    assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.SETTLE))
+    memory.asking = true
+    assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 10))
+    assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 20))
+    memory.asking = nil
+    assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 30))
+  end)
+
   it("takes no for an answer for a quarter of an hour", function()
     local memory = { since = 0, declined = 1000, key = "utun4" }
     assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.COOLDOWN - 1))
