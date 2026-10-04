@@ -931,3 +931,48 @@ describe("menu.build, a client somebody quit", function()
     assert.matches("until you connect one again", all.tooltip)
   end)
 end)
+
+describe("menu.build, restarting the service behind a client", function()
+  local function deepFind(items, title)
+    for _, item in ipairs(items or {}) do
+      if item.title == title then
+        return item
+      end
+      local found = deepFind(item.menu, title)
+      if found then
+        return found
+      end
+    end
+  end
+
+  local function one(profile)
+    return assert(require("vpnbar.store").normalise({ profiles = { profile } }))
+  end
+
+  it("is offered for a client whose backend names a service", function()
+    local cfg = one({ id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect" })
+    local item = deepFind(menu.build(cfg, {}), "Restart the service behind GlobalProtect")
+    assert.same({ kind = "repair", id = "gp" }, item.action)
+    assert.matches("stopped answering", item.tooltip)
+  end)
+
+  it("says when it will ask for an administrator, and when it will not", function()
+    local gp = one({ id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect" })
+    assert.is_nil(
+      deepFind(menu.build(gp, {}), "Restart the service behind GlobalProtect").tooltip:find("administrator")
+    )
+    local aws = one({ id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "w" })
+    local item = deepFind(menu.build(aws, {}), "Restart the service behind AWS VPN Client")
+    assert.matches("administrator", item.tooltip)
+  end)
+
+  it("stays on a protected connection, which is the one that needs it", function()
+    local cfg = one({ id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", protected = true })
+    assert.is_table(deepFind(menu.build(cfg, { gp = "connected" }), "Restart the service behind GlobalProtect"))
+  end)
+
+  it("is absent for a backend with no service to restart", function()
+    local cfg = one({ id = "a", name = "A", backend = "scutil", service = "a" })
+    assert.is_nil(deepFind(menu.build(cfg, {}), "Restart the service behind A"))
+  end)
+end)

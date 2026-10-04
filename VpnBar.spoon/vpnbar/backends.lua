@@ -166,6 +166,48 @@ function backends.bootstrapCommand(agent, app)
   }, " ; ")
 end
 
+--- Restart one launchd service, in whichever domain it was registered in.
+---
+--- `kickstart -k` stops it and starts it again in one step, which is what
+--- `KeepAlive` turns a plain stop into anyway. The uid is asked for rather than
+--- remembered, because a uid baked in is a uid that is wrong for anybody else.
+--- @param service table { label = string, domain = "gui"|"system" }
+--- @return string command
+function backends.kickstartCommand(service)
+  local domain = service.domain == "system" and "system" or "gui/$(/usr/bin/id -u)"
+  return ("/bin/launchctl kickstart -k %s/%s"):format(domain, service.label)
+end
+
+--- The service behind a connection's client, where its backend names one.
+--- @param profile table
+--- @return table|nil
+function backends.serviceOf(profile)
+  if type(profile) ~= "table" then
+    return nil
+  end
+  local backend = backends.byName[profile.backend]
+  return backend and backend.SERVICE or nil
+end
+
+--- May this connection's service be restarted from the menu?
+---
+--- Allowed on a `protected` connection for the same reason a restart is: it
+--- ends with the service running, and it is the only repair for a client whose
+--- service has stopped answering
+--- ([ADR 0034](../../docs/adr/0034-a-protected-connection-keeps-its-repair.md)).
+--- @param profile table
+--- @return boolean
+function backends.canRepair(profile)
+  return backends.serviceOf(profile) ~= nil
+end
+
+--- Does restarting it need an administrator?
+--- @param service table|nil
+--- @return boolean
+function backends.serviceNeedsAdmin(service)
+  return type(service) == "table" and service.domain == "system"
+end
+
 --- Quitting and restarting, for any backend that names an application.
 ---
 --- What it *means* differs by backend and that difference is the whole reason
@@ -210,6 +252,19 @@ globalprotect.restart = restartApp
 globalprotect.AGENT = {
   label = "com.paloaltonetworks.gp.pangpa",
   plist = "/Library/LaunchAgents/com.paloaltonetworks.gp.pangpa.plist",
+}
+
+--- The service behind the agent, which is the thing that holds the tunnel.
+---
+--- Restarting it is the repair for a client whose own service has stopped
+--- answering it: measured, the agent logs a connect and the service logs
+--- nothing at all, and nothing the agent does gets through
+--- ([ADR 0039](../../docs/adr/0039-putting-a-service-back-on-its-feet.md)).
+--- In `gui`, so it needs no administrator, which is not obvious from a process
+--- that runs as root.
+globalprotect.SERVICE = {
+  label = "com.paloaltonetworks.gp.pangps",
+  domain = "gui",
 }
 
 --- Stopping this agent ends the session.
@@ -311,6 +366,15 @@ end
 function awsvpn.disconnect(profile, runtime)
   return runtime.pressRow(profile.app, profile.row, "Disconnect")
 end
+
+--- The service behind this client, which is where its tunnel lives.
+---
+--- A `LaunchDaemon` with `KeepAlive` set, so it is in the system domain and
+--- restarting it takes an administrator, unlike the GlobalProtect one.
+awsvpn.SERVICE = {
+  label = "com.amazonaws.acvc.osx.core",
+  domain = "system",
+}
 
 awsvpn.quit = quitApp
 awsvpn.restart = restartApp

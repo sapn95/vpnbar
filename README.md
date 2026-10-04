@@ -234,6 +234,14 @@ Any connection whose config names an `app` offers **Quit `<app>`** and **Restart
 same client are one thing to quit
 ([ADR 0028](docs/adr/0028-quit-and-restart-are-per-application.md)).
 
+Below those sits **Restart the service behind `<app>`**, for the fault neither
+of them touches: the agent asks for a connection and its own service never
+hears it. Measured twice on this machine, with the agent logging the click and
+the service logging nothing at all. `launchctl kickstart -k` is the repair.
+GlobalProtect's service is registered in your own `gui` domain, despite running
+as root, so it needs nothing; the AWS one is a `LaunchDaemon`, so it asks for an
+administrator ([ADR 0039](docs/adr/0039-putting-a-service-back-on-its-feet.md)).
+
 For a client launchd keeps alive, it unloads the service and loads it back:
 `launchctl bootout` and `bootstrap` in the person's own GUI domain, no root
 needed. A kill is a race against `KeepAlive` that launchd wins within seconds,

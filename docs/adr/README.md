@@ -44,3 +44,4 @@ whether their idea was considered or simply missed.
 | [0036](0036-a-connect-that-never-arrives.md) | A connect that never arrives |
 | [0037](0037-a-dialog-that-looks-like-vpnbar.md) | A dialog that looks like vpnbar |
 | [0038](0038-a-question-that-does-not-block.md) | A question that does not block |
+| [0039](0039-putting-a-service-back-on-its-feet.md) | Putting a service back on its feet |
