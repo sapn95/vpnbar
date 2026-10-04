@@ -41,3 +41,5 @@ whether their idea was considered or simply missed.
 | [0033](0033-stopping-an-agent-that-launchd-restarts.md) | Stopping an agent that launchd restarts |
 | [0034](0034-a-protected-connection-keeps-its-repair.md) | A protected connection keeps its repair |
 | [0035](0035-a-dead-tunnels-routes-are-swept-up.md) | A dead tunnel's routes are swept up |
+| [0036](0036-a-connect-that-never-arrives.md) | A connect that never arrives |
+| [0037](0037-a-dialog-that-looks-like-vpnbar.md) | A dialog that looks like vpnbar |

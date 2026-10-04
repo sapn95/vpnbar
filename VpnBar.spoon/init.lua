@@ -727,6 +727,89 @@ function obj:offerCleanup(offer)
   end
 end
 
+--- vpnbar's own mark, as a file a dialog can show.
+---
+--- `hs.dialog` draws Hammerspoon's hammer on everything, which on a question
+--- about a route table is an icon from a different program
+--- ([ADR 0037](../../docs/adr/0037-a-dialog-that-looks-like-vpnbar.md)). An
+--- AppleScript dialog takes a file instead, so the shield is drawn once at a
+--- size a dialog wants and kept in the cache directory.
+---
+--- Filled rather than drawn as the template the menu bar uses: a template is
+--- black, and black on the dark appearance of a dialog is nothing at all.
+--- @return string|nil path
+function obj:markFile()
+  if self.mark ~= nil then
+    return self.mark ~= false and self.mark or nil
+  end
+  self.mark = false
+  local path = ("%s/Library/Caches/vpnbar/mark.png"):format(os.getenv("HOME") or "")
+  ensureDirectory(path)
+  local size = 256
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = size, h = size })
+  if not canvas then
+    return nil
+  end
+  -- The accent blue reads on both appearances, which neither black nor white
+  -- does.
+  local blue = { red = 0.04, green = 0.52, blue = 1.0, alpha = 1 }
+  local inset = hs.canvas.matrix.translate(size * 0.07, size * 0.07)
+  canvas:replaceElements({
+    {
+      type = "segments",
+      closed = true,
+      coordinates = icon.shield(size * 0.86),
+      action = "fill",
+      fillColor = blue,
+      strokeColor = blue,
+      transformation = inset,
+    },
+    {
+      type = "segments",
+      closed = false,
+      coordinates = icon.tick(size * 0.86),
+      action = "stroke",
+      strokeColor = { white = 1, alpha = 1 },
+      strokeWidth = size / 11,
+      strokeCapStyle = "round",
+      strokeJoinStyle = "round",
+      transformation = inset,
+    },
+  })
+  local image = canvas:imageFromCanvas()
+  canvas:delete()
+  if image and image:saveToFile(path) then
+    self.mark = path
+  end
+  return self.mark ~= false and self.mark or nil
+end
+
+--- Ask a question with vpnbar's own icon on it, and say which button was taken.
+--- @return string|nil the button, or nil when the dialog could not be shown
+function obj:ask(title, message, buttons, default)
+  local mark = self:markFile()
+  if not mark then
+    return hs.dialog.blockAlert(title, message, buttons[2], buttons[1])
+  end
+  local function quoted(text)
+    return '"' .. tostring(text):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+  end
+  local script = ("display dialog %s with title %s buttons {%s, %s} default button %s with icon POSIX file %s"):format(
+    quoted(message),
+    quoted(title),
+    quoted(buttons[1]),
+    quoted(buttons[2]),
+    quoted(default),
+    quoted(mark)
+  )
+  local ok, result = hs.osascript.applescript(script)
+  if not ok or type(result) ~= "table" then
+    -- A dialog somebody dismissed with Escape is a no, not a fault.
+    return nil
+  end
+  return result["button returned"]
+end
+
 function obj:askAboutCleanup(offer)
   local cli = self:cliPath()
   if not cli then
@@ -737,7 +820,7 @@ function obj:askAboutCleanup(offer)
     return
   end
   local answer =
-    hs.dialog.blockAlert("Clean up after a tunnel that is down?", routes.explain(offer), "Clean up", "Not now")
+    self:ask("Clean up after a tunnel that is down?", routes.explain(offer), { "Not now", "Clean up" }, "Clean up")
   if answer ~= "Clean up" then
     self.routeMemory.declined = os.time()
     return
@@ -938,6 +1021,16 @@ function obj:refresh(options)
       self.quitByHand[profile.app] = nil
     end
   end
+  -- When each connection began its handshake. Cleared the moment it says
+  -- anything else, so this is the age of the current `connecting` and not of
+  -- the last one (ADR 0036).
+  for _, profile in ipairs(store.list(self.config, true)) do
+    if states[profile.id] == "connecting" then
+      self.connectingSince[profile.id] = self.connectingSince[profile.id] or os.time()
+    else
+      self.connectingSince[profile.id] = nil
+    end
+  end
   self.states = states
 
   -- Routes a tunnel left behind when it died without disconnecting. Asked only
@@ -982,6 +1075,7 @@ function obj:refresh(options)
       -- nothing to click in, or somebody closed it and that stands (ADR 0031).
       appRunning = self:appsRunning(),
       quitByHand = self.quitByHand,
+      connectingSince = self.connectingSince,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -1575,6 +1669,10 @@ function obj:init()
   -- clearing them up (ADR 0035). Not persisted: a reboot is one of the things
   -- that clears them.
   self.routeMemory = {}
+  -- When each connection started saying `connecting`, so a handshake that never
+  -- finishes can be told from one that is still going
+  -- (ADR 0036). Not persisted: a restart is a fresh handshake.
+  self.connectingSince = {}
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()

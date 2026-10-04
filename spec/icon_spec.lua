@@ -178,3 +178,22 @@ describe("icon.elements", function()
     assert.is_true(icon.elements("disconnected", 64)[1].strokeWidth > icon.elements("disconnected", 16)[1].strokeWidth)
   end)
 end)
+
+describe("icon.tick", function()
+  it("scales with the size it is asked for, like the shield", function()
+    local small, large = icon.tick(16), icon.tick(32)
+    assert.is_true(#small > 1)
+    assert.equals(#small, #large)
+    for index, point in ipairs(small) do
+      assert.equals(point.x * 2, large[index].x)
+      assert.equals(point.y * 2, large[index].y)
+    end
+  end)
+
+  it("stays inside the shield it is drawn in", function()
+    for _, point in ipairs(icon.tick(100)) do
+      assert.is_true(point.x > 0 and point.x < 100, "x")
+      assert.is_true(point.y > 0 and point.y < 100, "y")
+    end
+  end)
+end)

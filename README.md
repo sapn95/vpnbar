@@ -134,6 +134,14 @@ always-on VPN that is down while the thing meant to bring it up has decided not
 to is the state this is here to remove. One thing does stop it asking, and that
 is a client nobody has open: *Quitting and restarting the clients*, below.
 
+A connection that has been **connecting** for two minutes is planned from as
+though it were down. Until then it is left alone, because asking again presses
+Connect on top of a handshake. After that it is a handshake nobody is waiting
+for, and with *Only one connection at a time* on it was also holding the
+stand-in down, since a connection on its way up outranks one that is down. What
+the row says does not change: the agent reports connecting, so the menu says
+connecting ([ADR 0036](docs/adr/0036-a-connect-that-never-arrives.md)).
+
 A connection that **needs your login** is the one exception. Its session has
 ended, so a retry opens a login window and nothing else, and a login window
 needs a person: it is held while the screen is locked, and otherwise until a
