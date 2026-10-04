@@ -70,11 +70,23 @@ local function shieldElement(size, action, colour)
   }
 end
 
-local function tickElement(size)
+--- The tick inside the shield, scaled to `size`.
+---
+--- Exported for the same reason `icon.shield` is: the menu bar draws it as a
+--- hole cut out of a template, and a dialog wants the same shape in a colour
+--- ([ADR 0037](../../docs/adr/0037-a-dialog-that-looks-like-vpnbar.md)).
+--- @param size number
+--- @return table list of { x, y }
+function icon.tick(size)
   local points = {}
   for index, point in ipairs(TICK) do
     points[index] = { x = point.x * size, y = point.y * size }
   end
+  return points
+end
+
+local function tickElement(size)
+  local points = icon.tick(size)
   return {
     type = "segments",
     closed = false,

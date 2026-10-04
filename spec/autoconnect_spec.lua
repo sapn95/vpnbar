@@ -903,3 +903,88 @@ describe("autoconnect.plan, a client that is closed", function()
     assert.same({ id = "aws", verb = "supersede", reason = "outranked by gp" }, plan)
   end)
 end)
+
+describe("autoconnect.settled", function()
+  it("reads a handshake that never finished as a connection that is down", function()
+    local states = { gp = "connecting" }
+    assert.same({ gp = "connecting" }, autoconnect.settled(states, { gp = 1000 }, 1000))
+    assert.same(
+      { gp = "connecting" },
+      autoconnect.settled(states, { gp = 1000 }, 1000 + autoconnect.STUCK_CONNECTING - 1)
+    )
+    assert.same(
+      { gp = "disconnected" },
+      autoconnect.settled(states, { gp = 1000 }, 1000 + autoconnect.STUCK_CONNECTING)
+    )
+  end)
+
+  it("leaves every other state where it is", function()
+    local states = { a = "connected", b = "disconnected", c = "login", d = "unknown" }
+    local since = { a = 1, b = 1, c = 1, d = 1 }
+    assert.same(states, autoconnect.settled(states, since, 99999))
+  end)
+
+  it("does not touch the table it was given", function()
+    -- The menu draws from it, and a row saying "disconnected" while the agent
+    -- still says connecting would be a lie told to the person rather than to
+    -- the planner.
+    local states = { gp = "connecting" }
+    autoconnect.settled(states, { gp = 1 }, 99999)
+    assert.same({ gp = "connecting" }, states)
+  end)
+
+  it("has nothing to go on without a clock or a record", function()
+    local states = { gp = "connecting" }
+    assert.same(states, autoconnect.settled(states, nil, 99999))
+    assert.same(states, autoconnect.settled(states, { gp = 1 }, nil))
+    assert.same(states, autoconnect.settled(states, {}, 99999))
+  end)
+end)
+
+describe("autoconnect.plan, a handshake that never finishes", function()
+  local function two()
+    return assert(store.normalise({
+      settings = { exclusive = true, fallback = true },
+      profiles = {
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", autoconnect = true, order = 10 },
+        {
+          id = "aws",
+          name = "AWS",
+          backend = "awsvpn",
+          app = "AWS VPN Client",
+          row = "w",
+          autoconnect = true,
+          order = 20,
+        },
+      },
+    }))
+  end
+
+  it("leaves a connect alone while it is still plausibly on its way", function()
+    local states = { gp = "connecting", aws = "disconnected" }
+    local context = { connectingSince = { gp = 1000 } }
+    assert.is_nil(autoconnect.plan(two(), states, {}, 1000 + 30, context))
+  end)
+
+  it("asks again once it has gone on too long", function()
+    local states = { gp = "connecting", aws = "disconnected" }
+    local context = { connectingSince = { gp = 1000 } }
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(two(), states, {}, 1000 + autoconnect.STUCK_CONNECTING, context)
+    )
+  end)
+
+  it("stops it blocking the stand-in, which is what it cost", function()
+    -- One at a time treats a connection that is coming up as one that is up, so
+    -- a handshake that never finishes held the lower-ranked connection down for
+    -- as long as the agent kept saying it.
+    local states = { gp = "connecting", aws = "disconnected" }
+    local memory = { gp = { attempts = 1, lastTry = 1000 + autoconnect.STUCK_CONNECTING } }
+    local context = { connectingSince = { gp = 1000 } }
+    assert.same(
+      { id = "aws", verb = "connect", reason = "wanted" },
+      autoconnect.plan(two(), states, memory, 1000 + autoconnect.STUCK_CONNECTING, context)
+    )
+  end)
+end)

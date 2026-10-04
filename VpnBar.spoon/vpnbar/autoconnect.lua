@@ -143,6 +143,41 @@ function autoconnect.wouldInterrupt(state, context)
   return context.idle < autoconnect.IDLE_BEFORE_INTERRUPTING
 end
 
+--- How long a connection may sit in `connecting` before it is read as down.
+---
+--- `connecting` is left alone on purpose: it is already on its way, and asking
+--- again would press Connect on top of a handshake. That holds right up until
+--- the handshake never finishes, and then it holds forever: the agent says
+--- connecting, nothing arrives, and with one-at-a-time on it also blocks the
+--- stand-in, because a connection that is coming up outranks one that is down.
+--- Measured on this machine, a GlobalProtect connect that works is done in
+--- seconds, so two minutes is a handshake nobody is waiting for any more
+--- ([ADR 0036](../../docs/adr/0036-a-connect-that-never-arrives.md)).
+autoconnect.STUCK_CONNECTING = 120
+
+--- The states to plan from, with a connect that never arrived read as down.
+---
+--- A view rather than an edit: the caller's table is what the menu draws from,
+--- and a row that said "disconnected" while the agent still says connecting
+--- would be this function lying to the person instead of to itself.
+--- @param states table
+--- @param connectingSince table|nil { [id] = seconds }
+--- @param now number
+--- @return table
+function autoconnect.settled(states, connectingSince, now)
+  states = states or {}
+  if type(connectingSince) ~= "table" or type(now) ~= "number" then
+    return states
+  end
+  local view = {}
+  for id, state in pairs(states) do
+    local since = connectingSince[id]
+    local stuck = state == "connecting" and type(since) == "number" and now - since >= autoconnect.STUCK_CONNECTING
+    view[id] = stuck and "disconnected" or state
+  end
+  return view
+end
+
 --- Down, whether silently or for want of a login.
 local function isDown(state)
   return state == "disconnected" or state == "login"
@@ -252,6 +287,9 @@ end
 --- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
 function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
+  -- Before anything else looks at them, so the one-at-a-time rule reads a
+  -- handshake that never finished as the down connection it is.
+  states = autoconnect.settled(states, context and context.connectingSince, now)
   local settings = store.settings(cfg)
   local preferred = context and context.preferred or nil
   local order = autoconnect.ranked(cfg, preferred)
