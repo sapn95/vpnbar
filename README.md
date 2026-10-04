@@ -457,17 +457,30 @@ be. The fixtures keep the shape of real output and invent every value in it:
 write the rule, not the example.
 
 Half of that is enforced. `scripts/leak-lint.sh` runs in CI and in `make lint`,
-and fails on any IPv4 address in the tree that is not from a documentation or
-private range. Files nobody has added yet are searched as well, so a new one is
-caught before it is committed. A run that could not look fails instead of
+and fails on any IPv4 address in the tree that is not from a documentation range
+or one of the private prefixes the file names one by one. Private space used to
+be allowed as a class, and that is the hole two live addresses came through: an
+address a VPN hands out is a 10.x address, so a route table copied off this
+machine passed a lint that was looking for public ones. Files nobody has added
+yet are searched as well, so a new one is caught before it is committed. A run that could not look fails instead of
 reporting a clean tree: if git will not list the files, or grep cannot read one
 of them, the lint stops there. An **allowlist**, so it contains nothing worth
 hiding and fails closed — the reasoning is
 [container-commander's ADR 0011](https://github.com/sapn95/container-commander/blob/main/docs/adr/0011-employer-neutral-public-repo.md).
 
 The other half cannot easily be: a VPN profile named after an employer looks
-like any other word. That one is checked by reading, and it was got wrong here
-once. Real profile names and two addresses out of a live session's log sat in
-the fixtures and the decision records for two days, while the repository was
+like any other word. That one is checked by reading, and it has been got wrong
+here twice.
+
+Real profile names and two addresses out of a live session's log sat in the
+fixtures and the decision records for two days, while the repository was
 private, until somebody asked the direct question. They were taken out and the
 history was rewritten before this became public.
+
+The route-table fixtures then arrived on 2026-10-02 with the tunnel address and
+one host route of a real session still in them, and sat in the public history
+for two days. They are out of the tree as of 2026-10-04, the lint now names the
+private prefixes it allows instead of allowing the range, and the history keeps
+them: rewriting it would change every commit id in a repository other people
+have cloned, for two addresses out of private space that name no host and reach
+nothing from outside.
