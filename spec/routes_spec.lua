@@ -7,12 +7,12 @@ Routing tables
 
 Internet:
 Destination        Gateway            Flags               Netif Expire
-default            192.168.1.1        UGScg                 en0
-10                 10.245.0.225       UGSc                utun4
-10.124.216.29      10.245.0.225       UGHS                utun4
-172.16/12          10.245.0.225       UGSc                utun4
+default            192.168.1.1        UGScg               en0
+10                 198.51.100.225     UGSc                utun4
+203.0.113.29       198.51.100.225     UGHS                utun4
+172.16/12          198.51.100.225     UGSc                utun4
 192.168.1.0/24     link#12            UCS                 utun1
-10.245.0.225/32    127.0.0.1          UGSc                  lo0
+198.51.100.225/32  127.0.0.1          UGSc                lo0
 ]]
 
 local function interfaces(overrides)
@@ -20,7 +20,7 @@ local function interfaces(overrides)
     en0 = { up = true, addresses = { "192.168.1.96" } },
     lo0 = { up = true, addresses = { "127.0.0.1" } },
     utun1 = { up = true, addresses = {} },
-    utun4 = { up = false, addresses = { "10.245.0.225" } },
+    utun4 = { up = false, addresses = { "198.51.100.225" } },
   }
   for name, value in pairs(overrides or {}) do
     map[name] = value
@@ -32,7 +32,7 @@ describe("routes.parse", function()
   it("keeps the rows on a tunnel and drops everything else", function()
     local parsed = routes.parse(NETSTAT)
     assert.equals(4, #parsed)
-    assert.same({ destination = "10", gateway = "10.245.0.225", flags = "UGSc", netif = "utun4" }, parsed[1])
+    assert.same({ destination = "10", gateway = "198.51.100.225", flags = "UGSc", netif = "utun4" }, parsed[1])
   end)
 
   it("is not fooled by the header or by an empty read", function()
@@ -80,7 +80,7 @@ describe("routes.stranded", function()
   end)
 
   it("goes by the flag and not by the address, which outlives the tunnel", function()
-    local held = interfaces({ utun4 = { up = false, addresses = { "10.245.0.225" } } })
+    local held = interfaces({ utun4 = { up = false, addresses = { "198.51.100.225" } } })
     assert.equals(3, #routes.stranded(routes.parse(NETSTAT), held))
   end)
 end)

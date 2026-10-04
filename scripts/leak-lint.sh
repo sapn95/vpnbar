@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Every IPv4 address written down in this repository has to come from a range
-# reserved for documentation or for private networks. Nothing else may be here.
+# reserved for documentation, or from one of the private prefixes named below.
+# Nothing else may be here.
+#
+# "Private" was the whole rule until 2026-10-04, and it was too wide: a tunnel
+# address a VPN handed out is a 10.x address, so a route table copied off this
+# machine passed the lint with two live addresses in it. Private space is where
+# real internal addresses live. The prefixes allowed here are the ones the
+# fixtures invent, enumerated, so a new 10.x address fails until somebody says
+# in this file what it is.
 #
 # An allowlist rather than a list of forbidden strings, for the reason
 # sapn95/container-commander's ADR 0011 gives: a denylist is itself a list of
@@ -13,7 +21,13 @@
 # by reading. This catches the class a machine can catch.
 set -euo pipefail
 
-readonly ALLOWED='^(0\.0\.0\.0$|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|255\.255\.255\.255$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.)'
+# Documentation space (RFC 5737), the addresses that mean nothing on their own,
+# multicast, and the invented private prefixes: 10.0.0.x and 10.9.9.x for a
+# gateway, 10.11.12.x and 10.11.13.x for an AWS VPN client's replies, and
+# 172.16.0.x, 192.168.0.x and 192.168.1.x for a home network. 10.0.0.0/8,
+# 172.16.0.0/12 and 192.168.0.0/16 themselves are the examples the docs give of
+# a CIDR a VPN hands out, and they are what somebody would actually type.
+readonly ALLOWED='^(0\.0\.0\.0$|127\.|169\.254\.|255\.255\.255\.255$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|10\.0\.0\.|10\.9\.9\.|10\.11\.1[23]\.|172\.16\.0\.|192\.168\.[01]\.)'
 readonly PATTERN='[0-9]{1,3}(\.[0-9]{1,3}){3}'
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -87,6 +101,7 @@ done < "${matches}"
 if [ "${found}" -ne 0 ]; then
   echo >&2
   echo "Use 192.0.2.x, 198.51.100.x or 203.0.113.x instead — they exist for this." >&2
+  echo "A private address is not safe by being private: a real one looks the same." >&2
   exit 1
 fi
-echo "every address written down here is a documentation or private one"
+echo "every address written down here is a documentation or an invented one"

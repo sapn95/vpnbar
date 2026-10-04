@@ -20,6 +20,11 @@ setup() {
   # check working. Octets joined at run time, a public resolver everybody knows.
   LEAKED="$(printf '%s.%s.%s.%s' 8 8 8 8)"
 
+  # A private address the fixtures never invent. It is the class the lint used
+  # to wave through, and the class a route table copied off a real machine is
+  # made of, so it is joined at run time for the same reason as the one above.
+  INTERNAL="$(printf '10.%s.%s.%s' 245 0 225)"
+
   cd "${TMP}/repo" || return 1
   git init -q -b main .
   printf 'the gateway is 192.0.2.1 and the host answers on 10.0.0.4\n' > allowed.md
@@ -31,10 +36,18 @@ teardown() {
   rm -rf "${TMP}"
 }
 
-@test "passes when every address is a documentation or private one" {
+@test "passes when every address is a documentation or an invented one" {
   run "${SCRIPT}"
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"documentation or private one"* ]]
+  [[ "${output}" == *"documentation or an invented one"* ]]
+}
+
+@test "objects to a private address that is not one of the invented prefixes" {
+  printf 'the tunnel came up on %s\n' "${INTERNAL}" > tunnel.md
+  run "${SCRIPT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"tunnel.md:1: ${INTERNAL} is neither"* ]]
+  [[ "${output}" == *"not safe by being private"* ]]
 }
 
 @test "names the file, the line and the address it objects to" {

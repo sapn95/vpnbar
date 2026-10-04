@@ -695,8 +695,8 @@ stub_one_dead_tunnel() {
     printf '%s\n' 'utun1: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380'
   } >>"${NET_IFCONFIG}"
   {
-    printf '%s\n' 'inet 10                 10.245.0.225       UGSc                utun4'
-    printf '%s\n' 'inet 10.124.216.29      10.245.0.225       UGHS                utun4'
+    printf '%s\n' 'inet 10                 198.51.100.225     UGSc                utun4'
+    printf '%s\n' 'inet 203.0.113.29       198.51.100.225     UGHS                utun4'
     printf '%s\n' 'inet 192.168.1.0/24     link#12            UCS                 utun4'
     printf '%s\n' 'inet 172.16.0.0         10.9.9.9           UGSc                utun1'
     printf '%s\n' 'inet default            192.168.1.1        UGScg               en0'
@@ -714,7 +714,7 @@ stub_one_dead_tunnel() {
   run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"3 route(s)"* ]]
-  [[ "$output" == *"10.124.216.29"* ]]
+  [[ "$output" == *"203.0.113.29"* ]]
   # The live tunnel's route and the default route on en0 are nobody's business
   # here: a route table is the one place where a wrong delete looks exactly
   # like the cable being pulled out.
@@ -726,8 +726,8 @@ stub_one_dead_tunnel() {
   stub_one_dead_tunnel
   run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"route -n delete -inet -net 10 10.245.0.225"* ]]
-  [[ "$output" == *"route -n delete -inet -host 10.124.216.29 10.245.0.225"* ]]
+  [[ "$output" == *"route -n delete -inet -net 10 198.51.100.225"* ]]
+  [[ "$output" == *"route -n delete -inet -host 203.0.113.29 198.51.100.225"* ]]
   [[ "$output" == *"route -n delete -inet -net 192.168.1.0/24 -interface utun4"* ]]
 }
 
