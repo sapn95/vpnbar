@@ -760,3 +760,44 @@ describe("backends.status, down with a reason", function()
     assert.equals("login", backends.status(profile, runtime))
   end)
 end)
+
+describe("the service behind a client", function()
+  it("names one for both clients, and nothing for a backend without", function()
+    assert.same(
+      { label = "com.paloaltonetworks.gp.pangps", domain = "gui" },
+      backends.serviceOf({ backend = "globalprotect", app = "GlobalProtect" })
+    )
+    assert.same(
+      { label = "com.amazonaws.acvc.osx.core", domain = "system" },
+      backends.serviceOf({ backend = "awsvpn", app = "AWS VPN Client", row = "w" })
+    )
+    assert.is_nil(backends.serviceOf({ backend = "scutil", service = "s" }))
+    assert.is_nil(backends.serviceOf(nil))
+  end)
+
+  it("asks the shell for the uid rather than remembering one", function()
+    local command = backends.kickstartCommand({ label = "a.b.c", domain = "gui" })
+    assert.matches("gui/%$%(/usr/bin/id %-u%)/a%.b%.c", command)
+    assert.matches("^/bin/launchctl kickstart %-k ", command)
+  end)
+
+  it("puts a system service in the system domain, with no uid in it", function()
+    local command = backends.kickstartCommand({ label = "a.b.c", domain = "system" })
+    assert.equals("/bin/launchctl kickstart -k system/a.b.c", command)
+    assert.is_nil(command:find("id -u", 1, true))
+  end)
+
+  it("says which of the two needs an administrator", function()
+    -- One runs as root and is registered in the person's own gui domain, the
+    -- other is a LaunchDaemon. The difference is not visible in `ps`.
+    assert.is_false(backends.serviceNeedsAdmin({ label = "a", domain = "gui" }))
+    assert.is_true(backends.serviceNeedsAdmin({ label = "a", domain = "system" }))
+    assert.is_false(backends.serviceNeedsAdmin(nil))
+  end)
+
+  it("is offered on a protected connection, because it ends with it running", function()
+    assert.is_true(backends.canRepair({ backend = "globalprotect", app = "GP", protected = true }))
+    assert.is_true(backends.canRepair({ backend = "awsvpn", app = "A", row = "w", protected = true }))
+    assert.is_false(backends.canRepair({ backend = "scutil", service = "s" }))
+  end)
+end)

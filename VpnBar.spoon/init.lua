@@ -1344,6 +1344,60 @@ function obj:switchTo(id)
   self:refreshSoon({ autoconnect = true }, 6)
 end
 
+--- Restart the service behind a client, which is the repair for one whose own
+--- service has stopped answering it.
+---
+--- Confirmed first, because it takes the connection down on the way. In the
+--- `gui` domain it needs nothing; in `system` it asks macOS for an
+--- administrator, the same one prompt the route cleanup uses and nothing left
+--- behind ([ADR 0039](../../docs/adr/0039-putting-a-service-back-on-its-feet.md)).
+function obj:repairService(id)
+  local profile = store.get(self.config, id)
+  local service = profile and backends.serviceOf(profile)
+  if not service then
+    return
+  end
+  local app = profile.app or profile.name
+  local admin = backends.serviceNeedsAdmin(service)
+  local question = ("Restart the service behind %s?"):format(app)
+  local message = "This is the repair for a client whose own service has stopped answering it:"
+    .. " the agent asks for a connection and the service never hears."
+    .. " The connection goes down and comes back."
+    .. (admin and " It asks for an administrator." or "")
+  self:ask(question, message, { "Cancel", "Restart it" }, "Restart it", function(answer)
+    if answer ~= "Restart it" then
+      return
+    end
+    local command = backends.kickstartCommand(service)
+    -- Handing the client back to autoconnect belongs after the restart, not
+    -- before it: a `launchctl` that failed, or an administrator prompt somebody
+    -- cancelled, would otherwise have lifted a quit that still stands
+    -- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
+    if not admin then
+      local _, ok = hs.execute(command)
+      if not ok then
+        self:complain(("%s: the service would not restart"):format(profile.name))
+        return
+      end
+      self:resume(id)
+      self.logger.i(("repair: restarted %s"):format(service.label))
+      self:refreshSoon(nil, 3)
+      return
+    end
+    local template = "do shell script %s with administrator privileges"
+      .. ' with prompt "vpnbar is restarting the service behind %s."'
+    runScript(template:format(appleQuoted(command), app), function(started, out)
+      if not started then
+        self.logger.w("service restart did not run: " .. tostring(out))
+        return
+      end
+      self:resume(id)
+      self.logger.i(("repair: restarted %s"):format(service.label))
+      self:refreshSoon(nil, 3)
+    end)
+  end)
+end
+
 --- Take down everything the menu just said it would take down.
 ---
 --- The list comes from `menu.disconnectAll`, the same call the menu item used to
@@ -1578,6 +1632,9 @@ function obj:dispatch(action)
     end,
     quitAllApps = function()
       self:quitAllApps()
+    end,
+    repair = function()
+      self:repairService(action.id)
     end,
     toggleAutoconnect = function()
       local profile = store.get(self.config, action.id)

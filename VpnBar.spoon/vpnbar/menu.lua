@@ -339,6 +339,24 @@ local function resumeItem(profile, quitByHand)
   }
 end
 
+-- The repair for a client whose own service has stopped answering it. Offered
+-- on a protected connection too, because it ends with the service running and
+-- it is the only way back short of a reboot
+-- ([ADR 0039](../../docs/adr/0039-putting-a-service-back-on-its-feet.md)).
+local function repairItem(profile)
+  if not backends.canRepair(profile) then
+    return { separator = true }
+  end
+  local admin = backends.serviceNeedsAdmin(backends.serviceOf(profile))
+  return {
+    title = ("Restart the service behind %s"):format(profile.app or profile.name),
+    tooltip = "For a client that has stopped answering: the agent asks and its own service never hears."
+      .. " The connection goes down and comes back."
+      .. (admin and " It asks for an administrator." or ""),
+    action = { kind = "repair", id = profile.id },
+  }
+end
+
 local function toggleAction(state)
   if state == "connected" then
     return "disconnect"
@@ -537,6 +555,7 @@ function menu.build(cfg, states, preferred, quitByHand)
         forceItem(profile),
         quitItem(profile, cfg),
         restartItem(profile, cfg),
+        repairItem(profile),
         { title = "Remove…", action = { kind = "remove", id = profile.id } },
       },
     }
