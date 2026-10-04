@@ -1369,13 +1369,17 @@ function obj:repairService(id)
       return
     end
     local command = backends.kickstartCommand(service)
-    self:resume(id)
+    -- Handing the client back to autoconnect belongs after the restart, not
+    -- before it: a `launchctl` that failed, or an administrator prompt somebody
+    -- cancelled, would otherwise have lifted a quit that still stands
+    -- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)).
     if not admin then
       local _, ok = hs.execute(command)
       if not ok then
         self:complain(("%s: the service would not restart"):format(profile.name))
         return
       end
+      self:resume(id)
       self.logger.i(("repair: restarted %s"):format(service.label))
       self:refreshSoon(nil, 3)
       return
@@ -1387,6 +1391,7 @@ function obj:repairService(id)
         self.logger.w("service restart did not run: " .. tostring(out))
         return
       end
+      self:resume(id)
       self.logger.i(("repair: restarted %s"):format(service.label))
       self:refreshSoon(nil, 3)
     end)
