@@ -26,6 +26,12 @@ routes.SETTLE = 60
 --- "Not now" is an answer, not a postponement of fifteen seconds.
 routes.COOLDOWN = 900
 
+--- How long an unanswered question is believed to be still on the screen.
+---
+--- An hour. A dialog somebody walked away from is not a reason to never ask
+--- again, and asking twice in an hour is not nagging.
+routes.ASK_DEADLINE = 3600
+
 --- Only these. A route on a physical interface is somebody's network and never
 --- this function's business.
 local function isTunnel(name)
@@ -116,9 +122,17 @@ function routes.offer(stranded, names, memory, now)
   -- One question at a time. The refresh that found this runs again while the
   -- dialog is still open and nobody has answered yet, so without this the same
   -- question stacks up on the screen once per refresh until somebody clicks
-  -- through a pile of them. The caller sets `asking` while it has one open.
+  -- through a pile of them. The caller sets `asking` to the time it opened one.
+  --
+  -- With a deadline, because the dialog no longer blocks the caller: a callback
+  -- that never arrives would otherwise be a question that can never be asked
+  -- again ([ADR 0038](../../docs/adr/0038-a-question-that-does-not-block.md)).
   if memory.asking then
-    return nil
+    local age = type(memory.asking) == "number" and now - memory.asking or 0
+    if age < routes.ASK_DEADLINE then
+      return nil
+    end
+    memory.asking = nil
   end
   -- A second tunnel that has only just started coming up must serve its own
   -- settling time, not inherit the one the first tunnel has already served.
