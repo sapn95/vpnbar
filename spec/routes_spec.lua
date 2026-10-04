@@ -118,11 +118,20 @@ describe("routes.offer", function()
     local memory = {}
     routes.offer(stranded, names, memory, 1000)
     assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.SETTLE))
-    memory.asking = true
+    memory.asking = 1000 + routes.SETTLE
     assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 10))
     assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 20))
     memory.asking = nil
     assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.SETTLE + 30))
+  end)
+
+  it("asks again when the answer never came", function()
+    -- The dialog does not hold the caller any more, so a callback that never
+    -- arrives would otherwise be a question that can never be asked again.
+    local memory = { since = 0, key = "utun4", asking = 1000 }
+    assert.is_nil(routes.offer(stranded, names, memory, 1000 + routes.ASK_DEADLINE - 1))
+    assert.is_table(routes.offer(stranded, names, memory, 1000 + routes.ASK_DEADLINE))
+    assert.is_nil(memory.asking)
   end)
 
   it("takes no for an answer for a quarter of an hour", function()

@@ -714,15 +714,16 @@ end
 --- hour ([ADR 0035](../../docs/adr/0035-a-dead-tunnels-routes-are-swept-up.md)).
 --- @param offer table from `routes.offer`
 function obj:offerCleanup(offer)
-  -- Marked before anything can block, and cleared on every way out: the dialog
-  -- holds this function for as long as nobody answers, and the refresh behind
-  -- it goes on running.
-  self.routeMemory.asking = true
+  -- Marked before the question is put, and cleared by whichever callback
+  -- answers it: the refresh that found these routes goes on running while the
+  -- dialog is on the screen, and would otherwise ask again every time
+  -- (ADR 0038). A throw clears it here, since no callback will.
+  self.routeMemory.asking = os.time()
   local ok, err = pcall(function()
     self:askAboutCleanup(offer)
   end)
-  self.routeMemory.asking = nil
   if not ok then
+    self.routeMemory.asking = nil
     error(err, 0)
   end
 end
@@ -786,28 +787,54 @@ end
 
 --- Ask a question with vpnbar's own icon on it, and say which button was taken.
 --- @return string|nil the button, or nil when the dialog could not be shown
-function obj:ask(title, message, buttons, default)
+--- Run one AppleScript without holding the run loop, and hand the result on.
+---
+--- `hs.osascript.applescript` blocks until the script returns, and a dialog
+--- returns when somebody clicks it. A question that nobody is at the machine to
+--- answer therefore stops every timer in Hammerspoon for as long as it is on
+--- the screen: no reads, no menu, no icon
+--- ([ADR 0038](../../docs/adr/0038-a-question-that-does-not-block.md)).
+--- `osascript` as a task answers on a callback instead.
+--- @param script string
+--- @param done function called with (ok, output)
+local function runScript(script, done)
+  local task = hs.task.new("/usr/bin/osascript", function(code, out)
+    done(code == 0, (out or ""):gsub("%s+$", ""))
+  end, { "-e", script })
+  if not task or not task:start() then
+    done(false, "osascript would not start")
+  end
+end
+
+local function appleQuoted(text)
+  return '"' .. tostring(text):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+end
+
+--- Ask a question with vpnbar's own icon on it, and call back with the button.
+---
+--- The callback gets nil for a dialog somebody dismissed with Escape, which is
+--- a no rather than a fault.
+function obj:ask(title, message, buttons, default, done)
   local mark = self:markFile()
   if not mark then
-    return hs.dialog.blockAlert(title, message, buttons[2], buttons[1])
-  end
-  local function quoted(text)
-    return '"' .. tostring(text):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+    -- No mark, no AppleScript: the blocking dialog with Hammerspoon's hammer on
+    -- it is worse-looking and still works.
+    return done(hs.dialog.blockAlert(title, message, buttons[2], buttons[1]))
   end
   local script = ("display dialog %s with title %s buttons {%s, %s} default button %s with icon POSIX file %s"):format(
-    quoted(message),
-    quoted(title),
-    quoted(buttons[1]),
-    quoted(buttons[2]),
-    quoted(default),
-    quoted(mark)
+    appleQuoted(message),
+    appleQuoted(title),
+    appleQuoted(buttons[1]),
+    appleQuoted(buttons[2]),
+    appleQuoted(default),
+    appleQuoted(mark)
   )
-  local ok, result = hs.osascript.applescript(script)
-  if not ok or type(result) ~= "table" then
-    -- A dialog somebody dismissed with Escape is a no, not a fault.
-    return nil
-  end
-  return result["button returned"]
+  runScript(script, function(ok, out)
+    if not ok then
+      return done(nil)
+    end
+    done((out:match("button returned:([^,]*)") or ""):gsub("%s+$", ""))
+  end)
 end
 
 function obj:askAboutCleanup(offer)
@@ -815,39 +842,47 @@ function obj:askAboutCleanup(offer)
   if not cli then
     -- Nothing to drive, so nothing to offer. Saying so once is better than a
     -- dialog whose button cannot work.
-    self.routeMemory.declined = os.time()
+    self.routeMemory.asking, self.routeMemory.declined = nil, os.time()
     self:complain("routes are left behind, and the vpnbar command line is not on PATH to clean them")
     return
   end
-  local answer =
-    self:ask("Clean up after a tunnel that is down?", routes.explain(offer), { "Not now", "Clean up" }, "Clean up")
-  if answer ~= "Clean up" then
-    self.routeMemory.declined = os.time()
-    return
-  end
-  -- macOS asks for the password itself, once, and nothing is left behind with
-  -- standing privileges: no helper, no sudoers entry, no daemon.
-  -- Two quotings, because there are two languages here. The shell sees the
-  -- path inside single quotes, so a space or a semicolon in it is a character
-  -- rather than a command; AppleScript then sees that whole command as a
-  -- double-quoted string, where a backslash and a double quote are what need
-  -- escaping.
-  local command = backends.shellQuote(cli) .. " clean --yes"
-  local literal = command:gsub("\\", "\\\\"):gsub('"', '\\"')
-  local template = 'do shell script "%s" with administrator privileges'
-    .. ' with prompt "vpnbar is removing %d route(s) that point at a tunnel which is down."'
-  local script = template:format(literal, offer.count)
-  local ok, _, raw = hs.osascript.applescript(script)
-  self.routeMemory.since, self.routeMemory.declined = nil, os.time()
-  if not ok then
-    -- A cancelled password dialog is a no, not a fault worth a second window.
-    self.logger.w("route cleanup did not run: " .. tostring(raw))
-    return
-  end
-  self.logger.i(
-    ("cleanup: removed %d route(s) left behind by %s"):format(offer.count, table.concat(offer.interfaces, ", "))
+  self:ask(
+    "Clean up after a tunnel that is down?",
+    routes.explain(offer),
+    { "Not now", "Clean up" },
+    "Clean up",
+    function(answer)
+      if answer ~= "Clean up" then
+        self.routeMemory.asking, self.routeMemory.declined = nil, os.time()
+        return
+      end
+      -- macOS asks for the password itself, once, and nothing is left behind with
+      -- standing privileges: no helper, no sudoers entry, no daemon.
+      --
+      -- Two quotings, because there are two languages here. The shell sees the
+      -- path inside single quotes, so a space or a semicolon in it is a character
+      -- rather than a command; AppleScript then sees that whole command as a
+      -- double-quoted string, where a backslash and a double quote are what need
+      -- escaping.
+      local command = backends.shellQuote(cli) .. " clean --yes"
+      local template = "do shell script %s with administrator privileges"
+        .. ' with prompt "vpnbar is removing %d route(s) that point at a tunnel which is down."'
+      local script = template:format(appleQuoted(command), offer.count)
+      runScript(script, function(ok, out)
+        self.routeMemory.asking = nil
+        self.routeMemory.since, self.routeMemory.declined = nil, os.time()
+        if not ok then
+          -- A cancelled password dialog is a no, not a fault worth a second window.
+          self.logger.w("route cleanup did not run: " .. tostring(out))
+          return
+        end
+        self.logger.i(
+          ("cleanup: removed %d route(s) left behind by %s"):format(offer.count, table.concat(offer.interfaces, ", "))
+        )
+        self:refreshSoon(nil, 1)
+      end)
+    end
   )
-  self:refreshSoon(nil, 1)
 end
 
 --- Hand a client back to autoconnect.
