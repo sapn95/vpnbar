@@ -99,6 +99,47 @@ EOF
 printf '%s\n' "${STUB_EXTENSIONS:-}"
 EOF
   chmod +x "${STUB}/ifconfig" "${STUB}/netstat" "${STUB}/route" "${STUB}/sudo" "${STUB}/systemextensionsctl"
+  # `scutil` answers from NET_SCUTIL_SERVICES and NET_SCUTIL_SERVERS; `nc`
+  # decides whether a resolver answers at all.
+  export NET_SCUTIL_SERVICES="${TMP}/scutil-services"
+  export NET_SCUTIL_SERVERS="${TMP}/scutil-servers"
+  export NET_SCUTIL_CALLS="${TMP}/scutil-calls"
+  : >"${NET_SCUTIL_SERVICES}"
+  : >"${NET_SCUTIL_SERVERS}"
+  : >"${NET_SCUTIL_CALLS}"
+  cat >"${STUB}/scutil" <<'EOF'
+#!/usr/bin/env bash
+input="$(cat)"
+printf '%s\n' "${input}" >>"${NET_SCUTIL_CALLS}"
+case "${input}" in
+  list) cat "${NET_SCUTIL_SERVICES}" ;;
+  "show State:/Network/Service/"*/DNS)
+    service="${input#show State:/Network/Service/}"
+    service="${service%/DNS}"
+    printf '<dictionary> {\n  ServerAddresses : <array> {\n'
+    grep -E "^${service}\|" "${NET_SCUTIL_SERVERS}" 2>/dev/null | cut -d'|' -f2 | tr ' ' '\n' | while read -r one; do
+      [ -n "${one}" ] && printf '    0 : %s\n' "${one}"
+    done
+    printf '  }\n}\n'
+    ;;
+esac
+EOF
+  # `dig` answers for exactly the servers named in NET_DNS_ALIVE. Matched on
+  # the @server argument alone: comparing every argument would let a timeout of
+  # "1" in NET_DNS_ALIVE report every resolver as alive.
+  cat >"${STUB}/dig" <<'EOF'
+#!/usr/bin/env bash
+server=""
+for argument in "$@"; do
+  case "${argument}" in @*) server="${argument#@}" ;; esac
+done
+[ -n "${server}" ] || exit 1
+for alive in ${NET_DNS_ALIVE:-}; do
+  [ "${alive}" = "${server}" ] && exit 0
+done
+exit 1
+EOF
+  chmod +x "${STUB}/scutil" "${STUB}/dig"
   printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
   : >"${NET_ROUTES}"
   export STUB_HS_ANSWER="900 32 22"
@@ -779,4 +820,102 @@ stub_one_dead_tunnel() {
   STUB_EXTENSIONS="$(printf '*\t*\tTEAMID\tcom.example.vpn.extension (1.0/1)\tExampleExtension\t[activated enabled]')" \
     run "${SCRIPT}" doctor
   [[ "$output" != *"not approved"* ]]
+}
+
+# ------------------------------------------------------------------ resolvers
+#
+# A VPN writes its own resolvers while it is up, and they answer through its
+# tunnel and nowhere else. When the tunnel dies without the client tidying up,
+# every internal name fails and every lookup that reaches them waits.
+
+stub_stale_dns() {
+  {
+    printf '%s\n' '  subKey [72] = Setup:/Network/Service/gpd.pan/DNS'
+    printf '%s\n' '  subKey [129] = State:/Network/Service/5A68F4BB-A7A9-4093-9A7E-14609A2CD2CC/DNS'
+    printf '%s\n' '  subKey [138] = State:/Network/Service/gpd.pan/DNS'
+  } >"${NET_SCUTIL_SERVICES}"
+  {
+    printf '%s\n' 'gpd.pan|198.51.100.29 198.51.100.30'
+    printf '%s\n' '5A68F4BB-A7A9-4093-9A7E-14609A2CD2CC|192.0.2.1'
+  } >"${NET_SCUTIL_SERVERS}"
+}
+
+@test "clean says so when no resolvers are left over" {
+  stub_stale_dns
+  NET_DNS_ALIVE="198.51.100.29" run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No resolvers are left over from a VPN that is gone."* ]]
+}
+
+@test "clean names the resolvers that answer nothing" {
+  stub_stale_dns
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gpd.pan"* ]]
+  [[ "$output" == *"198.51.100.29 198.51.100.30"* ]]
+}
+
+@test "clean never touches a service macOS numbered itself" {
+  # A UUID in that position is one of the machine's own network services.
+  # Removing its resolvers would take it off the network it is still on.
+  stub_stale_dns
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"5A68F4BB"* ]]
+}
+
+@test "clean removes both keys of a dead resolver when told to" {
+  stub_stale_dns
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  grep -q "remove State:/Network/Service/gpd.pan/DNS" "${NET_SCUTIL_CALLS}"
+  grep -q "remove Setup:/Network/Service/gpd.pan/DNS" "${NET_SCUTIL_CALLS}"
+  [[ "$output" == *"gone  gpd.pan"* ]]
+}
+
+@test "clean removes nothing on a dry run" {
+  stub_stale_dns
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  ! grep -q "^remove " "${NET_SCUTIL_CALLS}"
+}
+
+@test "doctor fails on resolvers that answer nothing and names the command" {
+  stub_stale_dns
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"gpd.pan still points DNS at"* ]]
+  [[ "$output" == *"vpnbar clean"* ]]
+}
+
+@test "doctor is quiet when the resolvers still answer" {
+  stub_stale_dns
+  NET_DNS_ALIVE="198.51.100.29" run "${SCRIPT}" doctor
+  [[ "$output" != *"answers nothing"* ]]
+  [[ "$output" == *"no resolvers left over"* ]]
+}
+
+@test "clean leaves a named service that is not a VPN's alone" {
+  # Not being numbered by macOS says only that something installed itself.
+  # Removing another program's resolvers because they happen not to answer is
+  # a fault of its own.
+  {
+    printf '%s\n' '  subKey [99] = State:/Network/Service/something.else/DNS'
+    printf '%s\n' '  subKey [138] = State:/Network/Service/gpd.pan/DNS'
+  } >"${NET_SCUTIL_SERVICES}"
+  {
+    printf '%s\n' 'something.else|198.51.100.77'
+    printf '%s\n' 'gpd.pan|198.51.100.29'
+  } >"${NET_SCUTIL_SERVERS}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gpd.pan"* ]]
+  [[ "$output" != *"something.else"* ]]
+}
+
+@test "clean keeps a resolver that answers a query" {
+  stub_stale_dns
+  NET_DNS_ALIVE="198.51.100.30" run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No resolvers are left over"* ]]
 }
