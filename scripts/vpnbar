@@ -526,6 +526,16 @@ route_delete() {
 # Seconds a resolver is given to answer before it counts as gone.
 readonly DNS_PROBE_WAIT=1
 
+# The VPN services whose resolvers may be removed, by name.
+#
+# An enumeration rather than a rule. "Not a UUID" says only that macOS did not
+# number it, which is true of anything that installed itself, and removing some
+# other program's resolvers because they happened not to answer is a fault of
+# its own. These are the two clients this tool drives, and a name that is not
+# here is left alone however dead it looks.
+readonly VPN_DNS_SERVICES="gpd.pan"
+
+
 # The services a VPN added, which are the ones named rather than numbered.
 #
 # macOS names its own network services with a UUID. Anything else in that
@@ -534,13 +544,14 @@ readonly DNS_PROBE_WAIT=1
 # machine off the network it is still on.
 vpn_dns_services() {
   command -v scutil >/dev/null 2>&1 || return 0
-  scutil <<<"list" 2>/dev/null | awk '
+  scutil <<<"list" 2>/dev/null | awk -v known="${VPN_DNS_SERVICES}" '
     match($0, /State:\/Network\/Service\/[^\/]+\/DNS/) {
       key = substr($0, RSTART, RLENGTH)
       name = key
       sub(/^State:\/Network\/Service\//, "", name)
       sub(/\/DNS$/, "", name)
-      if (name !~ /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/) {
+      if (name !~ /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/ \
+        && index(" " known " ", " " name " ") > 0) {
         print name
       }
     }
@@ -557,16 +568,21 @@ dns_servers_of() {
   '
 }
 
-# Does any of them answer at all?
+# Does any of them answer a question?
 #
-# The direct question, because the indirect ones do not work: the service
-# records `en0` as its interface rather than the tunnel, so there is nothing in
-# the configuration that says which tunnel these resolvers belong to. Whether
-# they answer is the thing that matters anyway.
+# A real query, not an open port. `nc -z` says only that something accepted a
+# TCP connection: a resolver that listens and answers nothing passes it, and a
+# working resolver that takes queries on UDP alone fails it. Either way round it
+# would be authorising a removal on the wrong evidence.
+#
+# The question is the one every resolver can answer, bounded to a second and a
+# single try, and `dig` is on every macOS. Where it is missing nothing is
+# reported, because an answer nobody could ask for is not evidence of anything.
 dns_reachable() {
+  command -v dig >/dev/null 2>&1 || return 0
   local server
   for server in "$@"; do
-    if nc -z -G "${DNS_PROBE_WAIT}" -w "${DNS_PROBE_WAIT}" "${server}" 53 >/dev/null 2>&1; then
+    if dig +time="${DNS_PROBE_WAIT}" +tries=1 +short "@${server}" . NS >/dev/null 2>&1; then
       return 0
     fi
   done

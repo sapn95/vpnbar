@@ -297,8 +297,10 @@ resolvers with it. A VPN writes its own while it is up, and they answer through
 its tunnel and nowhere else; when the tunnel dies without the client tidying up,
 every internal name fails and every lookup that reaches them waits for a
 timeout, while public names still work. A service whose resolvers answer nothing
-has both its `State:` and `Setup:` keys removed, and only a service whose name
-is not a UUID is ever a candidate, because macOS numbers its own that way
+has both its `State:` and `Setup:` keys removed. Answering is tested with a real
+query rather than an open port, and a service has to be one of the named VPN
+services *and* not a UUID to be a candidate at all, because "not a UUID" says
+only that something installed itself
 ([ADR 0040](docs/adr/0040-resolvers-a-dead-tunnel-left-behind.md)). A route qualifies
 only if its interface is a `utun` that is not UP, because an address outlives
 the tunnel it belonged to and the flag is the part that does not lie. It prints

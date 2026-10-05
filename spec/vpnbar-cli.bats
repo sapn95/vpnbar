@@ -124,14 +124,22 @@ case "${input}" in
     ;;
 esac
 EOF
-  cat >"${STUB}/nc" <<'EOF'
+  # `dig` answers for exactly the servers named in NET_DNS_ALIVE. Matched on
+  # the @server argument alone: comparing every argument would let a timeout of
+  # "1" in NET_DNS_ALIVE report every resolver as alive.
+  cat >"${STUB}/dig" <<'EOF'
 #!/usr/bin/env bash
+server=""
 for argument in "$@"; do
-  case "${NET_NC_ALIVE:-}" in *"${argument}"*) exit 0 ;; esac
+  case "${argument}" in @*) server="${argument#@}" ;; esac
+done
+[ -n "${server}" ] || exit 1
+for alive in ${NET_DNS_ALIVE:-}; do
+  [ "${alive}" = "${server}" ] && exit 0
 done
 exit 1
 EOF
-  chmod +x "${STUB}/scutil" "${STUB}/nc"
+  chmod +x "${STUB}/scutil" "${STUB}/dig"
   printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
   : >"${NET_ROUTES}"
   export STUB_HS_ANSWER="900 32 22"
@@ -834,7 +842,7 @@ stub_stale_dns() {
 
 @test "clean says so when no resolvers are left over" {
   stub_stale_dns
-  NET_NC_ALIVE="198.51.100.29" run "${SCRIPT}" clean --dry-run
+  NET_DNS_ALIVE="198.51.100.29" run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"No resolvers are left over from a VPN that is gone."* ]]
 }
@@ -882,7 +890,32 @@ stub_stale_dns() {
 
 @test "doctor is quiet when the resolvers still answer" {
   stub_stale_dns
-  NET_NC_ALIVE="198.51.100.29" run "${SCRIPT}" doctor
+  NET_DNS_ALIVE="198.51.100.29" run "${SCRIPT}" doctor
   [[ "$output" != *"answers nothing"* ]]
   [[ "$output" == *"no resolvers left over"* ]]
+}
+
+@test "clean leaves a named service that is not a VPN's alone" {
+  # Not being numbered by macOS says only that something installed itself.
+  # Removing another program's resolvers because they happen not to answer is
+  # a fault of its own.
+  {
+    printf '%s\n' '  subKey [99] = State:/Network/Service/something.else/DNS'
+    printf '%s\n' '  subKey [138] = State:/Network/Service/gpd.pan/DNS'
+  } >"${NET_SCUTIL_SERVICES}"
+  {
+    printf '%s\n' 'something.else|198.51.100.77'
+    printf '%s\n' 'gpd.pan|198.51.100.29'
+  } >"${NET_SCUTIL_SERVERS}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"gpd.pan"* ]]
+  [[ "$output" != *"something.else"* ]]
+}
+
+@test "clean keeps a resolver that answers a query" {
+  stub_stale_dns
+  NET_DNS_ALIVE="198.51.100.30" run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No resolvers are left over"* ]]
 }
