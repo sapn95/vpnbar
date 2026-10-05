@@ -516,20 +516,80 @@ route_delete() {
   sudo route "${arguments[@]}"
 }
 
-cmd_clean() {
-  local dry=0 assume_yes=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --dry-run) dry=1 ;;
-      --yes | -y) assume_yes=1 ;;
-      *)
-        echo "usage: ${0##*/} clean [--dry-run] [--yes]" >&2
-        exit 2
-        ;;
-    esac
-    shift
-  done
+# A VPN installs its own resolvers while it is up. GlobalProtect writes
+# State:/Network/Service/gpd.pan/DNS with the internal servers and the search
+# domains, and those servers answer through the tunnel and nowhere else. When
+# the tunnel dies without the client tidying up, every internal name stops
+# resolving and every lookup that reaches them waits for a timeout, which is a
+# machine that looks online and cannot find anything.
 
+# Seconds a resolver is given to answer before it counts as gone.
+readonly DNS_PROBE_WAIT=1
+
+# The services a VPN added, which are the ones named rather than numbered.
+#
+# macOS names its own network services with a UUID. Anything else in that
+# position was put there by something that installed itself, and those are the
+# only ones this touches: removing a real service's resolvers would take the
+# machine off the network it is still on.
+vpn_dns_services() {
+  command -v scutil >/dev/null 2>&1 || return 0
+  scutil <<<"list" 2>/dev/null | awk '
+    match($0, /State:\/Network\/Service\/[^\/]+\/DNS/) {
+      key = substr($0, RSTART, RLENGTH)
+      name = key
+      sub(/^State:\/Network\/Service\//, "", name)
+      sub(/\/DNS$/, "", name)
+      if (name !~ /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/) {
+        print name
+      }
+    }
+  '
+}
+
+# The resolvers one of those services installed.
+dns_servers_of() {
+  local service="$1"
+  scutil <<<"show State:/Network/Service/${service}/DNS" 2>/dev/null | awk '
+    /ServerAddresses/ { inside = 1; next }
+    inside && /^[[:space:]]*}/ { inside = 0 }
+    inside && match($0, /[0-9a-fA-F.:]+$/) { print substr($0, RSTART, RLENGTH) }
+  '
+}
+
+# Does any of them answer at all?
+#
+# The direct question, because the indirect ones do not work: the service
+# records `en0` as its interface rather than the tunnel, so there is nothing in
+# the configuration that says which tunnel these resolvers belong to. Whether
+# they answer is the thing that matters anyway.
+dns_reachable() {
+  local server
+  for server in "$@"; do
+    if nc -z -G "${DNS_PROBE_WAIT}" -w "${DNS_PROBE_WAIT}" "${server}" 53 >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# `service|server,server` for every VPN service whose resolvers have all gone.
+stale_dns() {
+  local service servers
+  while IFS= read -r service; do
+    [ -n "${service}" ] || continue
+    servers="$(dns_servers_of "${service}" | tr '\n' ' ')"
+    servers="${servers% }"
+    [ -n "${servers}" ] || continue
+    # shellcheck disable=SC2086
+    if ! dns_reachable ${servers}; then
+      printf '%s|%s\n' "${service}" "${servers}"
+    fi
+  done < <(vpn_dns_services)
+}
+
+clean_routes() {
+  local dry="$1" assume_yes="$2"
   local routes
   routes="$(stale_routes)"
   if [ -z "${routes}" ]; then
@@ -598,9 +658,96 @@ EOF
     note "A tunnel whose system extension has stopped answering keeps its"
     note "routes until the machine reboots. vpnbar doctor says whether that"
     note "is what this is."
-    exit 1
+    return 1
   fi
-  [ "${failures}" -eq 0 ] || exit 1
+  [ "${failures}" -eq 0 ] || return 1
+  return 0
+}
+
+# Resolvers a VPN installed and never took away.
+clean_dns() {
+  local dry="$1" assume_yes="$2"
+  local stale
+  stale="$(stale_dns)"
+  if [ -z "${stale}" ]; then
+    echo "No resolvers are left over from a VPN that is gone."
+    return 0
+  fi
+
+  local service servers
+  echo "These resolvers answer nothing:"
+  while IFS='|' read -r service servers; do
+    [ -n "${service}" ] || continue
+    printf '  %-18s %s\n' "${service}" "${servers}"
+  done <<EOF
+${stale}
+EOF
+  note "Until they go, every name they were meant to resolve fails and every"
+  note "lookup that reaches them waits for a timeout."
+
+  if [ "${dry}" -eq 1 ]; then
+    echo
+    echo "What it would run:"
+    while IFS='|' read -r service servers; do
+      [ -n "${service}" ] || continue
+      printf '  sudo scutil <<< "remove State:/Network/Service/%s/DNS"\n' "${service}"
+      printf '  sudo scutil <<< "remove Setup:/Network/Service/%s/DNS"\n' "${service}"
+    done <<EOF
+${stale}
+EOF
+    return 0
+  fi
+
+  if [ "${assume_yes}" -ne 1 ]; then
+    printf 'Remove them? [y/N] '
+    local answer=""
+    read -r answer </dev/tty || true
+    case "${answer}" in
+      y | Y | yes | YES) ;;
+      *)
+        echo "Left alone."
+        return 0
+        ;;
+    esac
+  fi
+
+  sudo -v || true
+  local failures=0
+  while IFS='|' read -r service servers; do
+    [ -n "${service}" ] || continue
+    if printf 'remove State:/Network/Service/%s/DNS\nremove Setup:/Network/Service/%s/DNS\nquit\n' \
+      "${service}" "${service}" | sudo scutil >/dev/null 2>&1; then
+      printf '  gone  %s\n' "${service}"
+    else
+      printf '  kept  %s (scutil refused it)\n' "${service}"
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+${stale}
+EOF
+  [ "${failures}" -eq 0 ] || return 1
+  return 0
+}
+
+cmd_clean() {
+  local dry=0 assume_yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      --yes | -y) assume_yes=1 ;;
+      *)
+        echo "usage: ${0##*/} clean [--dry-run] [--yes]" >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+
+  local trouble=0
+  clean_routes "${dry}" "${assume_yes}" || trouble=1
+  echo
+  clean_dns "${dry}" "${assume_yes}" || trouble=1
+  [ "${trouble}" -eq 0 ] || exit 1
 }
 
 # Network extensions that are activated but not enabled.
@@ -740,6 +887,22 @@ cmd_doctor() {
     note "Every address they cover goes to an interface that carries nothing,"
     note "so the machine looks connected and reaches none of it."
     failures=$((failures + 1))
+  fi
+  local staleDns
+  staleDns="$(stale_dns)"
+  if [ -z "${staleDns}" ]; then
+    ok "no resolvers left over from a VPN that is gone"
+  else
+    local service servers
+    while IFS='|' read -r service servers; do
+      [ -n "${service}" ] || continue
+      bad "${service} still points DNS at ${servers}, which answers nothing — run: vpnbar clean"
+      failures=$((failures + 1))
+    done <<EOF
+${staleDns}
+EOF
+    note "Every name those resolvers were meant to answer fails, and every"
+    note "lookup that reaches them waits for a timeout."
   fi
   local waiting
   waiting="$(extensions_waiting)"

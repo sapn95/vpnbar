@@ -292,7 +292,14 @@ to make that possible: no helper, no `sudoers` entry, no daemon
 the client was the first design and was measured not to work, because a client
 that has lost track of its tunnel cannot tear it down.
 
-`vpnbar clean` is the same thing from the command line, and nothing else. A route qualifies
+`vpnbar clean` is the same thing from the command line, and it takes the
+resolvers with it. A VPN writes its own while it is up, and they answer through
+its tunnel and nowhere else; when the tunnel dies without the client tidying up,
+every internal name fails and every lookup that reaches them waits for a
+timeout, while public names still work. A service whose resolvers answer nothing
+has both its `State:` and `Setup:` keys removed, and only a service whose name
+is not a UUID is ever a candidate, because macOS numbers its own that way
+([ADR 0040](docs/adr/0040-resolvers-a-dead-tunnel-left-behind.md)). A route qualifies
 only if its interface is a `utun` that is not UP, because an address outlives
 the tunnel it belonged to and the flag is the part that does not lie. It prints
 what it found, asks before deleting, and `--dry-run` prints the `route` commands
