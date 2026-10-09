@@ -1093,9 +1093,12 @@ function obj:refresh(options)
       self.switching = nil
     elseif not autoconnect.switching(target, { switching = self.switching }, os.time()) then
       local name = (store.get(self.config, target) or {}).name or target
-      self:complain(
-        ("%s did not come up in %d minutes; it stays preferred"):format(name, autoconnect.SWITCH_PATIENCE // 60)
-      )
+      local minutes = autoconnect.SWITCH_PATIENCE // 60
+      if states[target] == "connected" then
+        self:complain(("%s is up, but another connection is still up after %d minutes"):format(name, minutes))
+      else
+        self:complain(("%s did not come up in %d minutes; it stays preferred"):format(name, minutes))
+      end
       self.switching = nil
     end
   end

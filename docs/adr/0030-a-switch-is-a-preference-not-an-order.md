@@ -80,9 +80,17 @@ A person who had just clicked **Switch to AWS** and was still at the keyboard
 saw nothing happen, and the old connection stayed up.
 
 For ten minutes after the click the connection somebody switched to is pressed
-for: asked every thirty seconds, whatever its state, with the login hold
-suspended, because the login window is the thing they asked for. Once it is
-connected, everything else that is up is taken down, whether or not *Only one
-connection at a time* is on, because that is what "switch" means. After ten
-minutes it is an ordinary preference again, and the menu says so once. The
-preference itself lasts until vpnbar restarts, as before.
+for: asked every thirty seconds while it is down or wants a login, with the
+login hold suspended, because the login window is the thing they asked for.
+`connecting` is still left alone and `unknown` is still never pressed, for the
+reasons [ADR 0013](0013-autoconnect-is-a-plan-not-a-timer.md) and
+[ADR 0036](0036-a-connect-that-never-arrives.md) give. Nothing else is started
+meanwhile, not another connection marked to autoconnect and not the target's
+own stand-in: with *Only one connection at a time* off, the connection the
+switch takes down would otherwise be brought straight back, and a stand-in
+coming up for a switch that is failing is the opposite of what was asked for.
+Once the target is connected, everything else that is up is taken down,
+whether or not *Only one connection at a time* is on, because that is what
+"switch" means. After ten minutes it is an ordinary preference again, and the
+menu says so once. The preference itself lasts until vpnbar restarts, as
+before.

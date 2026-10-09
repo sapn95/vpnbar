@@ -246,11 +246,13 @@ end
 --- How long a switch keeps asking, and how often.
 ---
 --- A switch is a person saying "this one, now". For ten minutes after the
---- click the connection they chose is asked for every thirty seconds, whatever
---- its state and whatever they are typing: the login window a `login` state
---- opens is the one they asked for, and the doubling backoff was written for a
---- connection nobody is waiting on. After ten minutes it is an ordinary
---- preference again, with the ordinary rules
+--- click the connection they chose is asked for every thirty seconds while it
+--- is down or wants a login, whatever they are typing: the login window a
+--- `login` state opens is the one they asked for, and the doubling backoff was
+--- written for a connection nobody is waiting on. `connecting` is still left
+--- alone, and `unknown` is still never pressed, for the reasons those states
+--- always had. Nothing else is started meanwhile. After ten minutes it is an
+--- ordinary preference again, with the ordinary rules
 --- ([ADR 0030](../../docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
 autoconnect.SWITCH_PATIENCE = 600
 autoconnect.SWITCH_RETRY = 30
@@ -399,10 +401,18 @@ function autoconnect.plan(cfg, states, memory, now, context)
     end
   end
 
+  -- While a switch is being pressed for, nothing else is started: not another
+  -- connection marked to autoconnect, not the target's own stand-in. With
+  -- one-at-a-time off, a connection taken down by the switch would otherwise
+  -- be brought straight back by this loop and taken down again on the next
+  -- pass, and a stand-in coming up for a switch that is failing is the
+  -- opposite of what was asked for.
+  local pressedFor = preferred and autoconnect.switching(preferred, context, now) and preferred or nil
+
   for _, profile in ipairs(order) do
     -- The connection somebody switched to is wanted whether or not it was ever
     -- marked to autoconnect: the switch is that mark, for this session.
-    if profile.autoconnect or profile.id == preferred then
+    if (profile.autoconnect or profile.id == preferred) and (pressedFor == nil or profile.id == pressedFor) then
       local state = states[profile.id] or "unknown"
 
       if isDown(state) then
@@ -461,7 +471,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- stand-in that opens nothing may carry the traffic while the
           -- preferred connection waits for a quiet moment, and the supersede
           -- rule takes the stand-in down again once the preferred one arrives.
-          local wantsFallback = settings.fallback and profile.fallback ~= nil
+          local wantsFallback = settings.fallback and profile.fallback ~= nil and pressedFor == nil
           -- A client that is closed is not going to answer this pass however
           -- many times it has been asked, so its stand-in gets its turn now
           -- rather than after a failure that will never be recorded. Everywhere

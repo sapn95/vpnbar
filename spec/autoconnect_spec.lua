@@ -1051,6 +1051,21 @@ describe("autoconnect.plan, a switch being pressed for", function()
     assert.is_nil(autoconnect.plan(off, states, {}, 1000, { preferred = "aws" }))
   end)
 
+  it("starts nothing else while it is pressing, not even the target's stand-in", function()
+    -- With one-at-a-time off, a connection taken down by the switch would
+    -- otherwise be brought straight back by the ordinary loop, and a stand-in
+    -- coming up for a switch that is failing is the opposite of what was asked.
+    local off = pair({ exclusive = false, fallback = true })
+    local held = { gp = "disconnected", aws = "login" }
+    local memory = { aws = { attempts = 1, lastTry = 1000 } }
+    assert.is_nil(autoconnect.plan(off, held, memory, 1000 + 10, switching(1000)))
+    -- Once the switch is over, the same machine goes back to its ordinary rules.
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(off, held, memory, 1000 + autoconnect.SWITCH_PATIENCE, switching(1000))
+    )
+  end)
+
   it("does not take anything down before the switched-to one has arrived", function()
     local states = { gp = "connected", aws = "connecting" }
     assert.is_nil(autoconnect.plan(pair({ exclusive = false, fallback = true }), states, {}, 1000, switching(1000)))

@@ -201,10 +201,11 @@ vpnbar restarts, and the row then reads **Switch back to …**. A plain Connect
 does not do this, because the planner would take the second tunnel straight
 down again ([ADR 0030](docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
 For ten minutes after the click the connection you switched to is pressed
-for: asked every thirty seconds, whatever its state, login window or not,
-because that window is the thing you asked for. Once it is up, everything else
-that is up goes down, whether or not *Only one connection at a time* is on.
-After ten minutes it is an ordinary preference again, and vpnbar says so once.
+for: asked every thirty seconds while it is down or wants a login, login window
+or not, because that window is the thing you asked for, and nothing else is
+started meanwhile. Once it is up, everything else that is up goes down, whether
+or not *Only one connection at a time* is on. After ten minutes it is an
+ordinary preference again, and vpnbar says so once.
 
 ## Force disconnect
 
