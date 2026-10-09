@@ -150,16 +150,29 @@ function awsui.offered(nodes)
 end
 
 --- What the open chooser has highlighted, which is where an arrow key starts
---- from. The client marks it both ways round, so either attribute will do.
+--- from.
+---
+--- Two marks, and they are not the same thing. `selected` sits on the profile
+--- the chooser is committed to and does not move; `focused` is what the arrow
+--- keys move. They coincide only at the instant the chooser opens, which is the
+--- instant the first version of this was measured at, and reading "either" then
+--- meant that every walk downwards from the committed profile read the
+--- committed one back, pressed again, and wrapped around to it
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+--- Focus first; the committed one only when nothing has focus.
 --- @param nodes table nodes of the open chooser
 --- @return string|nil
 function awsui.highlighted(nodes)
+  local committed
   for _, entry in ipairs(nodes or {}) do
-    if entry.role == "AXMenuItem" and (entry.selected or entry.focused) then
-      return text(entry)
+    if entry.role == "AXMenuItem" then
+      if entry.focused then
+        return text(entry)
+      end
+      committed = committed or (entry.selected and text(entry)) or nil
     end
   end
-  return nil
+  return committed
 end
 
 --- Which way to walk the highlight, and how far, to reach one name.
