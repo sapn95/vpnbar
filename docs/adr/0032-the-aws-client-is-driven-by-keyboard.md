@@ -54,6 +54,26 @@ client that offered nothing. Twenty is past anything either client draws, and
 the bound stays a number because a tree with a cycle in it would hang
 Hammerspoon.
 
+## The two marks on the chooser, added 2026-10-09
+
+The chooser's entries carry two marks, and the first version of this read
+either of them as "the highlight". `selected` sits on the profile the chooser is
+committed to and does not move. `focused` is what the arrow keys move. They
+coincide only at the instant the chooser opens, which is the instant the
+measurement above was taken at.
+
+So every walk downwards from the committed profile failed, and did so the same
+way three times before it was understood: the first Down moved the focus to the
+wanted profile, the read still found the committed one first in tree order and
+reported it, a second Down was pressed, the list wraps, and the focus was back
+on the committed profile when the final check ran. `AWS VPN Client would not
+move its chooser to sbb`, every time, at 1 s. A walk upwards to the first entry
+passed, which is why the measurement did not catch it.
+
+`awsui.highlighted` reads the focus first now and the committed entry only when
+nothing has focus, and the walk waits for the focus to have moved before it
+reads rather than reading once after a fixed pause.
+
 ## Why the highlight is re-read instead of counted
 
 The chooser opens with something highlighted and only an arrow key moves it, so

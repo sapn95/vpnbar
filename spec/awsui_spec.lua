@@ -98,6 +98,25 @@ describe("awsui, the open chooser", function()
     assert.same({}, awsui.offered(window()))
   end)
 
+  it("follows the focus, which is what the arrow keys move", function()
+    -- The committed profile keeps `selected` wherever the focus goes. After
+    -- one Down from the committed profile the two are on different items, and
+    -- reading the committed one back is what made every downward walk fail.
+    local nodes = {
+      { role = "AXMenuItem", value = "work_full", selected = true, focused = false },
+      { role = "AXMenuItem", value = "work", selected = false, focused = true },
+    }
+    assert.equals("work", awsui.highlighted(nodes))
+  end)
+
+  it("falls back to the committed profile when nothing has focus", function()
+    local nodes = {
+      { role = "AXMenuItem", value = "work_full", selected = true, focused = false },
+      { role = "AXMenuItem", value = "work", selected = false, focused = false },
+    }
+    assert.equals("work_full", awsui.highlighted(nodes))
+  end)
+
   it("reads the highlight, marked either way round", function()
     assert.equals("work_full", awsui.highlighted(chooser("work_full")))
     assert.is_nil(awsui.highlighted(chooser()))

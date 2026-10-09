@@ -499,8 +499,18 @@ local function chooseProfile(appName, chooser, row)
       break
     end
     hs.eventtap.keyStroke({}, direction, 0, app)
-    hs.timer.usleep(CHOOSER_WAIT)
-    nodes = chooserWindow(appName) or nodes
+    -- Wait for the focus to have moved before reading it, rather than reading
+    -- once after a fixed pause. A read that came back before the client had
+    -- drawn the move said the old item, which asked for another press, and
+    -- the list wraps, so one press too many is the committed profile again.
+    local before = highlighted
+    nodes = settle(function()
+      local fresh = chooserWindow(appName)
+      if fresh and awsui.highlighted(fresh) ~= before then
+        return fresh
+      end
+      return nil
+    end) or chooserWindow(appName) or nodes
   end
   if awsui.highlighted(nodes) ~= row then
     escape()
@@ -1128,7 +1138,14 @@ function obj:refresh(options)
       autoconnect.forget(self.attempts, plan.id)
     end
     if profile then
-      backends.act(profile, plan.verb, runtime, self.config)
+      local ok, err = backends.act(profile, plan.verb, runtime, self.config)
+      if not ok then
+        -- On the console rather than as a notification: this runs on a timer,
+        -- and a press that found no panel is worth a line, not a banner. It
+        -- used to be discarded, and an evening of twenty presses left no
+        -- trace of what any of them met.
+        self.logger.w(("autoconnect: %s %s failed: %s"):format(plan.verb, plan.id, tostring(err)))
+      end
     end
   end
 
