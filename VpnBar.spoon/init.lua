@@ -504,13 +504,20 @@ local function chooseProfile(appName, chooser, row)
     -- drawn the move said the old item, which asked for another press, and
     -- the list wraps, so one press too many is the committed profile again.
     local before = highlighted
-    nodes = settle(function()
+    local moved = settle(function()
       local fresh = chooserWindow(appName)
       if fresh and awsui.highlighted(fresh) ~= before then
         return fresh
       end
       return nil
-    end) or chooserWindow(appName) or nodes
+    end)
+    if not moved then
+      -- A press that moved nothing is not a reason to press again: the list
+      -- wraps, so the next press lands on the committed entry and the final
+      -- check below would read as if nothing had been tried.
+      break
+    end
+    nodes = moved
   end
   if awsui.highlighted(nodes) ~= row then
     escape()
