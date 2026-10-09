@@ -988,3 +988,71 @@ describe("autoconnect.plan, a handshake that never finishes", function()
     )
   end)
 end)
+
+describe("autoconnect.plan, a switch being pressed for", function()
+  local function pair(settings)
+    return assert(store.normalise({
+      settings = settings or { exclusive = true, fallback = true },
+      profiles = {
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", autoconnect = true, order = 10 },
+        {
+          id = "aws",
+          name = "AWS",
+          backend = "awsvpn",
+          app = "AWS VPN Client",
+          row = "w",
+          autoconnect = true,
+          order = 20,
+        },
+      },
+    }))
+  end
+  local function switching(since)
+    return { preferred = "aws", switching = { id = "aws", since = since }, idle = 5 }
+  end
+
+  it("asks for the connection somebody switched to even when it wants a login and they are typing", function()
+    -- The login window a `login` state opens is the one they asked for.
+    local states = { gp = "login", aws = "login" }
+    assert.same(
+      { id = "aws", verb = "connect", reason = "switch" },
+      autoconnect.plan(pair(), states, {}, 1000, switching(1000))
+    )
+    -- Without the switch the same state is held, which is the point of ADR 0029.
+    assert.is_nil(autoconnect.plan(pair(), states, {}, 1000, { preferred = "aws", idle = 5 }))
+  end)
+
+  it("retries every thirty seconds instead of on the doubling backoff", function()
+    local states = { gp = "login", aws = "login" }
+    local memory = { aws = { attempts = 3, lastTry = 1000 } }
+    assert.is_nil(autoconnect.plan(pair(), states, memory, 1000 + autoconnect.SWITCH_RETRY - 1, switching(1000)))
+    assert.same(
+      { id = "aws", verb = "connect", reason = "switch" },
+      autoconnect.plan(pair(), states, memory, 1000 + autoconnect.SWITCH_RETRY, switching(1000))
+    )
+  end)
+
+  it("goes back to the ordinary rules once its patience is spent", function()
+    local states = { gp = "login", aws = "login" }
+    local later = 1000 + autoconnect.SWITCH_PATIENCE
+    assert.is_nil(autoconnect.plan(pair(), states, {}, later, switching(1000)))
+    assert.is_false(autoconnect.switching("aws", switching(1000), later))
+    assert.is_true(autoconnect.switching("aws", switching(1000), later - 1))
+  end)
+
+  it("takes the other connection down once the switched-to one is up, one-at-a-time or not", function()
+    local states = { gp = "connected", aws = "connected" }
+    local off = pair({ exclusive = false, fallback = true })
+    assert.same(
+      { id = "gp", verb = "supersede", reason = "switched to aws" },
+      autoconnect.plan(off, states, {}, 1000, switching(1000))
+    )
+    -- The same machine with no switch in progress leaves both where they are.
+    assert.is_nil(autoconnect.plan(off, states, {}, 1000, { preferred = "aws" }))
+  end)
+
+  it("does not take anything down before the switched-to one has arrived", function()
+    local states = { gp = "connected", aws = "connecting" }
+    assert.is_nil(autoconnect.plan(pair({ exclusive = false, fallback = true }), states, {}, 1000, switching(1000)))
+  end)
+end)
