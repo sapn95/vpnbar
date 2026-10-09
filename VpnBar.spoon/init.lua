@@ -1076,6 +1076,32 @@ function obj:refresh(options)
   -- When each connection began its handshake. Cleared the moment it says
   -- anything else, so this is the age of the current `connecting` and not of
   -- the last one (ADR 0036).
+  -- A switch is over when the connection it asked for is up and nothing else
+  -- is, or when it has been pressed for long enough; the preference outlives
+  -- it either way (ADR 0030).
+  if self.switching then
+    local target = self.switching.id
+    local othersUp = false
+    for _, profile in ipairs(store.list(self.config, true)) do
+      local state = states[profile.id]
+      if profile.id ~= target and (state == "connected" or state == "connecting") then
+        othersUp = true
+      end
+    end
+    if states[target] == "connected" and not othersUp then
+      self.logger.i(("switch: %s is up and alone"):format(target))
+      self.switching = nil
+    elseif not autoconnect.switching(target, { switching = self.switching }, os.time()) then
+      local name = (store.get(self.config, target) or {}).name or target
+      local minutes = autoconnect.SWITCH_PATIENCE // 60
+      if states[target] == "connected" then
+        self:complain(("%s is up, but another connection is still up after %d minutes"):format(name, minutes))
+      else
+        self:complain(("%s did not come up in %d minutes; it stays preferred"):format(name, minutes))
+      end
+      self.switching = nil
+    end
+  end
   for _, profile in ipairs(store.list(self.config, true)) do
     if states[profile.id] == "connecting" then
       self.connectingSince[profile.id] = self.connectingSince[profile.id] or os.time()
@@ -1128,6 +1154,7 @@ function obj:refresh(options)
       appRunning = self:appsRunning(),
       quitByHand = self.quitByHand,
       connectingSince = self.connectingSince,
+      switching = self.switching,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -1347,6 +1374,10 @@ function obj:switchTo(id)
     return
   end
   self.preferred = id
+  -- Pressed for, not merely preferred: for the next ten minutes the planner
+  -- asks for it every thirty seconds, login window or not, and takes the other
+  -- one down the moment this one is up (ADR 0030).
+  self.switching = { id = id, since = os.time() }
   -- A person asking for this connection is a person asking for its client, which
   -- is the one thing that lifts a quit.
   self:resume(id)
@@ -1789,6 +1820,9 @@ function obj:init()
   -- finishes can be told from one that is still going
   -- (ADR 0036). Not persisted: a restart is a fresh handshake.
   self.connectingSince = {}
+  -- The switch being pressed for, if any: `{ id, since }`. Not persisted, like
+  -- the preference it belongs to (ADR 0030).
+  self.switching = nil
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()

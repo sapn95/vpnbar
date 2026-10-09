@@ -243,6 +243,33 @@ function autoconnect.arrived(previous, current)
   return current == "connected" and (isDown(previous) or previous == "connecting")
 end
 
+--- How long a switch keeps asking, and how often.
+---
+--- A switch is a person saying "this one, now". For ten minutes after the
+--- click the connection they chose is asked for every thirty seconds while it
+--- is down or wants a login, whatever they are typing: the login window a
+--- `login` state opens is the one they asked for, and the doubling backoff was
+--- written for a connection nobody is waiting on. `connecting` is still left
+--- alone, and `unknown` is still never pressed, for the reasons those states
+--- always had. Nothing else is started meanwhile. After ten minutes it is an
+--- ordinary preference again, with the ordinary rules
+--- ([ADR 0030](../../docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
+autoconnect.SWITCH_PATIENCE = 600
+autoconnect.SWITCH_RETRY = 30
+
+--- Is this connection the one a switch is still pressing for?
+--- @param id string
+--- @param context table|nil { switching = { id = string, since = number } }
+--- @param now number
+--- @return boolean
+function autoconnect.switching(id, context, now)
+  local switching = context and context.switching
+  if type(switching) ~= "table" or switching.id ~= id or type(switching.since) ~= "number" then
+    return false
+  end
+  return now - switching.since < autoconnect.SWITCH_PATIENCE
+end
+
 --- The ranking autoconnect works from: the order in the menu, with one
 --- exception. A connection somebody switched to goes first, whatever its
 --- `order`, for as long as the preference stands. The order itself is not
@@ -320,6 +347,19 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- ([ADR 0026](../../docs/adr/0026-one-at-a-time-outranks-protection.md)). It
   -- does not care who opened the extra tunnel either: "one at a time" that makes
   -- an exception for a tunnel opened by hand is not one at a time.
+  -- A switch means "instead of", whatever the one-at-a-time setting says: once
+  -- the connection somebody switched to is up, everything else that is up goes
+  -- down. Only while the switch is still being pressed for, so a machine with
+  -- one-at-a-time off is not kept in a loop of taking down a connection that
+  -- autoconnect then brings back.
+  if preferred and states[preferred] == "connected" and autoconnect.switching(preferred, context, now) then
+    for _, profile in ipairs(order) do
+      if profile.id ~= preferred and isUp(states[profile.id]) then
+        return { id = profile.id, verb = "supersede", reason = "switched to " .. preferred }
+      end
+    end
+  end
+
   if settings.exclusive then
     local best
     for _, profile in ipairs(order) do
@@ -361,10 +401,18 @@ function autoconnect.plan(cfg, states, memory, now, context)
     end
   end
 
+  -- While a switch is being pressed for, nothing else is started: not another
+  -- connection marked to autoconnect, not the target's own stand-in. With
+  -- one-at-a-time off, a connection taken down by the switch would otherwise
+  -- be brought straight back by this loop and taken down again on the next
+  -- pass, and a stand-in coming up for a switch that is failing is the
+  -- opposite of what was asked for.
+  local pressedFor = preferred and autoconnect.switching(preferred, context, now) and preferred or nil
+
   for _, profile in ipairs(order) do
     -- The connection somebody switched to is wanted whether or not it was ever
     -- marked to autoconnect: the switch is that mark, for this session.
-    if profile.autoconnect or profile.id == preferred then
+    if (profile.autoconnect or profile.id == preferred) and (pressedFor == nil or profile.id == pressedFor) then
       local state = states[profile.id] or "unknown"
 
       if isDown(state) then
@@ -393,6 +441,12 @@ function autoconnect.plan(cfg, states, memory, now, context)
         local attempts = attemptsFor(memory, profile.id)
         local last = lastTryFor(memory, profile.id)
         local ready = last == nil or (now - last) >= autoconnect.cooldown(attempts)
+        -- A switch still being pressed for retries on its own short cadence and
+        -- is not held for a login window: the person asked for exactly that.
+        local pressing = autoconnect.switching(profile.id, context, now)
+        if pressing then
+          ready = last == nil or (now - last) >= autoconnect.SWITCH_RETRY
+        end
         -- Its client has to be there, and not one somebody closed on purpose.
         local mayStart = autoconnect.mayStart(profile, context)
 
@@ -404,8 +458,8 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- up the preferred connection was never tried again and the machine
           -- stayed on second best. A fallback is there to carry traffic while
           -- the preferred one is unavailable, not to replace the preference.
-          if mayStart and ready and not autoconnect.wouldInterrupt(state, context) then
-            return { id = profile.id, verb = "connect", reason = "wanted" }
+          if mayStart and ready and (pressing or not autoconnect.wouldInterrupt(state, context)) then
+            return { id = profile.id, verb = "connect", reason = pressing and "switch" or "wanted" }
           end
 
           -- Not ready means this one is inside its cooldown, and that gap is
@@ -417,7 +471,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- stand-in that opens nothing may carry the traffic while the
           -- preferred connection waits for a quiet moment, and the supersede
           -- rule takes the stand-in down again once the preferred one arrives.
-          local wantsFallback = settings.fallback and profile.fallback ~= nil
+          local wantsFallback = settings.fallback and profile.fallback ~= nil and pressedFor == nil
           -- A client that is closed is not going to answer this pass however
           -- many times it has been asked, so its stand-in gets its turn now
           -- rather than after a failure that will never be recorded. Everywhere

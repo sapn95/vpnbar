@@ -200,8 +200,12 @@ down once the new one is connected, instead of the new one. The order in the men
 vpnbar restarts, and the row then reads **Switch back to …**. A plain Connect
 does not do this, because the planner would take the second tunnel straight
 down again ([ADR 0030](docs/adr/0030-a-switch-is-a-preference-not-an-order.md)).
-With *Only one connection at a time* off, the switch brings the other one up
-and leaves the current one to you, and its tooltip says so.
+For ten minutes after the click the connection you switched to is pressed
+for: asked every thirty seconds while it is down or wants a login, login window
+or not, because that window is the thing you asked for, and nothing else is
+started meanwhile. Once it is up, everything else that is up goes down, whether
+or not *Only one connection at a time* is on. After ten minutes it is an
+ordinary preference again, and vpnbar says so once.
 
 ## Force disconnect
 
