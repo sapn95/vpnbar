@@ -801,3 +801,35 @@ describe("the service behind a client", function()
     assert.is_false(backends.canRepair({ backend = "scutil", service = "s" }))
   end)
 end)
+
+describe("a disconnect somebody asked for by name", function()
+  local function fake()
+    return fakeRuntime()
+  end
+
+  it("goes through on a protected connection, where a plain disconnect does not", function()
+    -- Only Disconnect everything produces it, after a confirmation that named
+    -- every protected connection it would close (ADR 0041).
+    local locked =
+      { id = "s", name = "S", backend = "shell", protected = true, commands = { connect = "u", disconnect = "d" } }
+    assert.is_false((backends.act(locked, "disconnect", fake())))
+    local runtime = fake()
+    assert.is_true((backends.act(locked, "standdown", runtime)))
+    assert.same({ "d" }, runtime.calls.exec)
+  end)
+
+  it("takes the harder path where the config has one, protected or not", function()
+    local locked = {
+      id = "s",
+      name = "S",
+      backend = "shell",
+      protected = true,
+      commands = { connect = "u", disconnect = "d", force = "k" },
+    }
+    local runtime = fake()
+    assert.is_true((backends.act(locked, "standdown", runtime)))
+    assert.same({ "k" }, runtime.calls.exec)
+    assert.is_true(backends.hasForceCommand(locked))
+    assert.is_false(backends.canForce(locked), "the menu row stays off a protected connection")
+  end)
+end)
