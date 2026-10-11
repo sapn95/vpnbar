@@ -475,6 +475,14 @@ describe("menu.build, disconnect everything", function()
     assert.same({ kind = "resumeAll" }, items[1].action)
     assert.is_nil(find(menu.build(cfg({ plain }), {}), "VPNs are off. Turn them back on"))
   end)
+
+  it("does not say off while something is still up", function()
+    -- A disconnect that failed, or a connection brought up by hand while
+    -- paused: the pause is a decision, the states are what happened.
+    local items = menu.build(cfg({ plain, locked }), { a = "disconnected", gp = "connected" }, nil, nil, true)
+    assert.equals("Autoconnect is paused, Always-on VPN still up. Resume", items[1].title)
+    assert.same({ kind = "resumeAll" }, items[1].action)
+  end)
 end)
 
 describe("menu.build, restarting the agent", function()

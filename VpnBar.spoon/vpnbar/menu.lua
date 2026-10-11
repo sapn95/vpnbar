@@ -210,12 +210,21 @@ local function disconnectAllItem(plan)
   return { title = "Disconnect everything", tooltip = tooltip, action = { kind = "disconnectAll" } }
 end
 
--- While everything is off by request, the first row says so and is the way
--- back. Nothing else in the menu brings the VPNs back on its own in this state,
--- so the way back has to be the thing nobody can miss (ADR 0041).
-local function pausedItem()
+-- While autoconnect is paused, the first row says so and is the way back.
+-- Nothing else in the menu brings the VPNs back on its own in this state, so
+-- the way back has to be the thing nobody can miss (ADR 0041).
+--
+-- The title comes from the states rather than from the pause, because the
+-- pause is a decision and the states are what happened: a disconnect that
+-- failed, or a connection brought up by hand while paused, leaves something up
+-- that a title saying "off" would hide.
+local function pausedItem(plan)
+  local title = "VPNs are off. Turn them back on"
+  if #plan > 0 then
+    title = ("Autoconnect is paused, %s still up. Resume"):format(table.concat(namesOf(plan), ", "))
+  end
   return {
-    title = "VPNs are off. Turn them back on",
+    title = title,
     tooltip = "Everything was disconnected on purpose, so autoconnect is leaving it alone."
       .. " This hands every connection back to autoconnect, in the order of the menu.",
     action = { kind = "resumeAll" },
@@ -453,7 +462,7 @@ function menu.build(cfg, states, preferred, quitByHand, paused)
   -- Before everything, while everything is off by request: it is the only way
   -- back, so it is the one row that cannot be missed.
   if paused then
-    items[#items + 1] = pausedItem()
+    items[#items + 1] = pausedItem(menu.disconnectAll(cfg, states))
     items[#items + 1] = { separator = true }
   end
 
