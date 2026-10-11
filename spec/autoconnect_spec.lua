@@ -1071,3 +1071,44 @@ describe("autoconnect.plan, a switch being pressed for", function()
     assert.is_nil(autoconnect.plan(pair({ exclusive = false, fallback = true }), states, {}, 1000, switching(1000)))
   end)
 end)
+
+describe("autoconnect.plan, everything off by request", function()
+  local function pair()
+    return assert(store.normalise({
+      settings = { exclusive = true, fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GlobalProtect",
+          autoconnect = true,
+          protected = true,
+          order = 10,
+        },
+        {
+          id = "aws",
+          name = "AWS",
+          backend = "awsvpn",
+          app = "AWS VPN Client",
+          row = "w",
+          autoconnect = true,
+          order = 20,
+        },
+      },
+    }))
+  end
+
+  it("starts nothing while paused, however wanted and however protected", function()
+    -- An autoconnect that brought a protected tunnel straight back would make
+    -- Disconnect everything pointless (ADR 0041).
+    local down = { gp = "disconnected", aws = "disconnected" }
+    assert.is_nil(autoconnect.plan(pair(), down, {}, 1000, { paused = true }))
+    assert.same({ id = "gp", verb = "connect", reason = "wanted" }, autoconnect.plan(pair(), down, {}, 1000, {}))
+  end)
+
+  it("takes nothing down while paused either", function()
+    local both = { gp = "connected", aws = "connected" }
+    assert.is_nil(autoconnect.plan(pair(), both, {}, 1000, { paused = true }))
+  end)
+end)

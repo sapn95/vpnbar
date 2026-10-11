@@ -25,7 +25,7 @@ whether their idea was considered or simply missed.
 | [0017](0017-the-mark-says-when-it-is-working.md) | The mark says when it is working, and the busy state is a count |
 | [0018](0018-nothing-waits-for-a-read.md) | Nothing waits for a read |
 | [0019](0019-quit-stops-the-spoon-and-nothing-else.md) | Quit stops the Spoon and nothing else |
-| [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone |
+| [0020](0020-disconnect-everything-leaves-the-protected-ones-alone.md) | Disconnect everything leaves the protected ones alone (superseded by 0041) |
 | [0021](0021-restarting-the-agent-is-not-a-disconnect.md) | Restarting the agent is not a disconnect (superseded by 0033) |
 | [0022](0022-a-probe-reads-the-interface-not-just-the-address.md) | A probe reads the interface, not just the address |
 | [0023](0023-an-unlock-is-a-fresh-start.md) | An unlock is a fresh start, the same as a wake |
@@ -46,3 +46,4 @@ whether their idea was considered or simply missed.
 | [0038](0038-a-question-that-does-not-block.md) | A question that does not block |
 | [0039](0039-putting-a-service-back-on-its-feet.md) | Putting a service back on its feet |
 | [0040](0040-resolvers-a-dead-tunnel-left-behind.md) | Resolvers a dead tunnel left behind |
+| [0041](0041-everything-means-everything.md) | Everything means everything |

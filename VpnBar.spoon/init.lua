@@ -1155,6 +1155,7 @@ function obj:refresh(options)
       quitByHand = self.quitByHand,
       connectingSince = self.connectingSince,
       switching = self.switching,
+      paused = self.paused,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
@@ -1374,6 +1375,8 @@ function obj:switchTo(id)
     return
   end
   self.preferred = id
+  -- A switch is "this one, now", which outranks "everything off" (ADR 0041).
+  self.paused = false
   -- Pressed for, not merely preferred: for the next ten minutes the planner
   -- asks for it every thirty seconds, login window or not, and takes the other
   -- one down the moment this one is up (ADR 0030).
@@ -1463,23 +1466,41 @@ function obj:disconnectAll()
   if #plan == 0 then
     return
   end
-  local names = {}
+  local names, protected = {}, {}
   for _, entry in ipairs(plan) do
     names[#names + 1] = entry.name
+    if entry.protected then
+      protected[#protected + 1] = entry.name
+    end
   end
+  local message = table.concat(names, ", ") .. "."
+  if #protected > 0 then
+    message = message
+      .. " "
+      .. table.concat(protected, ", ")
+      .. (#protected == 1 and " is" or " are")
+      .. " protected and goes down too, because you asked for everything."
+  end
+  message = message .. " Autoconnect then stays off until you choose Turn them back on."
   if
     hs.dialog.blockAlert(
       ("Disconnect %d connection%s?"):format(#plan, #plan == 1 and "" or "s"),
-      table.concat(names, ", ") .. ". Protected connections are left alone.",
+      message,
       "Disconnect",
       "Cancel"
     ) ~= "Disconnect"
   then
     return
   end
+  -- Paused before the first command runs, so a refresh that lands in the middle
+  -- of the run cannot start anything back up (ADR 0041). A switch in progress
+  -- ends here too: "everything off" outranks "this one now".
+  self.paused = true
+  self.switching = nil
+  self.logger.i("disconnect everything: autoconnect paused")
   -- One mark for the whole run rather than one per connection: a `force` waits
-  -- on a management interface and then on an app quitting, so this is seconds of
-  -- work, and it is all the same click.
+  -- on a client quitting, so this is seconds of work, and it is all the same
+  -- click.
   work.begin(self.work, os.time())
   self:paint()
   hs.timer.doAfter(0, function()
@@ -1504,6 +1525,19 @@ function obj:disconnectAll()
     self:refreshSoon(nil, 2)
     work.finish(self.work)
   end)
+end
+
+--- Hand every connection back to autoconnect after **Disconnect everything**.
+---
+--- Lifts the pause, the quit holds and the failure records together, so the
+--- planner starts from nothing and brings them up in the order of the menu
+--- (ADR 0041).
+function obj:resumeAll()
+  self.paused = false
+  self.quitByHand = {}
+  autoconnect.forget(self.attempts)
+  self.logger.i("disconnect everything: autoconnect resumed")
+  self:refreshSoon({ autoconnect = true }, 0)
 end
 
 --- Is the screen locked right now?
@@ -1676,6 +1710,9 @@ function obj:dispatch(action)
     force = function()
       self:act(action.id, "force")
     end,
+    resumeAll = function()
+      self:resumeAll()
+    end,
     disconnectAll = function()
       self:disconnectAll()
     end,
@@ -1823,6 +1860,10 @@ function obj:init()
   -- The switch being pressed for, if any: `{ id, since }`. Not persisted, like
   -- the preference it belongs to (ADR 0030).
   self.switching = nil
+  -- Everything was disconnected on purpose, and autoconnect stands down until
+  -- somebody turns the VPNs back on (ADR 0041). Not persisted: a restart of
+  -- vpnbar is a fresh start, like the other session-only decisions.
+  self.paused = false
   -- What is running, so the mark can say so. Owned here, reasoned about in
   -- vpnbar/work.lua.
   self.work = work.new()
@@ -1865,7 +1906,7 @@ function obj:start()
     -- and the queued read has the icon right by the time the menu closes.
     self:load()
     self:refreshSoon()
-    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred, self.quitByHand))
+    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred, self.quitByHand, self.paused))
   end)
   -- Deferred, so the icon is in the bar before anything is read. Hammerspoon
   -- loads this Spoon while it is still starting up, and a synchronous first

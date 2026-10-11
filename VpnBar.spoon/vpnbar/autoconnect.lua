@@ -316,6 +316,13 @@ function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
   -- Before anything else looks at them, so the one-at-a-time rule reads a
   -- handshake that never finished as the down connection it is.
+  -- Everything was disconnected on purpose. Nothing is started and nothing is
+  -- taken down until somebody turns the VPNs back on: an autoconnect that
+  -- brought a protected tunnel straight back would make the request pointless
+  -- ([ADR 0041](../../docs/adr/0041-everything-means-everything.md)).
+  if context and context.paused then
+    return nil
+  end
   states = autoconnect.settled(states, context and context.connectingSince, now)
   local settings = store.settings(cfg)
   local preferred = context and context.preferred or nil

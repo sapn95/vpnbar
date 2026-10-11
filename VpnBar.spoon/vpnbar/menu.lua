@@ -130,41 +130,41 @@ end
 --- Everything a **Disconnect everything** would actually take down, in the order
 --- the config lists it.
 ---
---- Protected connections are never in it, and that is the whole reason this is a
---- function rather than a loop inside the item: the menu says which connections
---- it is about to close, the adapter closes exactly those, and neither can drift
---- from the other. Hidden connections **are** in it — hiding is about the top
---- level of the menu, not about the tunnel.
+--- Everything means everything, protected connections included. It used to
+--- leave those alone, and on a machine where both VPNs are protected the row was
+--- greyed out every time it was wanted, which is whenever somebody needs the
+--- local network: a printer, a NAS, a router's own page
+--- ([ADR 0041](../../docs/adr/0041-everything-means-everything.md)). Protection
+--- is against a stray click on a row; this is a confirmed request naming every
+--- connection it will close, and the protected ones are named as such. Each
+--- entry says whether it is protected, so the confirmation can say it out loud.
+---
+--- It is a function rather than a loop inside the item for the reason it always
+--- was: the menu says what it is about to close, the adapter closes exactly
+--- those, and neither can drift from the other. Hidden connections **are** in
+--- it, since hiding is about the top level of the menu, not about the tunnel.
 --- @param cfg table
 --- @param states table map of profile id to state
---- @return table list of { id, name, verb }
+--- @return table list of { id, name, verb, protected }
 function menu.disconnectAll(cfg, states)
   states = states or {}
   local plan = {}
   for _, profile in ipairs(store.list(cfg, true)) do
-    if not profile.protected and isUp(states[profile.id]) then
+    if isUp(states[profile.id]) then
       plan[#plan + 1] = {
         id = profile.id,
         name = profile.name,
-        -- The harder path wherever the config gives one. An item that says
+        -- `standdown` is a disconnect a person asked for by name, and the one
+        -- the backend lets through on a protected connection. It takes the
+        -- harder path wherever the config gives one: an item that says
         -- everything is the wrong place to make somebody ask twice.
-        verb = backends.canForce(profile) and "force" or "disconnect",
+        verb = "standdown",
+        force = backends.hasForceCommand(profile),
+        protected = profile.protected == true,
       }
     end
   end
   return plan
-end
-
--- The connections that are up and may not be touched. Not a plan, a reason: an
--- item that says "everything" and does nothing has to be able to say why.
-local function heldOpen(cfg, states)
-  local names = {}
-  for _, profile in ipairs(store.list(cfg, true)) do
-    if profile.protected and isUp(states[profile.id]) then
-      names[#names + 1] = profile.name
-    end
-  end
-  return names
 end
 
 local function namesOf(plan)
@@ -177,34 +177,49 @@ end
 
 local function usesForce(plan)
   for _, entry in ipairs(plan) do
-    if entry.verb == "force" then
+    if entry.force then
       return true
     end
   end
   return false
 end
 
--- One row for "shut what can be shut". Greyed out rather than hidden when
--- everything that is up is protected, which is the one case where a disabled
--- item earns its place: on a machine whose only tunnel is an always-on one, an
--- item that quietly did nothing would look broken, and one that was simply
--- absent would look missing. So it stays, and it names what is holding it.
-local function disconnectAllItem(plan, held)
-  if #plan == 0 then
-    return {
-      title = "Disconnect everything",
-      disabled = true,
-      tooltip = "Nothing here may be disconnected. Protected from disconnecting: " .. table.concat(held, ", ") .. ".",
-    }
+local function protectedIn(plan)
+  local names = {}
+  for _, entry in ipairs(plan) do
+    if entry.protected then
+      names[#names + 1] = entry.name
+    end
   end
+  return names
+end
+
+-- One row for "turn it all off". Shown once something is up, never greyed out:
+-- the protected connections are in the plan, and the tooltip says so before
+-- the confirmation does.
+local function disconnectAllItem(plan)
   local tooltip = "Takes down: " .. table.concat(namesOf(plan), ", ") .. "."
+  local protected = protectedIn(plan)
+  if #protected > 0 then
+    tooltip = tooltip .. " Protected, and taken down too: " .. table.concat(protected, ", ") .. "."
+  end
   if usesForce(plan) then
     tooltip = tooltip .. " Each one the hard way where its config has one."
   end
-  if #held > 0 then
-    tooltip = tooltip .. " Left alone, protected: " .. table.concat(held, ", ") .. "."
-  end
+  tooltip = tooltip .. " Autoconnect then stays off until you turn the VPNs back on."
   return { title = "Disconnect everything", tooltip = tooltip, action = { kind = "disconnectAll" } }
+end
+
+-- While everything is off by request, the first row says so and is the way
+-- back. Nothing else in the menu brings the VPNs back on its own in this state,
+-- so the way back has to be the thing nobody can miss (ADR 0041).
+local function pausedItem()
+  return {
+    title = "VPNs are off. Turn them back on",
+    tooltip = "Everything was disconnected on purpose, so autoconnect is leaving it alone."
+      .. " This hands every connection back to autoconnect, in the order of the menu.",
+    action = { kind = "resumeAll" },
+  }
 end
 
 -- The backend chooser is a submenu and not a dialog: hs.dialog.blockAlert
@@ -428,11 +443,19 @@ end
 --- @param states table map of profile id to state
 --- @param preferred string|nil the id somebody switched to for this session
 --- @param quitByHand table|nil the applications somebody closed, `{ [app] = true }`
+--- @param paused boolean|nil everything was disconnected on purpose (ADR 0041)
 --- @return table list of items: { title, action?, separator?, disabled?, menu?, tooltip? }
-function menu.build(cfg, states, preferred, quitByHand)
+function menu.build(cfg, states, preferred, quitByHand, paused)
   states = states or {}
   local items = {}
   local visible = store.list(cfg)
+
+  -- Before everything, while everything is off by request: it is the only way
+  -- back, so it is the one row that cannot be missed.
+  if paused then
+    items[#items + 1] = pausedItem()
+    items[#items + 1] = { separator = true }
+  end
 
   -- First, because it is the row for the moment this menu is opened in anger:
   -- the connection you chose is crawling and you want the other one.
@@ -487,13 +510,12 @@ function menu.build(cfg, states, preferred, quitByHand)
   -- Only once there is something up to talk about. On an idle machine every
   -- connection is already down, and a row offering to close nothing is noise.
   local plan = menu.disconnectAll(cfg, states)
-  local held = heldOpen(cfg, states)
   local apps = menu.quitApps(cfg)
-  if #plan > 0 or #held > 0 or #apps > 0 then
+  if #plan > 0 or #apps > 0 then
     items[#items + 1] = { separator = true }
   end
-  if #plan > 0 or #held > 0 then
-    items[#items + 1] = disconnectAllItem(plan, held)
+  if #plan > 0 then
+    items[#items + 1] = disconnectAllItem(plan)
   end
   -- Closing the clients is a different thing from taking the tunnels down, and
   -- it is the repair for a client that has stopped answering, so it sits beside

@@ -358,6 +358,7 @@ describe("menu.disconnectAll", function()
           id = "aws",
           name = "AWS VPN",
           backend = "shell",
+          protected = true,
           commands = { connect = "up", disconnect = "down", force = "kill" },
         },
         { id = "work", name = "Work VPN", backend = "scutil", service = "Work VPN" },
@@ -369,33 +370,35 @@ describe("menu.disconnectAll", function()
   local function plan(states)
     local out = {}
     for _, entry in ipairs(menu.disconnectAll(mixed(), states)) do
-      out[#out + 1] = entry.id .. ":" .. entry.verb
+      out[#out + 1] = entry.id .. (entry.force and ":force" or "") .. (entry.protected and ":protected" or "")
     end
     return out
   end
 
-  it("takes everything that is up, in the order the config lists it", function()
-    -- The hidden one is in it: hiding is about the top level of the menu, and a
-    -- tunnel you cannot see is not a tunnel that is allowed to survive
-    -- "everything".
+  it("takes everything that is up, protected included, in the order the config lists it", function()
+    -- Everything means everything: on a machine where both VPNs are protected
+    -- the old rule greyed the row out every time it was wanted (ADR 0041). The
+    -- hidden one is in it too, since hiding is about the menu, not the tunnel.
     assert.same(
-      { "aws:force", "work:disconnect", "old:disconnect" },
+      { "gp:protected", "aws:force:protected", "work", "old" },
       plan({ gp = "connected", aws = "connected", work = "connected", old = "connected" })
     )
   end)
 
-  it("uses the harder path only where the config gives one", function()
-    assert.same({ "aws:force" }, plan({ aws = "connected" }))
-    assert.same({ "work:disconnect" }, plan({ work = "connected" }))
+  it("asks for every one of them by the verb protection lets through", function()
+    for _, entry in ipairs(menu.disconnectAll(mixed(), { gp = "connected", work = "connected" })) do
+      assert.equals("standdown", entry.verb)
+    end
   end)
 
-  it("never includes a protected connection", function()
-    assert.same({}, plan({ gp = "connected" }))
-    assert.same({}, plan({ gp = "connecting" }))
+  it("marks the harder path only where the config gives one, protected or not", function()
+    assert.same({ "aws:force:protected" }, plan({ aws = "connected" }))
+    assert.same({ "work" }, plan({ work = "connected" }))
   end)
 
   it("counts a connection on its way up, which is a thing you want stopped", function()
-    assert.same({ "work:disconnect" }, plan({ work = "connecting" }))
+    assert.same({ "work" }, plan({ work = "connecting" }))
+    assert.same({ "gp:protected" }, plan({ gp = "connecting" }))
   end)
 
   it("leaves alone what is down, and what nobody could read", function()
@@ -438,23 +441,18 @@ describe("menu.build, disconnect everything", function()
     assert.is_nil(find(menu.build(cfg({ plain }), {}), "Disconnect everything"))
   end)
 
-  it("stays, greyed out, and names what is holding it when the only tunnel up is protected", function()
-    -- The case this was written for. Hiding the row would read as a missing
-    -- feature and a row that quietly did nothing would read as a broken one, so
-    -- it says which connection it is not allowed to close.
+  it("is clickable when the only tunnel up is protected, and says it is", function()
+    -- This was greyed out, which on a machine with two protected VPNs meant it
+    -- never worked when it was wanted (ADR 0041).
     local item = find(menu.build(cfg({ locked }), { gp = "connected" }), "Disconnect everything")
-    assert.is_true(item.disabled)
-    assert.is_nil(item.action)
-    assert.matches("Nothing here may be disconnected", item.tooltip)
-    assert.matches("Always%-on VPN", item.tooltip)
+    assert.is_nil(item.disabled)
+    assert.same({ kind = "disconnectAll" }, item.action)
+    assert.matches("Protected, and taken down too: Always%-on VPN", item.tooltip)
   end)
 
-  it("says both halves when some may go and some may not", function()
-    local item =
-      find(menu.build(cfg({ plain, locked }), { a = "connected", gp = "connected" }), "Disconnect everything")
-    assert.same({ kind = "disconnectAll" }, item.action)
-    assert.matches("Takes down: A", item.tooltip)
-    assert.matches("Left alone, protected: Always%-on VPN", item.tooltip)
+  it("says autoconnect stays off afterwards", function()
+    local item = find(menu.build(cfg({ plain }), { a = "connected" }), "Disconnect everything")
+    assert.matches("stays off until you turn the VPNs back on", item.tooltip)
   end)
 
   it("says when it will use a force, because that is more than the row above does", function()
@@ -469,6 +467,13 @@ describe("menu.build, disconnect everything", function()
     assert.is_nil(
       find(menu.build(cfg({ plain }), { a = "connected" }), "Disconnect everything").tooltip:find("hard way")
     )
+  end)
+
+  it("puts the way back first while everything is off by request", function()
+    local items = menu.build(cfg({ plain, locked }), { a = "disconnected", gp = "disconnected" }, nil, nil, true)
+    assert.equals("VPNs are off. Turn them back on", items[1].title)
+    assert.same({ kind = "resumeAll" }, items[1].action)
+    assert.is_nil(find(menu.build(cfg({ plain }), {}), "VPNs are off. Turn them back on"))
   end)
 end)
 

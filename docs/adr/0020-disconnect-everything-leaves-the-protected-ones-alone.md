@@ -1,6 +1,6 @@
 # 0020 — Disconnect everything leaves the protected ones alone
 
-**Status:** accepted, 2026-09-10.
+**Status:** superseded by [ADR 0041](0041-everything-means-everything.md), 2026-10-11. On a machine where every VPN is protected the greyed-out row was greyed out every time it was wanted.
 
 ## The decision
 

@@ -220,15 +220,18 @@ interface, wait, and only then quit the client — the tunnel goes with it.
 ## Disconnect everything
 
 One row, above **Connections**, once anything is up: it closes every connection
-that is up or on its way up and is not protected, taking the harder path wherever
-a config gives one. The confirmation names them.
+that is up or on its way up, **protected ones included**, taking the harder path
+wherever a config gives one. The confirmation names them and says which are
+protected. It is for the ordinary moment you need the local network, a printer,
+a NAS, the router's own page, none of which answer through a tunnel.
 
-Where everything up is protected it stays, greyed out, and says which connection
-is holding it. That is deliberately the opposite of what **Force disconnect**
-does when it does not apply, and
-[ADR 0020](docs/adr/0020-disconnect-everything-leaves-the-protected-ones-alone.md)
-says why: here there is a feature and a reason, and the reason is a setting two
-submenus away.
+Autoconnect then stands down: nothing is started and nothing is taken down
+until you choose **VPNs are off. Turn them back on**, which is the first row of
+the menu for as long as that is true. A **Switch to** ends the pause as well,
+and so does a restart of vpnbar
+([ADR 0041](docs/adr/0041-everything-means-everything.md), which replaces
+[ADR 0020](docs/adr/0020-disconnect-everything-leaves-the-protected-ones-alone.md)).
+A connection's own **Disconnect** row still refuses a protected connection.
 
 ## Quitting and restarting the clients
 

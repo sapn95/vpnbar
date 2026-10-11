@@ -393,6 +393,16 @@ backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shel
 --- config gives it one.
 --- @param profile table
 --- @return boolean
+--- Does the config give this connection a harder way down, whether or not it
+--- is protected? `canForce` answers for the menu row, which protection removes;
+--- this answers for **Disconnect everything**, which protection does not stop
+--- ([ADR 0041](../../docs/adr/0041-everything-means-everything.md)).
+--- @param profile table
+--- @return boolean
+function backends.hasForceCommand(profile)
+  return type(profile) == "table" and type(profile.commands) == "table" and profile.commands.force ~= nil
+end
+
 function backends.canForce(profile)
   if type(profile) ~= "table" or profile.protected then
     return false
@@ -486,7 +496,7 @@ end
 ---
 --- `supersede` is deliberately not a verb any menu item produces. Every button
 --- goes on being refused, so protection still means what the menu says it means.
-backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true, quit = true }
+backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true, quit = true, standdown = true }
 
 --- The verbs that act on an application rather than on a tunnel. They are only
 --- allowed on a protected connection where the application is not the tunnel.
@@ -555,7 +565,17 @@ function backends.act(profile, verb, runtime, cfg)
   -- `supersede` is a disconnect wearing a different name so the protection
   -- check above can tell them apart. No backend implements it; every backend
   -- already knows how to close its own connection.
-  local action = verb == "supersede" and "disconnect" or verb
+  --
+  -- `standdown` is the other one: a disconnect a person asked for by name,
+  -- through **Disconnect everything**, after a confirmation that listed every
+  -- protected connection it would close. It takes the harder path where the
+  -- config has one (ADR 0041).
+  local action = verb
+  if verb == "supersede" then
+    action = "disconnect"
+  elseif verb == "standdown" then
+    action = backends.hasForceCommand(profile) and "force" or "disconnect"
+  end
   if not backend or not backend[action] then
     return false, ("no %s for a %s connection"):format(verb, tostring(profile.backend))
   end
