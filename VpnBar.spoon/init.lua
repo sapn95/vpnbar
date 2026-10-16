@@ -568,6 +568,25 @@ local function connectRow(appName, row)
   if not nodes then
     return false, err
   end
+  -- Read before anything is pressed. The client leaves the notice of a refused
+  -- connect on its window, so the notice that is there now is the reason the
+  -- last attempt came to nothing, and saying so is the whole point of reading
+  -- it: a connect the client turned down used to look exactly like a connect
+  -- that did nothing. Dismissed in the same breath, because a notice left up is
+  -- reported again on the pass after the one that succeeded.
+  local refused, dismiss = awsui.failure(nodes)
+  if refused then
+    local cleared = dismiss
+      and pressElement(appName, elements[dismiss], "return")
+      and settle(function()
+        local fresh = clientWindow(appName)
+        return (fresh and not awsui.failure(fresh)) or nil
+      end)
+    if cleared then
+      return false, refused
+    end
+    return false, ("%s (and its notice would not close)"):format(refused)
+  end
   if awsui.isConnected(nodes, row) then
     -- Nothing to press. The client answers a second Connect on a live profile
     -- with a dialog, and a read that lagged behind is a normal thing to have.

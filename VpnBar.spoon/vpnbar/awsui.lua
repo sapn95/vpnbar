@@ -19,6 +19,14 @@
 --- list of connections that are already up, one block each. A profile that is
 --- up is therefore in the second list and missing from the chooser, and the
 --- Connect button belongs to no profile in particular.
+---
+--- A connect the client turned down puts a notice on that same window and
+--- leaves it there:
+---
+---     static  "AWS VPN Client"
+---     static  "Failed to connect"
+---     static  "The provided credentials are incorrect. ..."
+---     button  "Close"
 
 local awsui = {}
 
@@ -39,6 +47,42 @@ local function text(entry)
     return nil
   end
   return entry.value or entry.title
+end
+
+--- The words the client adds to the name of whatever the chooser has focused.
+---
+--- Measured on the live chooser: the entry nothing is pointing at reads `sbb`,
+--- and the same entry with the focus on it reads `sbb not selected`. The web
+--- view writes an option's `aria-selected` into the name it hands the
+--- accessibility API, and it does so for the focused option only. The committed
+--- entry, which is the selected one, carries no suffix at all when the focus is
+--- on it.
+---
+--- So the one entry a walk has to read by name is the one entry whose name the
+--- client rewrites, and every walk downwards ended in `would not move its
+--- chooser to sbb`: the name came back lengthened, no entry of the list matched
+--- it any more, and the step count fell to nothing
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+awsui.FOCUS_SUFFIX = " not selected"
+
+--- One chooser entry's name, with that suffix taken back off.
+---
+--- Only the focused entry is rewritten, and only while it is not the committed
+--- one. Everything else keeps its value verbatim, so a profile whose own name
+--- ends in those words is not shortened for having been read.
+local function entryName(entry)
+  local name = text(entry)
+  if type(name) ~= "string" then
+    return name
+  end
+  if not entry.focused or entry.selected then
+    return name
+  end
+  local suffix = awsui.FOCUS_SUFFIX
+  if #name > #suffix and name:sub(-#suffix) == suffix then
+    return name:sub(1, #name - #suffix)
+  end
+  return name
 end
 
 --- Where a name appears as plain text, which is where its block begins.
@@ -128,6 +172,49 @@ function awsui.chosen(nodes)
   return entry and entry.title or nil
 end
 
+--- The headline the client puts on a connect that did not work, the button that
+--- dismisses the notice carrying it, and how far that notice reaches.
+---
+--- Two nodes, which is what the notice has: the reason, then the button. No
+--- spare, for the same reason `BLOCK` has none. A search that ran on would find
+--- a control belonging to the window rather than to the notice, and this one
+--- gets pressed.
+awsui.FAILED = "Failed to connect"
+awsui.DISMISS = "Close"
+awsui.NOTICE = 2
+
+--- What the client says about a connect it refused, and where to dismiss it.
+---
+--- The client reports a failed connect inside its own window: a headline, the
+--- reason in the next line of text, and a Close. It leaves that notice standing
+--- until somebody closes it. Nothing read it, so a connect the client had turned
+--- down looked from the outside exactly like a connect that did nothing at all,
+--- which is what somebody pressing *Switch to* saw
+--- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+---
+--- The reason rather than the headline, because "Failed to connect" is the part
+--- that was already obvious. The measured one reads `The provided credentials
+--- are incorrect. Check your login details and try again.`
+--- @param nodes table
+--- @return string|nil reason, number|nil index of the button that dismisses it
+function awsui.failure(nodes)
+  for index, entry in ipairs(nodes or {}) do
+    if entry.role == "AXStaticText" and entry.value == awsui.FAILED then
+      local reason, dismiss
+      for offset = 1, awsui.NOTICE do
+        local following = node(nodes, index + offset)
+        if following and not reason and following.role == "AXStaticText" then
+          reason = text(following)
+        elseif following and not dismiss and following.role == "AXButton" and following.title == awsui.DISMISS then
+          dismiss = index + offset
+        end
+      end
+      return reason or awsui.FAILED, dismiss
+    end
+  end
+  return nil, nil
+end
+
 --- The profiles the open chooser is offering, in the order it lists them.
 ---
 --- Its own little tree: a list of menu items whose name is in the value. Only
@@ -140,7 +227,7 @@ function awsui.offered(nodes)
   local names = {}
   for _, entry in ipairs(nodes or {}) do
     if entry.role == "AXMenuItem" then
-      local name = text(entry)
+      local name = entryName(entry)
       if type(name) == "string" and name ~= "" then
         names[#names + 1] = name
       end
@@ -167,9 +254,9 @@ function awsui.highlighted(nodes)
   for _, entry in ipairs(nodes or {}) do
     if entry.role == "AXMenuItem" then
       if entry.focused then
-        return text(entry)
+        return entryName(entry)
       end
-      committed = committed or (entry.selected and text(entry)) or nil
+      committed = committed or (entry.selected and entryName(entry)) or nil
     end
   end
   return committed

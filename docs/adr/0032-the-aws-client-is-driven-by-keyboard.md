@@ -74,6 +74,59 @@ passed, which is why the measurement did not catch it.
 nothing has focus, and the walk waits for the focus to have moved before it
 reads rather than reading once after a fixed pause.
 
+## The name the focused entry carries, added 2026-10-16
+
+The marks were half of it. `AWS VPN Client would not move its chooser to sbb`
+went on failing at 1 s, every planner tick for days, and the measurement says
+why:
+
+    item 2, nothing pointing at it   AXValue = "sbb"
+    item 2, with the focus on it     AXValue = "sbb not selected"
+
+The web view writes an option's `aria-selected` into the name it hands the
+accessibility API, and it does so for the option that has focus only. The
+committed entry is the selected one and carries no suffix when the focus is on
+it, so the chooser read correctly right up to the moment the walk arrived
+somewhere.
+
+The one entry a walk has to read by name is therefore the one entry whose name
+the client rewrites. The first Down landed on the wanted profile every time. The
+read came back `sbb not selected`, no entry of the list matched that, the step
+count fell to nothing, the loop broke out, and the final check reported a
+chooser that had in fact moved.
+
+`awsui` takes the suffix back off, on the focused entry and only while it is not
+the committed one. Every other entry keeps its value verbatim, so a profile
+whose own name ends in those words is not shortened for having been read.
+
+There is no attribute to read instead. On the live chooser `AXTitle` is empty on
+every entry, so is `AXDescription`, and `AXDOMIdentifier` is `option-0` and
+`option-1`: the position, with no name in it.
+
+## The client says why, and nobody was reading it, added 2026-10-16
+
+A connect the client turns down puts a notice on the same window and leaves it
+standing:
+
+    static  "AWS VPN Client"
+    static  "Failed to connect"
+    static  "The provided credentials are incorrect. Check your login details and try again."
+    button  "Close"
+
+Nothing read it. A connect the client had refused and a connect that did nothing
+at all arrived at the menu as the same silence, which is what somebody pressing
+*Switch to* saw.
+
+`connectRow` reads the notice before it presses anything, reports the reason,
+and presses Close. The reason rather than the headline: "Failed to connect" is
+the part that was already obvious. It is dismissed in the same pass because a
+notice left standing is reported again after the attempt that worked.
+
+That pass connects nothing. The notice is the outcome of the attempt before it,
+so reporting it records a failure that happened. The pass after it presses
+Connect, thirty seconds later while a switch is being pressed for and one tick
+later otherwise.
+
 ## Why the highlight is re-read instead of counted
 
 The chooser opens with something highlighted and only an arrow key moves it, so
@@ -117,3 +170,9 @@ button is the same kind of control as the one whose menu opened on `return`.
 - **Pressing Connect without checking first.** A profile that is already up
   answers a second Connect with a dialog, so a read that lagged behind would
   put a window on the screen for nothing.
+- **Pressing Connect in the same pass that dismissed a notice.** The pass would
+  report a success, the reason would go unsaid, and the silence this ADR now
+  reads the window to break would be back.
+- **Leaving the notice on the window and reporting it every pass.** It would
+  then be reported after the connect that worked as well, which is a client
+  saying one thing and the menu saying another.
