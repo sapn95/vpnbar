@@ -1202,3 +1202,69 @@ describe("autoconnect.plan, nobody at the machine", function()
     assert.is_nil(autoconnect.plan(service, down, {}, 1000, { locked = true, quitByHand = { ["Some App"] = true } }))
   end)
 end)
+
+describe("autoconnect.plan, nobody at the machine, the rules that still hold", function()
+  local function two()
+    return assert(store.normalise({
+      settings = { exclusive = true, fallback = true },
+      profiles = {
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GP", autoconnect = true, order = 10 },
+        { id = "s", name = "S", backend = "scutil", service = "S", autoconnect = true, order = 20 },
+      },
+    }))
+  end
+  local away = { locked = true }
+
+  it("still refuses to start a connection something above it is holding down", function()
+    -- Away stops things being taken down. It is not a licence to bring a second
+    -- tunnel up beside the one that outranks it ([ADR 0042]).
+    assert.is_nil(autoconnect.plan(two(), { gp = "connected", s = "disconnected" }, {}, 1000, away))
+  end)
+
+  it("still forgets the failures of a connection that came up while away", function()
+    -- The success bookkeeping is what keeps a connection that dropped again
+    -- from serving a cooldown it had already worked off.
+    local memory = { s = { attempts = 4, lastTry = 900 } }
+    autoconnect.plan(two(), { gp = "disconnected", s = "connected" }, memory, 1000, away)
+    assert.equals(0, memory.s.attempts)
+  end)
+
+  it("still gives a command-reachable stand-in its turn while away", function()
+    local cfg = assert(store.normalise({
+      settings = { exclusive = true, fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          autoconnect = true,
+          fallback = "s",
+          order = 10,
+        },
+        { id = "s", name = "S", backend = "scutil", service = "S", order = 20 },
+      },
+    }))
+    assert.same(
+      { id = "s", verb = "connect", reason = "fallback" },
+      autoconnect.plan(cfg, { gp = "disconnected", s = "disconnected" }, {}, 1000, away)
+    )
+  end)
+
+  it("takes nothing down for a switch that was still being pressed for", function()
+    local cfg = assert(store.normalise({
+      settings = { exclusive = false, fallback = true },
+      profiles = {
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GP", autoconnect = true, order = 10 },
+        { id = "s", name = "S", backend = "scutil", service = "S", autoconnect = true, order = 20 },
+      },
+    }))
+    local both = { gp = "connected", s = "connected" }
+    local switching = { id = "s", since = 1000 }
+    assert.same(
+      { id = "gp", verb = "supersede", reason = "switched to s" },
+      autoconnect.plan(cfg, both, {}, 1000, { preferred = "s", switching = switching, locked = false, idle = 0 })
+    )
+    assert.is_nil(autoconnect.plan(cfg, both, {}, 1000, { preferred = "s", switching = switching, locked = true }))
+  end)
+end)

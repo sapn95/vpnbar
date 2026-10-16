@@ -249,6 +249,24 @@ function autoconnect.mayStart(profile, context)
   return not (context.appRunning and context.appRunning[app] == false)
 end
 
+--- May autoconnect ask this connection to come up, given who is at the machine?
+---
+--- `mayStart` is about the client; this adds the person. A panel and a client
+--- window are drawn for somebody, and are not there without one, so a press
+--- into a locked screen is an attempt that was certain to fail before it was
+--- made ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+--- A connection a command can reach is asked for as usual, which is the case
+--- autoconnect exists for.
+--- @param profile table
+--- @param context table|nil
+--- @return boolean
+function autoconnect.mayStartNow(profile, context)
+  if not autoconnect.mayStart(profile, context) then
+    return false
+  end
+  return not (autoconnect.away(context) and backends.pressesInterface(profile))
+end
+
 --- Has this connection just arrived, rather than having been up all along?
 ---
 --- The question a quit turns on: a tunnel that comes up while autoconnect is
@@ -393,35 +411,12 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- down. Only while the switch is still being pressed for, so a machine with
   -- one-at-a-time off is not kept in a loop of taking down a connection that
   -- autoconnect then brings back.
-  if preferred and states[preferred] == "connected" and autoconnect.switching(preferred, context, now) then
+  if not away and preferred and states[preferred] == "connected" and autoconnect.switching(preferred, context, now) then
     for _, profile in ipairs(order) do
       if profile.id ~= preferred and isUp(states[profile.id]) then
         return { id = profile.id, verb = "supersede", reason = "switched to " .. preferred }
       end
     end
-  end
-
-  if away then
-    -- Everything below this line either takes a connection down or asks one to
-    -- come up; only the second half runs while nobody is there.
-    for _, profile in ipairs(order) do
-      if
-        (profile.autoconnect or profile.id == preferred)
-        and isDown(states[profile.id])
-        and not backends.pressesInterface(profile)
-      then
-        local attempts = attemptsFor(memory, profile.id)
-        local last = lastTryFor(memory, profile.id)
-        if
-          (last == nil or (now - last) >= autoconnect.cooldown(attempts))
-          and autoconnect.mayStart(profile, context)
-          and not autoconnect.wouldInterrupt(states[profile.id], context)
-        then
-          return { id = profile.id, verb = "connect", reason = "wanted" }
-        end
-      end
-    end
-    return nil
   end
 
   if settings.exclusive then
@@ -433,7 +428,13 @@ function autoconnect.plan(cfg, states, memory, now, context)
         -- lower-ranked tunnel that is up is the only one carrying traffic, and
         -- taking it down for a connection that may yet fail is a gap nobody
         -- asked for. The pass after the winner connects takes it down.
-        if profile.id ~= best.id and states[best.id] == "connected" then
+        -- Not while nobody is there: a tunnel that goes away during a lunch
+        -- break is one somebody comes back to find missing, with nothing in
+        -- the menu saying why. One at a time is about what a person is using,
+        -- and nobody is using either of them. The pass after the unlock sorts
+        -- it out, under somebody who can see it happen (ADR 0042). The rule
+        -- that keeps a lower-ranked connection from *starting* is untouched.
+        if not away and profile.id ~= best.id and states[best.id] == "connected" then
           return { id = profile.id, verb = "supersede", reason = "outranked by " .. best.id }
         end
       end
@@ -443,7 +444,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
     -- very connection, only if autoconnect started it, never a protected one
     -- ([ADR 0015](../../docs/adr/0015-one-at-a-time-is-a-setting-not-a-rule.md)).
     for _, profile in ipairs(order) do
-      if profile.autoconnect and states[profile.id] == "connected" then
+      if not away and profile.autoconnect and states[profile.id] == "connected" then
         for _, other in ipairs(order) do
           local extra = other.id ~= profile.id and states[other.id] == "connected" and not other.protected
           if extra and other.id == profile.fallback and startedByUs(other.id) then
@@ -511,8 +512,9 @@ function autoconnect.plan(cfg, states, memory, now, context)
         if pressing then
           ready = last == nil or (now - last) >= autoconnect.SWITCH_RETRY
         end
-        -- Its client has to be there, and not one somebody closed on purpose.
-        local mayStart = autoconnect.mayStart(profile, context)
+        -- Its client has to be there, not one somebody closed on purpose, and
+        -- not a window nobody is at the machine to see (ADR 0042).
+        local mayStart = autoconnect.mayStartNow(profile, context)
 
         if not blocked then
           -- The one somebody chose is asked for whenever its own backoff allows
@@ -551,7 +553,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
             --
             -- And startable, for the same reasons the preferred one has to be:
             -- a stand-in whose client somebody closed is not a stand-in.
-            if fallback and isDown(fallbackState) and autoconnect.mayStart(fallback, context) then
+            if fallback and isDown(fallbackState) and autoconnect.mayStartNow(fallback, context) then
               local fallbackAttempts = attemptsFor(memory, profile.fallback)
               local fallbackLast = lastTryFor(memory, profile.fallback)
               local fallbackReady = fallbackLast == nil
