@@ -340,6 +340,36 @@ pointed at a dead tunnel until the machine reboots. Approving it is one click in
 System Settings, and nobody finds it by guessing
 ([ADR 0033](docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
 
+## When a tunnel that is up takes the local network with it
+
+The other way a route table stops working, and the harder one to see. A client
+can ask for the whole of the private address space, and some do:
+
+```text
+10                 198.51.100.1  UGSc    utun6
+172.16/12          198.51.100.1  UGSc    utun6
+192.168.0/16       198.51.100.1  UGSc    utun6
+```
+
+Nothing there looks wrong. The default route is still the LAN's, DNS answers,
+public names resolve, and the machine's own subnet works because macOS keeps the
+interface's `/24` and a `/24` beats a `/8`. What is gone is everything else
+private: a printer, a Pi at home, a host one subnet over, for as long as the VPN
+is up, with no error anywhere saying so.
+
+`vpnbar clean` takes those three back, and `vpnbar doctor` reports them. A route
+counts only when its destination is one of the three aggregates, written out in
+both the spelling `netstat` uses and the one a person would, and its interface is
+a `utun` that **is** UP. The tunnel keeps every route of its own that is more
+specific than an aggregate, so what it was configured to carry it still carries
+([ADR 0043](docs/adr/0043-the-private-space-belongs-to-the-network-you-are-on.md)).
+
+`10.0.0.0/8` is in that list on purpose, and it has a price: an internal prefix
+inside it that the tunnel does not also cover with a narrower route goes with the
+aggregate, and so does a resolver living at such an address. The alternative was
+a rule that fixed two thirds of the fault and left the third where the local
+network usually is.
+
 ## The probe
 
 A probe says "this VPN, and only this VPN, hands out an address in this range":

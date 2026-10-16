@@ -464,6 +464,25 @@ tunnel_interfaces_down() {
   '
 }
 
+# Tunnel interfaces that are up, which is the other half of the same question.
+# A route on one of these is a route a tunnel is using now, so it is never a
+# leftover and the rule that removes it has to be about what it covers.
+tunnel_interfaces_up() {
+  command -v ifconfig >/dev/null 2>&1 || return 0
+  ifconfig -a 2>/dev/null | awk '
+    /^[a-zA-Z0-9]+:/ {
+      name = $1
+      sub(/:$/, "", name)
+      up = 0
+      if (match($0, /<[^>]*>/)) {
+        flags = "," substr($0, RSTART + 1, RLENGTH - 2) ","
+        if (index(flags, ",UP,") > 0) { up = 1 }
+      }
+      if (name ~ /^utun[0-9]+$/ && up == 1) { print name }
+    }
+  '
+}
+
 # Every route bound to one of those, as `family|destination|gateway|flags|netif`.
 #
 # Bounded twice on purpose: the interface has to be a tunnel, and that tunnel
@@ -482,6 +501,39 @@ stale_routes() {
       }
     '
   done
+}
+
+# The whole of the private address space, as netstat spells it and as anybody
+# would write it.
+#
+# An enumeration, not a pattern. "Starts with 10." matches 10.241.168/23, which
+# is a prefix the tunnel is entitled to and which this list ends in a delete
+# for. Only the three aggregates themselves are in it.
+#
+# IPv4 only. The equivalent in IPv6 would be the unique local prefixes, and no
+# tunnel on this machine has been measured claiming one, so nothing here
+# pretends to know what that looks like.
+readonly CLAIMED_AGGREGATES='10 10/8 10.0.0.0/8 172.16/12 172.16.0.0/12 192.168/16 192.168.0/16 192.168.0.0/16'
+
+# Every aggregate route a tunnel that is up has claimed, in the same
+# `family|destination|gateway|flags|netif` shape.
+#
+# This is the other way a route table stops working, and it is the opposite
+# case to the one above: the tunnel is alive and the routes are real. What makes
+# them wrong is their width. A client that asks for all of private space takes
+# the network the machine is physically on with it, so a host one subnet over, a
+# printer or a Pi at home is unreachable for as long as the VPN is up, with
+# nothing in the table looking broken.
+claimed_routes() {
+  command -v netstat >/dev/null 2>&1 || return 0
+  local up
+  up="$(tunnel_interfaces_up | tr '\n' ' ')"
+  [ -n "${up# }" ] || return 0
+  netstat -rn -f inet 2>/dev/null | awk -v up=" ${up} " -v wanted=" ${CLAIMED_AGGREGATES} " '
+    NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(up, " " $4 " ") > 0 && index(wanted, " " $1 " ") > 0 {
+      printf "inet|%s|%s|%s|%s\n", $1, $2, $3, $4
+    }
+  '
 }
 
 # The `route` call that removes one of them.
@@ -680,6 +732,92 @@ EOF
   return 0
 }
 
+# Take the private address space back off a tunnel that is up.
+#
+# Separate from `clean_routes` rather than folded into it, because the two
+# answer different questions and only one of them is safe to run without being
+# asked. A route to a dead interface helps nobody; a route into a live tunnel is
+# a client doing what it was configured to do, and removing it is a choice about
+# which network matters more right now.
+clean_claimed() {
+  local dry="$1" assume_yes="$2"
+  local routes
+  routes="$(claimed_routes)"
+  if [ -z "${routes}" ]; then
+    echo "No live tunnel has claimed the private address space."
+    return 0
+  fi
+
+  local count
+  count="$(printf '%s\n' "${routes}" | wc -l | tr -d ' ')"
+  echo "${count} route(s) send the private address space into a live tunnel:"
+  local family destination gateway flags netif
+  while IFS='|' read -r family destination gateway flags netif; do
+    [ -n "${family}" ] || continue
+    printf '  %-6s %-22s via %-22s %s\n' "${family}" "${destination}" "${gateway}" "${netif}"
+  done <<EOF
+${routes}
+EOF
+  note "Everything they cover goes to the tunnel instead of the network this"
+  note "machine is on, so a host one subnet over, a printer or a Pi at home is"
+  note "unreachable while the VPN is up."
+  note "An internal prefix or a resolver inside them goes the same way. The"
+  note "tunnel keeps every route of its own that is more specific than these."
+
+  if [ "${dry}" -eq 1 ]; then
+    echo
+    echo "What it would run:"
+    while IFS='|' read -r family destination gateway flags netif; do
+      [ -n "${family}" ] || continue
+      printf '  sudo route %s\n' "$(route_delete_args "${family}" "${destination}" "${gateway}" "${flags}" "${netif}" | tr '\n' ' ')"
+    done <<EOF
+${routes}
+EOF
+    return 0
+  fi
+
+  if [ "${assume_yes}" -ne 1 ]; then
+    printf 'Delete them? [y/N] '
+    local answer=""
+    read -r answer </dev/tty || true
+    case "${answer}" in
+      y | Y | yes | YES) ;;
+      *)
+        echo "Left alone."
+        return 0
+        ;;
+    esac
+  fi
+
+  local failures=0
+  sudo -v || true
+  while IFS='|' read -r family destination gateway flags netif; do
+    [ -n "${family}" ] || continue
+    if route_delete "${family}" "${destination}" "${gateway}" "${flags}" "${netif}" >/dev/null 2>&1; then
+      printf '  gone  %s %s\n' "${destination}" "${netif}"
+    else
+      printf '  kept  %s %s (the route command refused it)\n' "${destination}" "${netif}"
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+${routes}
+EOF
+
+  local left
+  left="$(claimed_routes | wc -l | tr -d ' ')"
+  echo
+  if [ "${left}" = "0" ]; then
+    echo "The private address space is local again."
+  else
+    echo "${left} route(s) are still there."
+    note "A client that reinstalls them on every reconnect puts them back. The"
+    note "fix for that one is the profile, not the route table."
+    return 1
+  fi
+  [ "${failures}" -eq 0 ] || return 1
+  return 0
+}
+
 # Resolvers a VPN installed and never took away.
 clean_dns() {
   local dry="$1" assume_yes="$2"
@@ -761,6 +899,8 @@ cmd_clean() {
 
   local trouble=0
   clean_routes "${dry}" "${assume_yes}" || trouble=1
+  echo
+  clean_claimed "${dry}" "${assume_yes}" || trouble=1
   echo
   clean_dns "${dry}" "${assume_yes}" || trouble=1
   [ "${trouble}" -eq 0 ] || exit 1
@@ -902,6 +1042,17 @@ cmd_doctor() {
     bad "${count} route(s) point at a tunnel that is down — run: vpnbar clean"
     note "Every address they cover goes to an interface that carries nothing,"
     note "so the machine looks connected and reaches none of it."
+    failures=$((failures + 1))
+  fi
+  local claimed claimedCount
+  claimed="$(claimed_routes)"
+  if [ -z "${claimed}" ]; then
+    ok "no live tunnel has claimed the private address space"
+  else
+    claimedCount="$(printf '%s\n' "${claimed}" | wc -l | tr -d ' ')"
+    bad "${claimedCount} route(s) send the private address space into a live tunnel — run: vpnbar clean"
+    note "Everything they cover goes to the tunnel rather than the network"
+    note "this machine is on, and nothing in the table looks broken."
     failures=$((failures + 1))
   fi
   local staleDns
