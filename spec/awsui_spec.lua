@@ -42,6 +42,9 @@ describe("awsui, reading the client's window", function()
     assert.is_true(awsui.isConnected(window(), "work"))
     assert.is_false(awsui.isConnected(window(), "work_full"))
     assert.is_false(awsui.isConnected(window(), "nothing of the sort"))
+    -- A line of text that is not a connection at all. Its block says nothing
+    -- about being connected, which is the answer.
+    assert.is_false(awsui.isConnected(window(), "AWS"))
   end)
 
   it("finds a live connection's own Disconnect", function()
@@ -74,6 +77,62 @@ describe("awsui, reading the client's window", function()
     nodes[6] = { role = "AXStaticText", title = "", value = "Profile" }
     assert.equals(7, (awsui.connectAt(nodes)))
     assert.is_nil(select(2, awsui.connectAt(nodes)))
+  end)
+
+  --- The window with the notice of a refused connect left on it, which is where
+  --- the client puts the only sentence that says why nothing happened.
+  local function refused(reason)
+    local nodes = window()
+    nodes[#nodes + 1] = { role = "AXStaticText", title = "", value = "AWS VPN Client" }
+    nodes[#nodes + 1] = { role = "AXStaticText", title = "", value = "Failed to connect" }
+    if reason then
+      nodes[#nodes + 1] = { role = "AXStaticText", title = "", value = reason }
+    end
+    nodes[#nodes + 1] = { role = "AXButton", title = "Close", value = "" }
+    return nodes
+  end
+
+  it("reads the reason the client refused a connect, and where to dismiss it", function()
+    local reason, dismiss = awsui.failure(refused("The provided credentials are incorrect."))
+    assert.equals("The provided credentials are incorrect.", reason)
+    assert.equals(16, dismiss)
+  end)
+
+  it("has nothing to report about a window with no notice on it", function()
+    local reason, dismiss = awsui.failure(window())
+    assert.is_nil(reason)
+    assert.is_nil(dismiss)
+    assert.is_nil((awsui.failure(nil)))
+  end)
+
+  it("falls back to the headline when the notice carries no reason", function()
+    -- Worth saying even on its own: it is the difference between a connect the
+    -- client turned down and a connect that did nothing.
+    assert.equals("Failed to connect", (awsui.failure(refused(nil))))
+  end)
+
+  it("takes the first line of text as the reason and not the second", function()
+    local nodes = refused("The provided credentials are incorrect.")
+    table.insert(nodes, 16, { role = "AXStaticText", title = "", value = "Contact your administrator." })
+    assert.equals("The provided credentials are incorrect.", (awsui.failure(nodes)))
+  end)
+
+  it("presses nothing when the notice offers a button that is not its Close", function()
+    local nodes = refused("The provided credentials are incorrect.")
+    nodes[16] = { role = "AXButton", title = "Other actions", value = "" }
+    local reason, dismiss = awsui.failure(nodes)
+    assert.equals("The provided credentials are incorrect.", reason)
+    assert.is_nil(dismiss)
+  end)
+
+  it("will not reach past the notice for a Close that belongs to the window", function()
+    local nodes = refused("The provided credentials are incorrect.")
+    table.remove(nodes, 16)
+    nodes[#nodes + 1] = { role = "AXStaticText", title = "", value = "You may connect up to 5 profiles." }
+    nodes[#nodes + 1] = { role = "AXButton", title = "Close", value = "" }
+    local reason, dismiss = awsui.failure(nodes)
+    assert.equals("The provided credentials are incorrect.", reason)
+    assert.is_nil(dismiss)
   end)
 end)
 
@@ -121,6 +180,55 @@ describe("awsui, the open chooser", function()
     assert.equals("work_full", awsui.highlighted(chooser("work_full")))
     assert.is_nil(awsui.highlighted(chooser()))
     assert.equals("lab", awsui.highlighted({ { role = "AXMenuItem", value = "lab", focused = true } }))
+  end)
+
+  it("takes the focus state back off the name the client lengthened", function()
+    -- Measured on the live chooser: the entry the focus is on reads
+    -- `work not selected`, and the same entry reads `work` the moment the focus
+    -- is somewhere else. Read as it comes, the name matches no entry of the
+    -- list the walk is counting steps along, so every walk downwards ended one
+    -- entry short of the profile somebody asked for.
+    local nodes = {
+      { role = "AXMenuItem", value = "work_full", selected = true, focused = false },
+      { role = "AXMenuItem", value = "work not selected", selected = false, focused = true },
+    }
+    assert.same({ "work_full", "work" }, awsui.offered(nodes))
+    assert.equals("work", awsui.highlighted(nodes))
+    assert.same({ nil, 0 }, { awsui.stepsTo(awsui.offered(nodes), awsui.highlighted(nodes), "work") })
+  end)
+
+  it("leaves the name alone on every entry the client did not rewrite", function()
+    -- The committed entry keeps its plain name with the focus on it, and an
+    -- entry nothing is pointing at is never rewritten at all. A profile whose
+    -- own name ends in those words is not shortened for having been read.
+    local nodes = {
+      { role = "AXMenuItem", value = "work not selected", selected = true, focused = true },
+      { role = "AXMenuItem", value = "lab not selected", selected = false, focused = false },
+    }
+    assert.same({ "work not selected", "lab not selected" }, awsui.offered(nodes))
+    assert.equals("work not selected", awsui.highlighted(nodes))
+  end)
+
+  it("keeps an entry that is nothing but those words", function()
+    local nodes = { { role = "AXMenuItem", value = " not selected", selected = false, focused = true } }
+    assert.same({ " not selected" }, awsui.offered(nodes))
+  end)
+
+  it("shortens a focused name by those words and by nothing else", function()
+    -- Long enough to be cut by a rule that counted characters instead of
+    -- reading them, and the profile somebody asked for either way.
+    local nodes = {
+      { role = "AXMenuItem", value = "work_full", selected = true, focused = false },
+      { role = "AXMenuItem", value = "work_in_the_other_office", selected = false, focused = true },
+    }
+    assert.same({ "work_full", "work_in_the_other_office" }, awsui.offered(nodes))
+    assert.equals("work_in_the_other_office", awsui.highlighted(nodes))
+  end)
+
+  it("has no name to shorten on an entry that carries none", function()
+    local nodes = { { role = "AXMenuItem", selected = false, focused = true } }
+    assert.same({}, awsui.offered(nodes))
+    assert.is_nil(awsui.highlighted(nodes))
   end)
 
   it("counts the arrow presses from the highlight to the profile", function()

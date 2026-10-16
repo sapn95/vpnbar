@@ -90,6 +90,14 @@ control answers the key a person would press, and a key can be addressed to an
 application that is in the background, so nothing is brought to the front and no
 focus is taken ([ADR 0032](docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
 
+Two things about that window are measured rather than assumed. The entry the
+chooser has focused reads its name with its selection state appended, so `work`
+arrives as `work not selected`, which the walk counting steps along the list did
+not recognise. A connect the client refuses leaves a notice on the window saying
+why, and vpnbar reports that sentence and closes the notice instead of going
+quiet
+([ADR 0032](docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
+
 The `shell` backend is the reason this is not a list of three: a VPN vpnbar has
 never heard of needs a config entry, not a patch.
 
