@@ -156,7 +156,8 @@ ended, so a retry opens a login window and nothing else, and a login window
 needs a person: it is held while the screen is locked, and otherwise until a
 minute has passed without a keystroke, except right after a wake or an unlock,
 when one is let through at once. A connection that is merely down reconnects
-silently and is never held, at any hour
+silently and is held only while nobody is at the machine, and then only if
+reaching it means pressing a window
 ([ADR 0029](docs/adr/0029-an-attempt-that-needs-a-person-waits-for-one.md)).
 
 Anything that makes the old failures meaningless puts it back on the fast path:

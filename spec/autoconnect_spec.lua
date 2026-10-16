@@ -1169,9 +1169,30 @@ describe("autoconnect.plan, nobody at the machine", function()
   end)
 
   it("takes nothing down with one at a time off either", function()
-    local off = two({ exclusive = false, fallback = true })
+    -- The narrower rule: a stand-in autoconnect started for a connection that
+    -- is now up again. It needs the fallback link and the `started` mark, or
+    -- it never fires and a test of it proves nothing.
+    local off = assert(store.normalise({
+      settings = { exclusive = false, fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GP",
+          autoconnect = true,
+          fallback = "s",
+          order = 10,
+        },
+        { id = "s", name = "S", backend = "scutil", service = "S", order = 20 },
+      },
+    }))
     local both = { gp = "connected", s = "connected" }
     local memory = { s = { attempts = 0, started = true } }
+    assert.same(
+      { id = "s", verb = "disconnect", reason = "superseded" },
+      autoconnect.plan(off, both, memory, 1000, { locked = false, idle = 0 })
+    )
     assert.is_nil(autoconnect.plan(off, both, memory, 1000, away))
   end)
 
