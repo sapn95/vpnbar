@@ -61,6 +61,13 @@ local globalprotect = {}
 -- agent decided to show. Deliberately NOT "Disable": on a GlobalProtect panel
 -- that is a different action with a different meaning, and one of them is not
 -- reversible from this menu.
+--- Every way into this agent is a click in its own panel, so there is nothing
+--- to press while the screen is locked. Measured on 2026-10-15: twenty presses
+--- between 18:21 and 22:33, every one of them answered `GlobalProtect offers no
+--- "connect" right now`, and the lock log says `locked` across the whole window
+--- ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+globalprotect.pressesInterface = true
+
 globalprotect.CONNECT_VERBS = { "connect" }
 globalprotect.DISCONNECT_VERBS = { "disconnect" }
 
@@ -371,6 +378,10 @@ end
 ---
 --- A `LaunchDaemon` with `KeepAlive` set, so it is in the system domain and
 --- restarting it takes an administrator, unlike the GlobalProtect one.
+--- Its window is the only way in as well, and it is not drawn while the screen
+--- is locked ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+awsvpn.pressesInterface = true
+
 awsvpn.SERVICE = {
   label = "com.amazonaws.acvc.osx.core",
   domain = "system",
@@ -393,6 +404,23 @@ backends.byName = { scutil = scutil, globalprotect = globalprotect, shell = shel
 --- config gives it one.
 --- @param profile table
 --- @return boolean
+--- Does reaching this connection mean clicking in an application's window?
+---
+--- `scutil` and a `shell` profile are commands, and a command runs the same
+--- whether or not anybody is at the machine. A panel and a client window are
+--- not drawn while the screen is locked, so a press into one is an attempt that
+--- was certain to fail before it was made
+--- ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+--- @param profile table
+--- @return boolean
+function backends.pressesInterface(profile)
+  if type(profile) ~= "table" then
+    return false
+  end
+  local backend = backends.byName[profile.backend]
+  return backend ~= nil and backend.pressesInterface == true
+end
+
 --- Does the config give this connection a harder way down, whether or not it
 --- is protected? `canForce` answers for the menu row, which protection removes;
 --- this answers for **Disconnect everything**, which protection does not stop

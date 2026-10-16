@@ -9,6 +9,7 @@
 --- without waiting for anything.
 
 local store = require("vpnbar.store")
+local backends = require("vpnbar.backends")
 
 local autoconnect = {}
 
@@ -178,6 +179,31 @@ function autoconnect.settled(states, connectingSince, now)
   return view
 end
 
+--- Seconds without a keystroke or a click after which nobody is treated as
+--- being at the machine.
+---
+--- Five minutes. Long enough that reading a page is not "away", short enough
+--- that a tunnel is not taken down under somebody who stepped out for coffee
+--- ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+autoconnect.IDLE_BEFORE_AWAY = 300
+
+--- Is nobody at the machine?
+---
+--- The screen being locked is the certain answer and the one the lock policy
+--- in `~/.hammerspoon` already writes down; idle time is the softer one. A
+--- context that measured neither says nothing, and the planner goes on as
+--- before: a rule that treats "not measured" as "away" would stop a machine
+--- that nobody is watching from ever connecting again.
+--- @param context table|nil { locked = boolean, idle = number|nil }
+--- @return boolean
+function autoconnect.away(context)
+  context = context or {}
+  if context.locked then
+    return true
+  end
+  return type(context.idle) == "number" and context.idle >= autoconnect.IDLE_BEFORE_AWAY
+end
+
 --- Down, whether silently or for want of a login.
 local function isDown(state)
   return state == "disconnected" or state == "login"
@@ -324,6 +350,14 @@ function autoconnect.plan(cfg, states, memory, now, context)
     return nil
   end
   states = autoconnect.settled(states, context and context.connectingSince, now)
+
+  -- Nobody is at the machine. Nothing is taken down, because a tunnel that goes
+  -- away while somebody is at lunch is a tunnel they come back to find missing,
+  -- and nothing that needs a window is pressed, because no window is drawn
+  -- ([ADR 0042](../../docs/adr/0042-nothing-happens-while-nobody-is-there.md)).
+  -- A connection a command can reach is still connected, which is the case this
+  -- whole project exists for.
+  local away = autoconnect.away(context)
   local settings = store.settings(cfg)
   local preferred = context and context.preferred or nil
   local order = autoconnect.ranked(cfg, preferred)
@@ -365,6 +399,29 @@ function autoconnect.plan(cfg, states, memory, now, context)
         return { id = profile.id, verb = "supersede", reason = "switched to " .. preferred }
       end
     end
+  end
+
+  if away then
+    -- Everything below this line either takes a connection down or asks one to
+    -- come up; only the second half runs while nobody is there.
+    for _, profile in ipairs(order) do
+      if
+        (profile.autoconnect or profile.id == preferred)
+        and isDown(states[profile.id])
+        and not backends.pressesInterface(profile)
+      then
+        local attempts = attemptsFor(memory, profile.id)
+        local last = lastTryFor(memory, profile.id)
+        if
+          (last == nil or (now - last) >= autoconnect.cooldown(attempts))
+          and autoconnect.mayStart(profile, context)
+          and not autoconnect.wouldInterrupt(states[profile.id], context)
+        then
+          return { id = profile.id, verb = "connect", reason = "wanted" }
+        end
+      end
+    end
+    return nil
   end
 
   if settings.exclusive then

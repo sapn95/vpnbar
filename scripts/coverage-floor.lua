@@ -1,6 +1,6 @@
 -- A coverage number that is reported but not enforced is a number that goes
 -- down. The floor lives here, in the repository, rather than in the workflow.
-local FLOOR = 85
+local FLOOR = 90
 local REPORT = arg[1] or "luacov.report.out"
 
 local file = io.open(REPORT, "r")

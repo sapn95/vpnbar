@@ -572,8 +572,20 @@ describe("autoconnect, an attempt that needs a person waits for one", function()
     assert.equals("gp", autoconnect.plan(pair(), down, {}, 1e6, active).id)
   end)
 
-  it("never holds a silent reconnect on a locked screen", function()
-    assert.equals("gp", autoconnect.plan(pair(), down, {}, 1e6, locked).id)
+  it("holds a press into a locked screen, where no window is drawn", function()
+    -- Measured on 2026-10-15: twenty presses between 18:21 and 22:33, every one
+    -- answered `GlobalProtect offers no "connect" right now`, and the lock log
+    -- says `locked` across the whole window ([ADR 0042]).
+    assert.is_nil(autoconnect.plan(pair(), down, {}, 1e6, locked))
+  end)
+
+  it("still reconnects a connection a command can reach while locked", function()
+    -- The case autoconnect exists for. `scutil --nc start` runs whether or not
+    -- anybody is at the machine.
+    local service = assert(store.normalise({
+      profiles = { { id = "s", name = "S", backend = "scutil", service = "S", autoconnect = true } },
+    }))
+    assert.equals("s", autoconnect.plan(service, { s = "disconnected" }, {}, 1e6, locked).id)
   end)
 
   it("holds a connect that needs a login while somebody is typing", function()
@@ -1110,5 +1122,83 @@ describe("autoconnect.plan, everything off by request", function()
   it("takes nothing down while paused either", function()
     local both = { gp = "connected", aws = "connected" }
     assert.is_nil(autoconnect.plan(pair(), both, {}, 1000, { paused = true }))
+  end)
+end)
+
+describe("autoconnect.away", function()
+  it("is certain when the screen is locked, whatever the idle time says", function()
+    assert.is_true(autoconnect.away({ locked = true, idle = 0 }))
+  end)
+
+  it("is the idle time otherwise", function()
+    assert.is_false(autoconnect.away({ locked = false, idle = autoconnect.IDLE_BEFORE_AWAY - 1 }))
+    assert.is_true(autoconnect.away({ locked = false, idle = autoconnect.IDLE_BEFORE_AWAY }))
+  end)
+
+  it("says nobody is away when nothing was measured", function()
+    -- A rule that read "not measured" as "away" would stop a machine nobody is
+    -- watching from ever connecting again.
+    assert.is_false(autoconnect.away({}))
+    assert.is_false(autoconnect.away(nil))
+    assert.is_false(autoconnect.away({ locked = false }))
+  end)
+end)
+
+describe("autoconnect.plan, nobody at the machine", function()
+  local function two(settings)
+    return assert(store.normalise({
+      settings = settings or { exclusive = true, fallback = true },
+      profiles = {
+        { id = "gp", name = "GP", backend = "globalprotect", app = "GP", autoconnect = true, order = 10 },
+        { id = "s", name = "S", backend = "scutil", service = "S", autoconnect = true, order = 20 },
+      },
+    }))
+  end
+  local away = { locked = true }
+  local there = { locked = false, idle = 0 }
+
+  it("takes nothing down, however many tunnels are up", function()
+    -- A tunnel that goes away while somebody is at lunch is one they come back
+    -- to find missing ([ADR 0042]).
+    local both = { gp = "connected", s = "connected" }
+    assert.is_nil(autoconnect.plan(two(), both, {}, 1000, away))
+    assert.same(
+      { id = "s", verb = "supersede", reason = "outranked by gp" },
+      autoconnect.plan(two(), both, {}, 1000, there)
+    )
+  end)
+
+  it("takes nothing down with one at a time off either", function()
+    local off = two({ exclusive = false, fallback = true })
+    local both = { gp = "connected", s = "connected" }
+    local memory = { s = { attempts = 0, started = true } }
+    assert.is_nil(autoconnect.plan(off, both, memory, 1000, away))
+  end)
+
+  it("presses no window, and still runs a command", function()
+    local down = { gp = "disconnected", s = "disconnected" }
+    assert.same({ id = "s", verb = "connect", reason = "wanted" }, autoconnect.plan(two(), down, {}, 1000, away))
+    -- With somebody there, the connection ranked first is the one asked for.
+    assert.same({ id = "gp", verb = "connect", reason = "wanted" }, autoconnect.plan(two(), down, {}, 1000, there))
+  end)
+
+  it("keeps the backoff and the login hold while away", function()
+    local down = { gp = "disconnected", s = "disconnected" }
+    local memory = { s = { attempts = 1, lastTry = 1000 } }
+    assert.is_nil(autoconnect.plan(two(), down, memory, 1000 + autoconnect.COOLDOWN - 1, away))
+    assert.same(
+      { id = "s", verb = "connect", reason = "wanted" },
+      autoconnect.plan(two(), down, memory, 1000 + autoconnect.COOLDOWN, away)
+    )
+    -- `login` on a locked screen is the one ADR 0029 already held.
+    assert.is_nil(autoconnect.plan(two(), { gp = "disconnected", s = "login" }, {}, 1000, away))
+  end)
+
+  it("holds a client somebody quit, away or not", function()
+    local down = { gp = "disconnected", s = "disconnected" }
+    local service = assert(store.normalise({
+      profiles = { { id = "s", name = "S", backend = "scutil", service = "S", app = "Some App", autoconnect = true } },
+    }))
+    assert.is_nil(autoconnect.plan(service, down, {}, 1000, { locked = true, quitByHand = { ["Some App"] = true } }))
   end)
 end)
