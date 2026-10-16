@@ -806,6 +806,93 @@ stub_one_dead_tunnel() {
   [[ "$output" == *"vpnbar clean"* ]]
 }
 
+# The other way a route table stops working. The tunnel is up and the routes
+# are real; what makes them wrong is that they cover the whole of private space,
+# so the network the machine is physically on goes down the tunnel with it.
+stub_one_greedy_tunnel() {
+  {
+    printf '%s\n' 'utun6: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500'
+  } >>"${NET_IFCONFIG}"
+  {
+    printf '%s\n' 'inet 10                 198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet 172.16/12          198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet 192.168.0/16       198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet 10.11.12.0/23      198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet 192.168.0/24       198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet default            192.168.1.1        UGScg               en0'
+  } >>"${NET_ROUTES}"
+}
+
+@test "clean says so when no live tunnel has claimed the private space" {
+  run "${SCRIPT}" clean
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No live tunnel has claimed the private address space."* ]]
+}
+
+@test "clean names the three aggregates and nothing narrower" {
+  stub_one_greedy_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+  [[ "$output" == *"172.16/12"* ]]
+  [[ "$output" == *"192.168.0/16"* ]]
+  # The tunnel's own prefixes are what it is for, and a near miss on the
+  # aggregate is not an aggregate.
+  [[ "$output" != *"10.11.12.0/23"* ]]
+  [[ "$output" != *"192.168.0/24"* ]]
+}
+
+@test "clean deletes nothing of a live tunnel's on a dry run" {
+  stub_one_greedy_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"What it would run:"* ]]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "clean takes the private space back when it is told to" {
+  stub_one_greedy_tunnel
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 3 ]
+  [[ "$output" == *"The private address space is local again."* ]]
+  # What the tunnel is actually for stays.
+  grep -q "10.11.12.0/23" "${NET_ROUTES}"
+  grep -q "192.168.0/24" "${NET_ROUTES}"
+  grep -q "default" "${NET_ROUTES}"
+}
+
+@test "clean reports an aggregate the route command refused" {
+  stub_one_greedy_tunnel
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"kept"* ]]
+  [[ "$output" == *"still there"* ]]
+}
+
+@test "an aggregate on a tunnel that is down is a leftover, not a claim" {
+  # The dead tunnel's fixture has `10` on it. It belongs to the other rule, and
+  # counting it twice would offer the same delete from two places.
+  stub_one_dead_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"point at a tunnel that is down"* ]]
+  [[ "$output" == *"No live tunnel has claimed the private address space."* ]]
+}
+
+@test "doctor fails on the private space going into a live tunnel" {
+  stub_one_greedy_tunnel
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"send the private address space into a live tunnel"* ]]
+  [[ "$output" == *"vpnbar clean"* ]]
+}
+
+@test "doctor is quiet when no tunnel has claimed the private space" {
+  run "${SCRIPT}" doctor
+  [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
+}
+
 @test "doctor fails on a network extension that is running but not approved" {
   # The state a VPN cannot recover from, as `systemextensionsctl list` prints
   # it: active, not enabled, waiting for somebody to approve it.

@@ -48,3 +48,4 @@ whether their idea was considered or simply missed.
 | [0040](0040-resolvers-a-dead-tunnel-left-behind.md) | Resolvers a dead tunnel left behind |
 | [0041](0041-everything-means-everything.md) | Everything means everything |
 | [0042](0042-nothing-happens-while-nobody-is-there.md) | Nothing happens while nobody is there |
+| [0043](0043-the-private-space-belongs-to-the-network-you-are-on.md) | The private space belongs to the network you are on |
