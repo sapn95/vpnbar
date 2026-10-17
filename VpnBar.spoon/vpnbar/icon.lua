@@ -179,6 +179,43 @@ local function dot(size, colour, fraction)
   }
 end
 
+--- The mark in colour, for the places that are not the menu bar.
+---
+--- A template image is black, and black is invisible on a dark dialog and on
+--- half the Dock backgrounds there are, so the dialog's icon and the launcher's
+--- have to carry a colour of their own
+--- ([ADR 0037](../../docs/adr/0037-a-dialog-that-looks-like-vpnbar.md)). This is
+--- the one definition of that: the connected lock, filled in `ink`, with the
+--- keyhole **drawn** in `hole` rather than cut out, because behind a dialog and
+--- behind a Dock tile there is nothing to show through.
+--- @param size number
+--- @param ink table a colour for the lock
+--- @param hole table a colour for the keyhole
+--- @return table list of hs.canvas element descriptors
+function icon.coloured(size, ink, hole)
+  local keyhole = icon.keyhole(size)
+  return {
+    shackleElement(size, ink, false),
+    bodyElement(size, "fill", ink),
+    {
+      type = "circle",
+      center = { x = keyhole.socket.x, y = keyhole.socket.y },
+      radius = keyhole.socket.radius,
+      action = "fill",
+      fillColor = hole,
+    },
+    {
+      type = "segments",
+      closed = false,
+      coordinates = keyhole.slot,
+      action = "stroke",
+      strokeColor = hole,
+      strokeWidth = size / 11,
+      strokeCapStyle = "round",
+    },
+  }
+end
+
 --- Everything to draw for one state.
 ---
 --- - connected: the shackle is shut and the body is filled, with the keyhole

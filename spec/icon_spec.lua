@@ -275,6 +275,55 @@ describe("icon.elements", function()
   end)
 end)
 
+describe("icon.coloured", function()
+  local BLUE = { red = 0.04, green = 0.52, blue = 1, alpha = 1 }
+  local WHITE = { white = 1, alpha = 1 }
+
+  it("draws the keyhole rather than cutting it out", function()
+    -- Behind a dialog and behind a Dock tile there is nothing to show through,
+    -- so a cut would be a hole in the icon.
+    for _, element in ipairs(icon.coloured(64, BLUE, WHITE)) do
+      assert.is_nil(element.compositeRule)
+    end
+  end)
+
+  it("puts the lock in one colour and the keyhole in the other", function()
+    -- Which element gets which, not merely that both colours turn up: a
+    -- keyhole in the lock's own colour is a lock with no keyhole.
+    local elements = icon.coloured(64, BLUE, WHITE)
+    assert.equals(BLUE, elements[1].strokeColor)
+    assert.equals(BLUE, elements[2].fillColor)
+    assert.equals(WHITE, elements[3].fillColor)
+    assert.equals(WHITE, elements[4].strokeColor)
+    for _, element in ipairs(elements) do
+      for _, key in ipairs({ "fillColor", "strokeColor" }) do
+        local colour = element[key]
+        if colour then
+          assert.is_true(colour == BLUE or colour == WHITE, key)
+        end
+      end
+    end
+  end)
+
+  it("is the connected lock, shut and filled", function()
+    local elements = icon.coloured(64, BLUE, WHITE)
+    assert.equals(icon.shackle(64, false).endAngle, elements[1].endAngle)
+    assert.equals("fill", elements[2].action)
+  end)
+
+  it("is the same geometry the menu bar draws", function()
+    local size = 100
+    local coloured = icon.coloured(size, BLUE, WHITE)
+    local body = icon.body(size)
+    assert.same({ x = body.x, y = body.y, w = body.w, h = body.h }, coloured[2].frame)
+    assert.same(icon.keyhole(size).slot, coloured[4].coordinates)
+  end)
+
+  it("scales with the size it is asked for", function()
+    assert.is_true(icon.coloured(128, BLUE, WHITE)[2].frame.w > icon.coloured(64, BLUE, WHITE)[2].frame.w)
+  end)
+end)
+
 describe("icon.keyholeElements", function()
   it("gives the dialog the same two shapes the menu bar cuts out", function()
     local socket, slot = icon.keyholeElements(32)
