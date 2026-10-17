@@ -515,6 +515,117 @@ stale_routes() {
 # pretends to know what that looks like.
 readonly CLAIMED_AGGREGATES='10 10/8 10.0.0.0/8 172.16/12 172.16.0.0/12 192.168/16 192.168.0/16 192.168.0.0/16'
 
+# The network and mask one of those spellings resolves to.
+#
+# `route -n get` answers "which route did you use" with a network and a mask,
+# and the table spells the same prefix several ways, so the two have to be
+# matched up before a resolver's route can be compared with an aggregate's.
+# Every entry of `CLAIMED_AGGREGATES` has to be in here; a test asserts that,
+# because a new spelling added to one and not the other would silently stop
+# pinning resolvers.
+#
+# The mask is half of the answer because the network address is not enough: a
+# tunnel carrying both `10/8` and a `10.0.0.0/24` answers `destination:
+# 10.0.0.0` for either, and the narrower one is the route that would have kept
+# a resolver behind it.
+aggregate_route() {
+  case "$1" in
+    10 | 10/8 | 10.0.0.0/8) echo "10.0.0.0|255.0.0.0" ;;
+    172.16/12 | 172.16.0.0/12) echo "172.16.0.0|255.240.0.0" ;;
+    192.168/16 | 192.168.0/16 | 192.168.0.0/16) echo "192.168.0.0|255.255.0.0" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Every resolver the system is configured with, once each.
+configured_resolvers() {
+  command -v scutil >/dev/null 2>&1 || return 0
+  scutil --dns 2>/dev/null | awk '
+    match($0, /nameserver\[[0-9]+\][[:space:]]*:[[:space:]]*/) {
+      print substr($0, RSTART + RLENGTH)
+    }
+  ' | sort -u
+}
+
+# Where the kernel sends one address right now, as `destination|mask|netif`.
+#
+# Asked of the kernel rather than worked out from the table: the answer already
+# accounts for every more specific route, so a resolver the tunnel covers with a
+# narrow prefix of its own reports that prefix and not the aggregate.
+#
+# No gateway. Measured on this machine: `route -n get` prints a `gateway:` line
+# for a route that has one and leaves it out for an interface route, and plenty
+# of tunnel clients install their routes in that second form. Requiring one
+# meant those resolvers came back as nothing at all and were skipped in silence,
+# which is this rule's own fault arrived at from the other side. The mask is the
+# better discriminator anyway, and a net route always has one.
+route_to() {
+  command -v route >/dev/null 2>&1 || return 0
+  route -n get "$1" 2>/dev/null | awk '
+    /^[[:space:]]*destination:/ { destination = $2 }
+    /^[[:space:]]*mask:/ { mask = $2 }
+    /^[[:space:]]*interface:/ { netif = $2 }
+    END {
+      if (destination != "" && mask != "" && netif != "") {
+        printf "%s|%s|%s\n", destination, mask, netif
+      }
+    }
+  '
+}
+
+# `resolver|gateway|netif` for every configured resolver that is reaching its
+# tunnel through one of the aggregates that is about to go.
+#
+# This is the whole reason the aggregates cannot simply be deleted. A client
+# that asks for all of `10.0.0.0/8` usually puts its resolvers in there too, and
+# removing the aggregate takes the way to them with it: every name stops
+# resolving, which is worse than the fault being fixed. Measured on 16.10.2026,
+# where `dig` went to `connection timed out` the moment `10` was gone.
+#
+# A resolver on the LAN is never in this list, because its route is on a
+# physical interface. One the tunnel covers with a narrower prefix is not in it
+# either, because that prefix stays.
+resolvers_behind() {
+  local routes="$1"
+  local resolver where destination mask netif
+  local family rdest gateway flags rnetif prefix
+  while IFS= read -r resolver; do
+    [ -n "${resolver}" ] || continue
+    where="$(route_to "${resolver}")"
+    [ -n "${where}" ] || continue
+    IFS='|' read -r destination mask netif <<EOF
+${where}
+EOF
+    while IFS='|' read -r family rdest gateway flags rnetif; do
+      [ -n "${family}" ] || continue
+      [ "${rnetif}" = "${netif}" ] || continue
+      prefix="$(aggregate_route "${rdest}")" || continue
+      [ "${prefix}" = "${destination}|${mask}" ] || continue
+      printf '%s|%s|%s\n' "${resolver}" "${gateway}" "${netif}"
+      break
+    done <<EOF
+${routes}
+EOF
+  done < <(configured_resolvers)
+}
+
+# The `route` call that pins one resolver to the tunnel it was already using.
+#
+# A gateway that is a link address belongs to no address family anybody can
+# name, so those go by interface, for the same reason `route_delete_args` does
+# it. An aggregate installed as an interface route has no gateway to pass at all.
+route_add_host() {
+  local address="$1" gateway="$2" netif="$3"
+  case "${gateway}" in
+    "" | link#* | "${netif}")
+      sudo route -n add -inet -host "${address}" -interface "${netif}"
+      ;;
+    *)
+      sudo route -n add -inet -host "${address}" "${gateway}"
+      ;;
+  esac
+}
+
 # Every aggregate route a tunnel that is up has claimed, in the same
 # `family|destination|gateway|flags|netif` shape.
 #
@@ -761,12 +872,38 @@ EOF
   note "Everything they cover goes to the tunnel instead of the network this"
   note "machine is on, so a host one subnet over, a printer or a Pi at home is"
   note "unreachable while the VPN is up."
-  note "An internal prefix or a resolver inside them goes the same way. The"
-  note "tunnel keeps every route of its own that is more specific than these."
+  note "An internal prefix inside them goes the same way. The tunnel keeps"
+  note "every route of its own that is more specific than these."
+
+  local pinned resolver pinGateway pinNetif
+  pinned="$(resolvers_behind "${routes}")"
+  if [ -n "${pinned}" ]; then
+    echo
+    echo "These resolvers are reaching the tunnel through them, and are pinned first:"
+    while IFS='|' read -r resolver pinGateway pinNetif; do
+      [ -n "${resolver}" ] || continue
+      printf '  %-22s via %-22s %s\n' "${resolver}" "${pinGateway}" "${pinNetif}"
+    done <<EOF
+${pinned}
+EOF
+    note "A host route each, added before anything is deleted, so there is no"
+    note "moment in which no name resolves."
+  fi
 
   if [ "${dry}" -eq 1 ]; then
     echo
     echo "What it would run:"
+    while IFS='|' read -r resolver pinGateway pinNetif; do
+      [ -n "${resolver}" ] || continue
+      case "${pinGateway}" in
+        "" | link#* | "${pinNetif}")
+          printf '  sudo route -n add -inet -host %s -interface %s\n' "${resolver}" "${pinNetif}"
+          ;;
+        *) printf '  sudo route -n add -inet -host %s %s\n' "${resolver}" "${pinGateway}" ;;
+      esac
+    done <<EOF
+${pinned}
+EOF
     while IFS='|' read -r family destination gateway flags netif; do
       [ -n "${family}" ] || continue
       printf '  sudo route %s\n' "$(route_delete_args "${family}" "${destination}" "${gateway}" "${flags}" "${netif}" | tr '\n' ' ')"
@@ -789,8 +926,34 @@ EOF
     esac
   fi
 
-  local failures=0
+  local failures=0 unpinned=0
   sudo -v || true
+  # First, so the window in which a resolver has no route is never opened. A
+  # host route is more specific than the aggregate and the two coexist.
+  while IFS='|' read -r resolver pinGateway pinNetif; do
+    [ -n "${resolver}" ] || continue
+    if route_add_host "${resolver}" "${pinGateway}" "${pinNetif}" >/dev/null 2>&1; then
+      printf '  kept  %s via %s\n' "${resolver}" "${pinNetif}"
+    else
+      printf '  lost  %s (the route command refused the host route)\n' "${resolver}"
+      unpinned=$((unpinned + 1))
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+${pinned}
+EOF
+  # A resolver that could not be pinned would lose its only route along with
+  # the aggregate, which is the fault this whole rule exists to prevent. So
+  # nothing is deleted: the local network stays broken, which is the lesser of
+  # the two, and the report says which resolver stopped it.
+  if [ "${unpinned}" -ne 0 ]; then
+    echo
+    echo "Nothing was deleted."
+    note "${unpinned} resolver(s) could not be pinned, and the aggregate is"
+    note "their only route. Fixing the local network is not worth taking DNS"
+    note "down to do it."
+    return 1
+  fi
   while IFS='|' read -r family destination gateway flags netif; do
     [ -n "${family}" ] || continue
     if route_delete "${family}" "${destination}" "${gateway}" "${flags}" "${netif}" >/dev/null 2>&1; then
@@ -802,6 +965,51 @@ EOF
   done <<EOF
 ${routes}
 EOF
+
+  # Asked with a real query, because a host route that exists and a resolver
+  # that answers are two different claims, and the second is the one that
+  # matters. This is the check that was missing when `10` first came off and
+  # `dig` went to a timeout.
+  if [ -n "${pinned}" ]; then
+    # One at a time. `dns_reachable` is satisfied by any one server answering,
+    # which is the right question for "is this service still there" and the
+    # wrong one here: a resolver that went silent is hidden by a neighbour that
+    # did not.
+    local silent="" quiet=""
+    while IFS='|' read -r resolver pinGateway pinNetif; do
+      [ -n "${resolver}" ] || continue
+      if ! dns_reachable "${resolver}"; then
+        silent="${silent} ${resolver}"
+        quiet="${quiet}${resolver}|${pinGateway}|${pinNetif}
+"
+      fi
+    done <<EOF
+${pinned}
+EOF
+    if [ -z "${silent}" ]; then
+      echo "  ok    every pinned resolver still answers"
+    else
+      echo "  FAIL  no answer from:${silent}"
+      # The command itself, per resolver, because the two forms are not
+      # interchangeable: an aggregate installed as an interface route has no
+      # gateway to pass, and a hint that said `<gateway>` would be a command
+      # that fails or, worse, one that picks some other next hop.
+      note "Put them back with:"
+      while IFS='|' read -r resolver pinGateway pinNetif; do
+        [ -n "${resolver}" ] || continue
+        case "${pinGateway}" in
+          "" | link#* | "${pinNetif}")
+            note "  sudo route -n add -inet -host ${resolver} -interface ${pinNetif}"
+            ;;
+          *) note "  sudo route -n add -inet -host ${resolver} ${pinGateway}" ;;
+        esac
+      done <<EOF
+${quiet}
+EOF
+      note "and say so, because this rule was written to stop exactly this."
+      failures=$((failures + 1))
+    fi
+  fi
 
   local left
   left="$(claimed_routes | wc -l | tr -d ' ')"
@@ -904,6 +1112,108 @@ cmd_clean() {
   echo
   clean_dns "${dry}" "${assume_yes}" || trouble=1
   [ "${trouble}" -eq 0 ] || exit 1
+}
+
+# ------------------------------------------------------------- is it online
+#
+# The question nothing here was asking. A tethered Mac whose phone had switched
+# its own data off looked, from the inside, exactly like a working machine: the
+# Wi-Fi was joined, a default route was installed, the phone answered every
+# packet addressed to it, and nothing beyond it existed. `vpnbar doctor` said
+# everything was in place, which was true of everything it looked at.
+
+# Seconds each of these is given. Short on purpose: this runs ahead of every
+# other check and a doctor nobody waits for is a doctor nobody runs.
+readonly UPLINK_WAIT=3
+
+# The endpoint macOS itself asks whether this machine is on the internet.
+#
+# Apple's captive-portal probe, which every Mac polls on its own whenever a
+# network changes. Asking it once more names nobody new and sends nothing about
+# the machine. What it serves is one short page whose title is `Success`, which
+# is what makes a captive portal visible rather than merely absent: a portal
+# answers, and answers something different.
+readonly UPLINK_PROBE='http://captive.apple.com/hotspot-detect.html'
+
+# Its name, looked up on its own before the page is asked for.
+#
+# Otherwise a resolver that has stopped answering spends the whole of
+# `--max-time` inside the lookup and `curl` reports a timeout, which is
+# indistinguishable from a gateway with nothing behind it. The lookup is the
+# part that has to be asked separately, because this script knows two ways for
+# it to be the fault.
+readonly UPLINK_HOST='captive.apple.com'
+
+# The title, not the bare word. A portal's own page can carry "Success" in its
+# prose — a sign-in form that says it will tell you on success — and a portal
+# read as reachable is the one answer this must never give.
+readonly UPLINK_SUCCESS='<TITLE>Success</TITLE>'
+
+# The first hop off this machine, or nothing.
+default_gateway() {
+  command -v netstat >/dev/null 2>&1 || return 0
+  netstat -rn -f inet 2>/dev/null | awk '$1 == "default" { print $2; exit }'
+}
+
+# Does that hop answer? Separated from the question above it so the report can
+# tell "no route" from "a route to something that is not there".
+gateway_answers() {
+  local gateway="$1"
+  command -v ping >/dev/null 2>&1 || return 0
+  ping -c 1 -t "${UPLINK_WAIT}" "${gateway}" >/dev/null 2>&1
+}
+
+# `reachable`, `portal`, `unresolved`, `offline`, or `unknown` where nothing
+# could be asked.
+#
+# `unresolved` is its own answer rather than a kind of offline. Reaching the
+# probe means resolving its name first, so a machine whose resolvers are gone
+# fails here with the uplink perfectly fine, and this script detects two ways
+# for that to happen: a dead VPN that left its resolvers behind, and resolvers
+# whose route went with an aggregate. Reporting either of those as "nothing
+# behind the gateway, nothing on this machine is broken" is the misdirection
+# this whole section was written to stop.
+uplink_state() {
+  command -v curl >/dev/null 2>&1 || {
+    echo unknown
+    return 0
+  }
+  if command -v dig >/dev/null 2>&1; then
+    # Two conditions, because the output alone is not enough. Measured: `dig
+    # +short` against a resolver that has stopped answering exits 9 and prints
+    # `;; connection timed out; no servers could be reached` on **stdout**, so a
+    # check on the output reads that as a resolved name and hands the question
+    # to `curl`, which spends its whole timeout in the same lookup and reports a
+    # dead uplink. Dropping the lines that begin with `;` is what catches that
+    # one. The status is the rule underneath it: a lookup that failed has not
+    # answered, whatever it printed.
+    local resolved status=0
+    resolved="$(dig +time="${UPLINK_WAIT}" +tries=1 +short "${UPLINK_HOST}" 2>/dev/null)" || status=$?
+    resolved="$(printf '%s\n' "${resolved}" | grep -v '^;' || true)"
+    resolved="$(printf '%s' "${resolved}" | tr -d '[:space:]')"
+    if [ "${status}" -ne 0 ] || [ -z "${resolved}" ]; then
+      echo unresolved
+      return 0
+    fi
+  fi
+  local body status=0
+  body="$(curl -4 -s --max-time "${UPLINK_WAIT}" "${UPLINK_PROBE}" 2>/dev/null)" || status=$?
+  case "${status}" in
+    0) ;;
+    # 6 is curl's "could not resolve host" and nothing else is.
+    6)
+      echo unresolved
+      return 0
+      ;;
+    *)
+      echo offline
+      return 0
+      ;;
+  esac
+  case "${body}" in
+    *"${UPLINK_SUCCESS}"*) echo reachable ;;
+    *) echo portal ;;
+  esac
 }
 
 # Network extensions that are activated but not enabled.
@@ -1031,6 +1341,54 @@ cmd_doctor() {
       ;;
   esac
 
+  echo "The network"
+  local gateway uplink
+  gateway="$(default_gateway)"
+  if [ -z "${gateway}" ]; then
+    bad "nothing is routed off this machine"
+    note "There is no default route. Every address goes nowhere, and no VPN"
+    note "and nothing in this menu can fix that: there is no network to start"
+    note "from."
+    failures=$((failures + 1))
+  else
+    # The probe runs whatever the gateway does about ICMP. Plenty of them drop
+    # it, and a working connection reported as a broken first hop is a wrong
+    # answer in the direction this section exists to avoid. The ping is asked
+    # afterwards, and only where it adds something: it tells a hotspot with no
+    # data of its own from a Wi-Fi that joined and was handed nothing.
+    uplink="$(uplink_state)"
+    case "${uplink}" in
+      reachable) ok "the internet answers through ${gateway}" ;;
+      portal)
+        bad "something answers for the internet, and it is not the internet"
+        note "A captive portal is holding this connection. Open a browser and"
+        note "give it whatever it is asking for."
+        failures=$((failures + 1))
+        ;;
+      unresolved)
+        bad "no name could be looked up, so the probe was never reached"
+        note "Nothing resolves, which makes this a resolver and not an uplink."
+        note "The two lines under The tunnel say whether a VPN left its own"
+        note "resolvers behind, or whether a route they needed has gone."
+        failures=$((failures + 1))
+        ;;
+      offline)
+        if gateway_answers "${gateway}"; then
+          bad "${gateway} answers and nothing behind it does"
+          note "The first hop is fine and there is no internet beyond it: a"
+          note "hotspot whose own mobile data is off, or a router with no"
+          note "uplink. Nothing on this machine is broken."
+        else
+          bad "nothing answers, the default gateway ${gateway} included"
+          note "A Wi-Fi that joined and was handed nothing looks like this, and"
+          note "so does a cable that is in the wrong socket."
+        fi
+        failures=$((failures + 1))
+        ;;
+      *) note "curl is missing, so whether the internet answers was never asked" ;;
+    esac
+  fi
+
   echo "The tunnel"
   local stale
   stale="$(stale_routes)"
@@ -1053,6 +1411,13 @@ cmd_doctor() {
     bad "${claimedCount} route(s) send the private address space into a live tunnel — run: vpnbar clean"
     note "Everything they cover goes to the tunnel rather than the network"
     note "this machine is on, and nothing in the table looks broken."
+    local behind behindCount
+    behind="$(resolvers_behind "${claimed}")"
+    if [ -n "${behind}" ]; then
+      behindCount="$(printf '%s\n' "${behind}" | wc -l | tr -d ' ')"
+      note "${behindCount} resolver(s) are reaching the tunnel through them, so"
+      note "clean pins each to a host route before it deletes anything."
+    fi
     failures=$((failures + 1))
   fi
   local staleDns

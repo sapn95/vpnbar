@@ -27,7 +27,11 @@ set -euo pipefail
 # 172.16.0.x, 192.168.0.x and 192.168.1.x for a home network. 10.0.0.0/8,
 # 172.16.0.0/12 and 192.168.0.0/16 themselves are the examples the docs give of
 # a CIDR a VPN hands out, and they are what somebody would actually type.
-readonly ALLOWED='^(0\.0\.0\.0$|127\.|169\.254\.|255\.255\.255\.255$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|10\.0\.0\.|10\.9\.9\.|10\.11\.1[23]\.|172\.16\.0\.|192\.168\.[01]\.)'
+# A netmask is written like an address and is not one. The three this repository
+# names are the masks of the private aggregates, 255.0.0.0, 255.240.0.0 and
+# 255.255.0.0, and anything in 255/8 is reserved: it is not a host anywhere, so
+# it cannot be one of his.
+readonly ALLOWED='^(0\.0\.0\.0$|127\.|169\.254\.|255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|10\.0\.0\.|10\.9\.9\.|10\.11\.1[23]\.|172\.16\.0\.|192\.168\.[01]\.)'
 readonly PATTERN='[0-9]{1,3}(\.[0-9]{1,3}){3}'
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

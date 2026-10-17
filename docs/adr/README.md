@@ -49,3 +49,4 @@ whether their idea was considered or simply missed.
 | [0041](0041-everything-means-everything.md) | Everything means everything |
 | [0042](0042-nothing-happens-while-nobody-is-there.md) | Nothing happens while nobody is there |
 | [0043](0043-the-private-space-belongs-to-the-network-you-are-on.md) | The private space belongs to the network you are on |
+| [0044](0044-the-doctor-asks-whether-there-is-an-internet.md) | The doctor asks whether there is an internet |

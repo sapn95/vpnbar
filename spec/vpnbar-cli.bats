@@ -76,6 +76,28 @@ grep -E "^${family} " "${NET_ROUTES}" 2>/dev/null | sed "s/^${family} //" || tru
 EOF
   cat >"${STUB}/route" <<'EOF'
 #!/usr/bin/env bash
+# `get` is a read. It answers from NET_ROUTE_GET, whose lines are
+# `address|destination|mask|gateway|netif`. An empty gateway field prints no
+# `gateway:` line at all, which is what the real command does for an interface
+# route,
+# and is deliberately not logged: NET_ROUTE_CALLS is the record of what was
+# changed, and a dry run that asked a question has still changed nothing.
+for argument in "$@"; do
+  if [ "${argument}" = "get" ]; then
+    shift $(($# - 1))
+    want="$1"
+    line="$(grep -E "^${want}\|" "${NET_ROUTE_GET:-/dev/null}" 2>/dev/null | head -1)"
+    [ -n "${line}" ] || exit 1
+    printf '   route to: %s\n' "${want}"
+    printf 'destination: %s\n' "$(printf '%s' "${line}" | cut -d'|' -f2)"
+    mask="$(printf '%s' "${line}" | cut -d'|' -f3)"
+    [ -z "${mask}" ] || printf '       mask: %s\n' "${mask}"
+    gateway="$(printf '%s' "${line}" | cut -d'|' -f4)"
+    [ -z "${gateway}" ] || printf '    gateway: %s\n' "${gateway}"
+    printf '  interface: %s\n' "$(printf '%s' "${line}" | cut -d'|' -f5)"
+    exit 0
+  fi
+done
 printf '%s\n' "$*" >>"${NET_ROUTE_CALLS}"
 [ "${STUB_ROUTE_EXIT:-0}" = "0" ] || exit "${STUB_ROUTE_EXIT}"
 # The destination is the argument after -host or -net.
@@ -104,11 +126,21 @@ EOF
   export NET_SCUTIL_SERVICES="${TMP}/scutil-services"
   export NET_SCUTIL_SERVERS="${TMP}/scutil-servers"
   export NET_SCUTIL_CALLS="${TMP}/scutil-calls"
+  export NET_SCUTIL_DNS="${TMP}/scutil-dns"
+  export NET_ROUTE_GET="${TMP}/route-get"
   : >"${NET_SCUTIL_SERVICES}"
   : >"${NET_SCUTIL_SERVERS}"
   : >"${NET_SCUTIL_CALLS}"
+  : >"${NET_SCUTIL_DNS}"
+  : >"${NET_ROUTE_GET}"
   cat >"${STUB}/scutil" <<'EOF'
 #!/usr/bin/env bash
+# `--dns` is an argument, not a command on stdin. Answered before anything is
+# read, because `cat` on a terminal with no input hangs the whole suite.
+if [ "${1:-}" = "--dns" ]; then
+  cat "${NET_SCUTIL_DNS}"
+  exit 0
+fi
 input="$(cat)"
 printf '%s\n' "${input}" >>"${NET_SCUTIL_CALLS}"
 case "${input}" in
@@ -133,15 +165,46 @@ server=""
 for argument in "$@"; do
   case "${argument}" in @*) server="${argument#@}" ;; esac
 done
-[ -n "${server}" ] || exit 1
+# No @server is a plain name lookup, which is a different question: whether
+# anything resolves at all. A failure is exit 9 with the diagnostic on stdout,
+# because that is what the real dig does and a check on the output alone reads
+# it as an answer.
+if [ -z "${server}" ]; then
+  if [ -z "${NET_NAME_RESOLVES:-}" ]; then
+    printf ';; connection timed out; no servers could be reached\n'
+    exit 9
+  fi
+  printf '%s\n' "${NET_NAME_RESOLVES}"
+  exit "${NET_NAME_RESOLVES_STATUS:-0}"
+fi
 for alive in ${NET_DNS_ALIVE:-}; do
   [ "${alive}" = "${server}" ] && exit 0
 done
 exit 1
 EOF
-  chmod +x "${STUB}/scutil" "${STUB}/dig"
+  cat >"${STUB}/ping" <<'EOF'
+#!/usr/bin/env bash
+target=""
+for argument in "$@"; do target="${argument}"; done
+for alive in ${NET_PING_ALIVE:-}; do
+  [ "${alive}" = "${target}" ] && exit 0
+done
+exit 1
+EOF
+  cat >"${STUB}/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "${NET_UPLINK_BODY:-}"
+exit "${NET_UPLINK_EXIT:-0}"
+EOF
+  chmod +x "${STUB}/scutil" "${STUB}/dig" "${STUB}/ping" "${STUB}/curl"
   printf '%s\n' 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500' >"${NET_IFCONFIG}"
-  : >"${NET_ROUTES}"
+  # A machine that is on a working network, which is what every test other than
+  # the uplink ones assumes about the one they run on.
+  printf '%s\n' 'inet default            192.168.1.1        UGScg               en0' >"${NET_ROUTES}"
+  export NET_PING_ALIVE="192.168.1.1"
+  export NET_UPLINK_BODY="<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"
+  export NET_UPLINK_EXIT=0
+  export NET_NAME_RESOLVES="203.0.113.10"
   export STUB_HS_ANSWER="900 32 22"
   # Bartender 7's answer to `list menu bar item details`: one object per item,
   # key order not fixed.
@@ -817,7 +880,7 @@ stub_one_greedy_tunnel() {
     printf '%s\n' 'inet 10                 198.51.100.1       UGSc                utun6'
     printf '%s\n' 'inet 172.16/12          198.51.100.1       UGSc                utun6'
     printf '%s\n' 'inet 192.168.0/16       198.51.100.1       UGSc                utun6'
-    printf '%s\n' 'inet 10.11.12.0/23      198.51.100.1       UGSc                utun6'
+    printf '%s\n' 'inet 10.11.13.0/24      198.51.100.1       UGSc                utun6'
     printf '%s\n' 'inet 192.168.0/24       198.51.100.1       UGSc                utun6'
     printf '%s\n' 'inet default            192.168.1.1        UGScg               en0'
   } >>"${NET_ROUTES}"
@@ -838,7 +901,7 @@ stub_one_greedy_tunnel() {
   [[ "$output" == *"192.168.0/16"* ]]
   # The tunnel's own prefixes are what it is for, and a near miss on the
   # aggregate is not an aggregate.
-  [[ "$output" != *"10.11.12.0/23"* ]]
+  [[ "$output" != *"10.11.13.0/24"* ]]
   [[ "$output" != *"192.168.0/24"* ]]
 }
 
@@ -857,7 +920,7 @@ stub_one_greedy_tunnel() {
   [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 3 ]
   [[ "$output" == *"The private address space is local again."* ]]
   # What the tunnel is actually for stays.
-  grep -q "10.11.12.0/23" "${NET_ROUTES}"
+  grep -q "10.11.13.0/24" "${NET_ROUTES}"
   grep -q "192.168.0/24" "${NET_ROUTES}"
   grep -q "default" "${NET_ROUTES}"
 }
@@ -891,6 +954,340 @@ stub_one_greedy_tunnel() {
 @test "doctor is quiet when no tunnel has claimed the private space" {
   run "${SCRIPT}" doctor
   [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
+}
+
+# The resolvers a client puts inside the aggregate it claimed. Deleting the
+# aggregate takes the way to them with it, so every name stops resolving, which
+# is worse than the fault being fixed.
+#
+#   10.11.12.5   reached through the `10` aggregate      -> pinned
+#   192.168.0.9  reached through `192.168.0/16`          -> pinned
+#   10.11.13.9   inside the tunnel's own 10.11.13.0/24   -> left alone
+#   192.168.1.1  on the LAN                              -> left alone
+#
+# The narrow route in the fixture is a `/24` so that it covers 10.11.13.9 and
+# nothing else. A `/23` there would cover the two resolvers above as well, and
+# the kernel could then never answer them with the aggregate: the fixture would
+# describe a routing state that cannot happen.
+stub_resolvers_behind_it() {
+  {
+    printf '%s\n' 'resolver #1'
+    printf '%s\n' '  nameserver[0] : 10.11.12.5'
+    printf '%s\n' '  nameserver[1] : 192.168.0.9'
+    printf '%s\n' '  nameserver[2] : 10.11.13.9'
+    printf '%s\n' '  nameserver[3] : 192.168.1.1'
+  } >"${NET_SCUTIL_DNS}"
+  {
+    printf '%s\n' '10.11.12.5|10.0.0.0|255.0.0.0|198.51.100.1|utun6'
+    printf '%s\n' '192.168.0.9|192.168.0.0|255.255.0.0|198.51.100.1|utun6'
+    printf '%s\n' '10.11.13.9|10.11.13.0|255.255.255.0|198.51.100.1|utun6'
+    printf '%s\n' '192.168.1.1|192.168.1.0|255.255.255.0|192.168.1.1|en0'
+  } >"${NET_ROUTE_GET}"
+  export NET_DNS_ALIVE="10.11.12.5 192.168.0.9"
+}
+
+@test "clean names the resolvers that are reached through an aggregate" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"10.11.12.5"* ]]
+  [[ "$output" == *"192.168.0.9"* ]]
+  [[ "$output" == *"sudo route -n add -inet -host 10.11.12.5 198.51.100.1"* ]]
+}
+
+@test "doctor is not fooled by dig printing its failure on stdout" {
+  # Measured: `dig +short` against a resolver that has stopped answering exits
+  # 9 and puts `;; connection timed out` on stdout. Read as output alone, that
+  # is a resolved name.
+  export NET_NAME_RESOLVES=""
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no name could be looked up"* ]]
+  [[ "$output" != *"connection timed out"* ]]
+}
+
+@test "doctor does not take an answer from a lookup that failed" {
+  # The policy, separate from the measured case above: a non-zero dig is not an
+  # answer, whatever it printed. Nothing is claimed here about when the real
+  # command does that; the rule is that the status decides.
+  export NET_NAME_RESOLVES_STATUS=9
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no name could be looked up"* ]]
+}
+
+@test "clean leaves a resolver the tunnel covers narrowly, and one on the LAN" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"10.11.13.9"* ]]
+  [[ "$output" != *"192.168.1.1 198.51.100.1"* ]]
+}
+
+@test "clean pins every resolver before it deletes anything" {
+  # The order is the whole point. A delete that lands first opens a window in
+  # which no name resolves, which is what happened by hand on 16.10.2026.
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- "-host" "${NET_ROUTE_CALLS}")" -eq 2 ]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 3 ]
+  local firstDelete lastAdd
+  firstDelete="$(grep -n delete "${NET_ROUTE_CALLS}" | head -1 | cut -d: -f1)"
+  lastAdd="$(grep -n -- "-host" "${NET_ROUTE_CALLS}" | tail -1 | cut -d: -f1)"
+  [ "${lastAdd}" -lt "${firstDelete}" ]
+}
+
+# A second tunnel that claimed `10` as well, with a gateway of its own and a
+# resolver behind it. Which gateway a resolver is pinned to has to come from the
+# tunnel that resolver is actually using.
+stub_a_second_greedy_tunnel() {
+  {
+    printf '%s\n' 'utun7: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400'
+  } >>"${NET_IFCONFIG}"
+  printf '%s\n' 'inet 10                 203.0.113.1        UGSc                utun7' >>"${NET_ROUTES}"
+  printf '%s\n' '  nameserver[4] : 10.11.12.6' >>"${NET_SCUTIL_DNS}"
+  printf '%s\n' '10.11.12.6|10.0.0.0|255.0.0.0|203.0.113.1|utun7' >>"${NET_ROUTE_GET}"
+  export NET_DNS_ALIVE="10.11.12.5 192.168.0.9 10.11.12.6"
+}
+
+# A narrower route on the same tunnel whose network address is the aggregate's.
+# `route -n get` answers `destination: 10.0.0.0` for either of them, so the
+# network alone cannot tell them apart; the mask can, and the narrower route is
+# the one that would have kept this resolver.
+stub_a_narrower_route_on_the_same_network() {
+  printf '%s\n' 'inet 10.0.0.0/24        198.51.100.1       UGSc                utun6' >>"${NET_ROUTES}"
+  printf '%s\n' '  nameserver[5] : 10.0.0.7' >>"${NET_SCUTIL_DNS}"
+  printf '%s\n' '10.0.0.7|10.0.0.0|255.255.255.0|198.51.100.1|utun6' >>"${NET_ROUTE_GET}"
+}
+
+@test "clean leaves a resolver whose own route only looks like the aggregate" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  stub_a_narrower_route_on_the_same_network
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"10.0.0.7"* ]]
+  [[ "$output" == *"10.11.12.5"* ]]
+}
+
+# An aggregate the client installed as an interface route, which is the form
+# that has no gateway at all. `route -n get` prints no `gateway:` line for an
+# address it covers, and a resolver behind it used to be skipped in silence.
+stub_an_interface_route_aggregate() {
+  {
+    printf '%s\n' 'utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1300'
+  } >>"${NET_IFCONFIG}"
+  printf '%s\n' 'inet 172.16/12          link#22            UCS                 utun8' >>"${NET_ROUTES}"
+  printf '%s\n' '  nameserver[6] : 172.16.0.9' >>"${NET_SCUTIL_DNS}"
+  printf '%s\n' '172.16.0.9|172.16.0.0|255.240.0.0||utun8' >>"${NET_ROUTE_GET}"
+  export NET_DNS_ALIVE="10.11.12.5 192.168.0.9 172.16.0.9"
+}
+
+@test "clean pins a resolver behind an aggregate that has no gateway" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  stub_an_interface_route_aggregate
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sudo route -n add -inet -host 172.16.0.9 -interface utun8"* ]]
+}
+
+@test "clean adds that host route by interface and keeps going" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  stub_an_interface_route_aggregate
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- "add -inet -host 172.16.0.9 -interface utun8" "${NET_ROUTE_CALLS}")" -eq 1 ]
+  [[ "$output" == *"every pinned resolver still answers"* ]]
+}
+
+@test "clean pins a resolver to the tunnel it is actually using" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  stub_a_second_greedy_tunnel
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sudo route -n add -inet -host 10.11.12.6 203.0.113.1"* ]]
+  [[ "$output" == *"sudo route -n add -inet -host 10.11.12.5 198.51.100.1"* ]]
+}
+
+@test "clean says the resolvers still answer once the aggregates are gone" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"every pinned resolver still answers"* ]]
+}
+
+@test "clean fails when no resolver answers after the aggregates are gone" {
+  # A host route that exists and a resolver that answers are two claims, and
+  # the second is the one somebody notices.
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  export NET_DNS_ALIVE=""
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no answer from: 10.11.12.5 192.168.0.9"* ]]
+}
+
+@test "clean names the one pinned resolver that went silent" {
+  # One neighbour answering is enough for "is this service there" and not for
+  # this: every pinned resolver is asked on its own.
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  export NET_DNS_ALIVE="10.11.12.5"
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no answer from: 192.168.0.9"* ]]
+  [[ "$output" != *"every pinned resolver still answers"* ]]
+}
+
+@test "clean prints the restore command each silent resolver actually needs" {
+  # The two forms are not interchangeable. An aggregate installed as an
+  # interface route has no gateway to pass, and a hint naming one is a command
+  # that fails or picks some other next hop.
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  stub_an_interface_route_aggregate
+  export NET_DNS_ALIVE=""
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"add -inet -host 172.16.0.9 -interface utun8"* ]]
+  [[ "$output" == *"add -inet -host 10.11.12.5 198.51.100.1"* ]]
+  [[ "$output" != *"<gateway>"* ]]
+}
+
+@test "clean deletes nothing when a resolver could not be pinned" {
+  # The aggregate is that resolver's only route. Leaving the local network
+  # broken is the lesser of the two faults.
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Nothing was deleted."* ]]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 0 ]
+}
+
+@test "clean reports a host route the route command refused" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" clean --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lost"* ]]
+}
+
+@test "doctor says how many resolvers would go with the aggregates" {
+  stub_one_greedy_tunnel
+  stub_resolvers_behind_it
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"2 resolver(s) are reaching the tunnel through them"* ]]
+}
+
+@test "every aggregate spelling has a network to compare a resolver against" {
+  # The two lists are separate and a spelling added to one and not the other
+  # would stop pinning resolvers without failing anything. Read out of the
+  # script, because its dispatch makes it unsourceable.
+  local spellings labels missing=""
+  spellings="$(sed -n "s/^readonly CLAIMED_AGGREGATES='\(.*\)'$/\1/p" "${SCRIPT}")"
+  [ -n "${spellings}" ]
+  labels="$(sed -n '/^aggregate_route() {/,/^}/p' "${SCRIPT}" | sed 's/) echo.*//' | tr '|' '\n')"
+  for spelling in ${spellings}; do
+    printf '%s\n' "${labels}" | grep -qE "(^|[[:space:]])${spelling}([[:space:]]|\)|$)" || missing="${missing} ${spelling}"
+  done
+  [ -z "${missing}" ] || {
+    echo "no network for:${missing}"
+    false
+  }
+}
+
+# ------------------------------------------------------------------- uplink
+#
+# A tethered Mac whose phone had turned its own data off: Wi-Fi joined, default
+# route installed, the phone answering every packet addressed to it, nothing
+# behind it. Every other check in the doctor passed.
+
+@test "doctor says the internet answers" {
+  run "${SCRIPT}" doctor
+  [[ "$output" == *"the internet answers through 192.168.1.1"* ]]
+}
+
+@test "doctor fails when nothing is routed off the machine" {
+  : >"${NET_ROUTES}"
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"nothing is routed off this machine"* ]]
+}
+
+@test "doctor tells a gateway that does not answer from one that does" {
+  export NET_PING_ALIVE=""
+  export NET_UPLINK_EXIT=7
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"nothing answers, the default gateway 192.168.1.1 included"* ]]
+}
+
+@test "doctor does not need ICMP to call the connection working" {
+  # A gateway that forwards HTTP and drops ping. Reporting a broken first hop
+  # on a working connection is the wrong answer in the worse direction.
+  export NET_PING_ALIVE=""
+  run "${SCRIPT}" doctor
+  [[ "$output" == *"the internet answers through 192.168.1.1"* ]]
+  [[ "$output" != *"does not answer"* ]]
+}
+
+@test "doctor calls a dead resolver a resolver, not a dead uplink" {
+  # The lookup is asked on its own, so a resolver that has stopped answering
+  # never spends the probe's whole timeout inside it and never reads as a
+  # gateway with nothing behind it.
+  export NET_NAME_RESOLVES=""
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no name could be looked up"* ]]
+  [[ "$output" != *"Nothing on this machine is broken."* ]]
+}
+
+@test "doctor names the hotspot with its data off" {
+  export NET_UPLINK_EXIT=7
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"192.168.1.1 answers and nothing behind it does"* ]]
+  [[ "$output" == *"mobile data is off"* ]]
+  [[ "$output" == *"Nothing on this machine is broken."* ]]
+}
+
+@test "doctor tells a resolver fault from no uplink" {
+  # curl exit 6 is "could not resolve host". The uplink is fine and the fault
+  # is on this machine, which is the opposite of what offline would say.
+  export NET_UPLINK_EXIT=6
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no name could be looked up"* ]]
+  [[ "$output" != *"nothing behind it does"* ]]
+  [[ "$output" != *"Nothing on this machine is broken."* ]]
+}
+
+@test "doctor names a captive portal rather than calling it offline" {
+  export NET_UPLINK_BODY="<html><body>Please sign in to continue</body></html>"
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"and it is not the internet"* ]]
+  [[ "$output" == *"captive portal"* ]]
+}
+
+@test "doctor is not fooled by a portal page that says Success" {
+  # A sign-in form that promises to say so on success. The word alone is not
+  # the probe's answer; the title is.
+  export NET_UPLINK_BODY="<html><body>Sign in. We will show Success when you are online.</body></html>"
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"captive portal"* ]]
+  [[ "$output" != *"the internet answers"* ]]
 }
 
 @test "doctor fails on a network extension that is running but not approved" {

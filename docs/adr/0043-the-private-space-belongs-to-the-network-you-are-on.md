@@ -79,6 +79,66 @@ The equivalent in IPv6 is the unique local range. No tunnel on this machine has
 been measured claiming it, so nothing here pretends to know what that looks
 like in a route table.
 
+## Keeping the resolvers, added 2026-10-17
+
+The first version of this deleted the aggregates and nothing else, and the cost
+named above arrived within a second of the first real run. The aggregate came
+off, and so did the path to every resolver inside it:
+
+    dig www.google.com
+    ;; connection timed out; no servers could be reached
+
+`curl` still returned 200, because the system resolver had the answer cached.
+Nothing in the output said anything was wrong. Four host routes added by hand
+brought the resolvers back.
+
+So `clean` does that itself now. Before it deletes anything, it asks the kernel
+where each configured resolver is going, and any resolver reaching its tunnel
+through one of the aggregates about to be removed gets a host route to that
+tunnel's gateway first. A host route is more specific than the aggregate and the
+two coexist, so there is no moment in which no name resolves.
+
+Three things are asked of the kernel rather than worked out from the table,
+because the kernel's answer already accounts for every more specific route:
+
+- a resolver on the LAN reports a physical interface, and is left alone,
+- a resolver the tunnel covers with a narrow prefix of its own reports that
+  prefix rather than an aggregate, and is left alone,
+- a resolver behind a second tunnel reports that tunnel, and is pinned to *its*
+  gateway rather than to the first one in the list.
+
+A network address on its own does not identify a route, so the mask is part of
+the comparison. A tunnel carrying both `10/8` and a `10.0.0.0/24` answers
+`destination: 10.0.0.0` for either, and the narrower one is the route that would
+have kept the resolver; their masks differ, and `route -n get` prints it.
+
+The gateway is deliberately not part of it. Measured on this machine, the
+command prints a `gateway:` line for a route that has one and leaves it out for
+an interface route, and a tunnel client that installs its aggregate in that
+second form is common. A comparison that needed a gateway returned nothing for
+those addresses and skipped the resolver in silence, which is this rule's own
+fault reached from the other side. The host route for such a resolver is added
+with `-interface` rather than a gateway, the same distinction
+`route_delete_args` already makes and for the same reason.
+
+A pin that fails stops the whole thing. If the `route` command refuses a host
+route, nothing is deleted at all: that resolver's only route is the aggregate,
+and fixing the local network is not worth taking DNS down to do it. The local
+network stays broken, which is the lesser of the two faults, and the report
+names how many resolvers stopped it.
+
+Afterwards each pinned resolver is asked a real question with `dig`, one at a
+time. A host route that exists and a resolver that answers are two different
+claims, and the second is the one somebody notices. One at a time because the
+reachability helper is satisfied by any one server answering, which is the
+right question for "is this service still there" and the wrong one here: a
+resolver that went silent would be hidden by a neighbour that did not. Every
+one that fails is named, and `clean` fails with the command to put it back.
+
+The spellings in `CLAIMED_AGGREGATES` and the networks in `aggregate_network`
+are two lists, so a spelling added to one and not the other would quietly stop
+pinning resolvers. A test asserts every spelling has a network.
+
 ## What was rejected
 
 - **Deleting only `172.16/12` and `192.168.0/16`.** The safe two. It leaves
@@ -91,3 +151,9 @@ like in a route table.
 - **Doing it on its own, as part of a refresh.** The route table is the one
   place on a machine where a wrong delete and pulling the cable out look the
   same. `vpnbar clean` is a command somebody runs.
+- **Keeping `10.0.0.0/8` after all, once the cost was measured.** The host
+  routes are the narrower fix: they keep the resolvers and leave the rest of
+  private space local, which is what the aggregate was in the way of.
+- **Pinning every configured resolver.** Most of them are not behind the
+  aggregate. A host route for a resolver already reachable is noise in the
+  table, and one for a resolver on the LAN would send it into a tunnel.
