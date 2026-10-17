@@ -11,15 +11,17 @@ dialog` with vpnbar's own mark on it, rather than through `hs.dialog`.
 
 `hs.dialog` has no way to set an icon, so every dialog it draws carries
 Hammerspoon's hammer. On a question about a route table, from a menu bar item
-with a shield in it, that is an icon from a different program asking for an
+with a padlock in it, that is an icon from a different program asking for an
 administrator password. `display dialog` takes `with icon POSIX file`, so the
 mark the menu bar already uses can go on it.
 
 The mark is drawn once, at 256 px, into `~/Library/Caches/vpnbar/mark.png`.
-Filled in the system accent blue with the tick in white, rather than as the
+Filled in the system accent blue with the keyhole in white, rather than as the
 template the menu bar draws: a template is black, and black on a dialog in the
-dark appearance is nothing at all. `icon.tick` is exported alongside
-`icon.shield` for it, so both shapes have one definition.
+dark appearance is nothing at all. The keyhole is drawn rather than cut out,
+because there is no menu bar behind a dialog to show through. `icon.body`,
+`icon.shackle` and `icon.keyhole` are exported for it, so every shape has one
+definition.
 
 ## What it costs
 
