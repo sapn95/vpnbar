@@ -366,9 +366,64 @@ specific than an aggregate, so what it was configured to carry it still carries
 
 `10.0.0.0/8` is in that list on purpose, and it has a price: an internal prefix
 inside it that the tunnel does not also cover with a narrower route goes with the
-aggregate, and so does a resolver living at such an address. The alternative was
-a rule that fixed two thirds of the fault and left the third where the local
-network usually is.
+aggregate. The alternative was a rule that fixed two thirds of the fault and left
+the third where the local network usually is.
+
+The resolvers are the exception, because the first real run showed what happens
+without one. The aggregate came off and the path to every resolver inside it went
+with it, so `dig` timed out on every name while `curl` still returned 200 from a
+cached answer. So `clean` asks the kernel where each configured resolver is going
+before it deletes anything, and pins the ones reaching their tunnel through a
+condemned aggregate to that tunnel's gateway with a host route. A host route is
+more specific than the aggregate, so there is no moment in which no name
+resolves. A resolver on the LAN keeps out of it by being on a physical
+interface, one the tunnel already covers narrowly keeps out by reporting that
+prefix, and one behind a second tunnel is pinned to *that* tunnel's gateway. The
+mask is part of that comparison, because a tunnel carrying both `10/8` and a
+`10.0.0.0/24` answers with the same network address for either. The gateway is
+not: a tunnel that installs its aggregate as an interface route has none, and
+requiring one skipped those resolvers in silence. Their host route goes in with
+`-interface` instead.
+A pin that the `route` command refuses stops the whole thing: nothing is
+deleted, because that resolver's only route is the aggregate. Afterwards each
+pinned resolver is asked a real question of its own, because a host route that
+exists and a resolver that answers are two different claims, and one neighbour
+answering would hide the one that went silent.
+
+## Is there an internet at all
+
+`vpnbar doctor` asks that before it asks anything about a tunnel, in three
+steps, and reports the first that fails: whether there is a default route at
+all, whether a name resolves, and whether anything exists behind the first
+hop. The third is the one the machine cannot work out for itself, and it is the
+one that matters: a hotspot whose phone has switched its own mobile data off
+leaves a joined Wi-Fi, an installed default route and a gateway that answers
+every packet, with nothing behind it. From inside, that is indistinguishable
+from working, and the evening goes on the VPN instead
+([ADR 0044](docs/adr/0044-the-doctor-asks-whether-there-is-an-internet.md)).
+
+A captive portal gets a line of its own rather than being reported as offline,
+because it answers, and answers a page that is not titled `Success`. The title
+rather than the word: a sign-in form can promise to say "Success" once you are
+through, and a portal read as reachable is the one answer this must never give.
+
+So does a name that will not resolve, which is a fourth answer and not a kind of
+offline. The lookup is asked on its own, before the page is requested: left
+inside the fetch it is indistinguishable from the thing it has to be told apart
+from, because a dead resolver spends the whole timeout in the lookup and the
+fetch then reports a timeout. A machine whose resolvers are gone has the uplink
+perfectly fine, and vpnbar finds two ways into that state on its own, so the
+report points at those two lines rather than at the phone.
+
+The first hop is pinged afterwards and only where it adds something: when
+nothing answers at all, it tells a hotspot with no data of its own from a Wi-Fi
+that joined and was handed nothing. It is never a prerequisite, because plenty
+of gateways drop ICMP.
+
+The question
+goes to the endpoint macOS itself polls whenever a network changes, so it names
+nobody the machine was not already talking to, and each step gets three
+seconds.
 
 ## The probe
 
