@@ -791,55 +791,11 @@ function obj:markFile()
   -- does.
   local blue = { red = 0.04, green = 0.52, blue = 1.0, alpha = 1 }
   local inset = hs.canvas.matrix.translate(size * 0.07, size * 0.07)
-  local drawn = size * 0.86
-  local body = icon.body(drawn)
-  local shackle = icon.shackle(drawn, false)
-  local keyhole = icon.keyhole(drawn)
-  -- The dialog gets the connected mark, in colour, with the keyhole drawn in
-  -- white rather than cut out: there is no menu bar behind it to show through
-  -- ([ADR 0037](../../docs/adr/0037-a-dialog-that-looks-like-vpnbar.md)).
-  canvas:replaceElements({
-    {
-      type = "arc",
-      center = { x = shackle.x, y = shackle.y },
-      radius = shackle.radius,
-      startAngle = shackle.startAngle,
-      endAngle = shackle.endAngle,
-      arcRadii = false,
-      action = "stroke",
-      strokeColor = blue,
-      strokeWidth = drawn / 9,
-      strokeCapStyle = "round",
-      transformation = inset,
-    },
-    {
-      type = "rectangle",
-      frame = { x = body.x, y = body.y, w = body.w, h = body.h },
-      roundedRectRadii = { xRadius = body.radius, yRadius = body.radius },
-      action = "fill",
-      fillColor = blue,
-      strokeColor = blue,
-      transformation = inset,
-    },
-    {
-      type = "circle",
-      center = { x = keyhole.socket.x, y = keyhole.socket.y },
-      radius = keyhole.socket.radius,
-      action = "fill",
-      fillColor = { white = 1, alpha = 1 },
-      transformation = inset,
-    },
-    {
-      type = "segments",
-      closed = false,
-      coordinates = keyhole.slot,
-      action = "stroke",
-      strokeColor = { white = 1, alpha = 1 },
-      strokeWidth = drawn / 11,
-      strokeCapStyle = "round",
-      transformation = inset,
-    },
-  })
+  local elements = icon.coloured(size * 0.86, blue, { white = 1, alpha = 1 })
+  for _, element in ipairs(elements) do
+    element.transformation = inset
+  end
+  canvas:replaceElements(elements)
   local image = canvas:imageFromCanvas()
   canvas:delete()
   if image and image:saveToFile(path) then

@@ -33,8 +33,38 @@ if [ -n "${STUB_HS_ANSWER_FILE:-}" ] && [ -s "${STUB_HS_ANSWER_FILE}" ]; then
   mv "${STUB_HS_ANSWER_FILE}.next" "${STUB_HS_ANSWER_FILE}"
   exit 0
 fi
+# With STUB_HS_RENDERS set it also does what the real one would have done: the
+# script it is handed names the files it writes, so the stub creates them. That
+# is what makes the icon path testable without a canvas.
+if [ "${STUB_HS_RENDERS:-0}" = "1" ]; then
+  for script in $(printf '%s\n' "$*" | grep -oE "dofile\('[^']+'\)" | sed "s/dofile('//;s/')\$//"); do
+    [ -f "${script}" ] || continue
+    folder="$(grep -oE 'saveToFile\("[^"]+/' "${script}" | head -1 | sed 's/saveToFile("//;s|/$||')"
+    [ -n "${folder}" ] || continue
+    for name in 16x16 16x16@2x 32x32 32x32@2x 128x128 128x128@2x 256x256 256x256@2x 512x512 512x512@2x; do
+      : >"${folder}/icon_${name}.png"
+    done
+  done
+fi
 printf '%s\n' "${STUB_HS_ANSWER:-}"
 EOF
+# `iconutil -c icns <iconset> -o <out>`: it refuses an iconset with nothing in
+# it, which is what the real one does and what the no-Hammerspoon path relies on.
+cat >"${STUB}/iconutil" <<'EOF'
+#!/usr/bin/env bash
+iconset=""
+out=""
+previous=""
+for argument in "$@"; do
+  case "${previous}" in -o) out="${argument}" ;; esac
+  case "${argument}" in *.iconset) iconset="${argument}" ;; esac
+  previous="${argument}"
+done
+[ -n "${iconset}" ] && [ -n "${out}" ] || exit 1
+ls "${iconset}"/*.png >/dev/null 2>&1 || exit 1
+printf 'icns\n' >"${out}"
+EOF
+chmod +x "${STUB}/iconutil"
   cat >"${STUB}/pgrep" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in *Bartender*) exit "${STUB_PGREP_BARTENDER_EXIT:-0}" ;; esac
@@ -548,6 +578,37 @@ SH
 @test "the plist is well formed" {
   run "${SCRIPT}" app
   run python3 -c "import plistlib,sys; d=plistlib.load(open(sys.argv[1],'rb')); sys.exit(0 if d['CFBundleExecutable']=='vpnbar' else 1)" \
+    "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
+  [ "${status}" -eq 0 ]
+}
+
+# The launcher used to carry the generic application icon, because the bundle
+# had no `Resources` and the plist no `CFBundleIconFile`.
+@test "the launcher carries the mark when one could be drawn" {
+  STUB_HS_RENDERS=1 run "${SCRIPT}" app
+  [ "${status}" -eq 0 ]
+  [ -f "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Resources/vpnbar.icns" ]
+  run python3 -c "import plistlib,sys; d=plistlib.load(open(sys.argv[1],'rb')); sys.exit(0 if d.get('CFBundleIconFile')=='vpnbar' else 1)" \
+    "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
+  [ "${status}" -eq 0 ]
+}
+
+@test "the launcher still works when no icon could be drawn" {
+  # `vpnbar app` has to work on a machine where Hammerspoon is not up yet, and
+  # a plist naming an icon that is not there is worse than one naming none.
+  #
+  # Run after one that succeeded, so the stale icon from it is there to be
+  # cleared: left behind, the bundle would carry the old mark for ever while the
+  # plist said nothing about it.
+  STUB_HS_RENDERS=1 "${SCRIPT}" app
+  [ -f "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Resources/vpnbar.icns" ]
+  export STUB_HS_ANSWER=""
+  run "${SCRIPT}" app
+  [ "${status}" -eq 0 ]
+  [ -x "${VPNBAR_APP_DIR}/vpnbar.app/Contents/MacOS/vpnbar" ]
+  [ ! -f "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Resources/vpnbar.icns" ]
+  [[ "${output}" == *"No icon"* ]]
+  run python3 -c "import plistlib,sys; d=plistlib.load(open(sys.argv[1],'rb')); sys.exit(1 if 'CFBundleIconFile' in d else 0)" \
     "${VPNBAR_APP_DIR}/vpnbar.app/Contents/Info.plist"
   [ "${status}" -eq 0 ]
 }

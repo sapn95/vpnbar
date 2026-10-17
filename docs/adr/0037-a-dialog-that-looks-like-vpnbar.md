@@ -19,9 +19,27 @@ The mark is drawn once, at 256 px, into `~/Library/Caches/vpnbar/mark.png`.
 Filled in the system accent blue with the keyhole in white, rather than as the
 template the menu bar draws: a template is black, and black on a dialog in the
 dark appearance is nothing at all. The keyhole is drawn rather than cut out,
-because there is no menu bar behind a dialog to show through. `icon.body`,
-`icon.shackle` and `icon.keyhole` are exported for it, so every shape has one
-definition.
+because there is no menu bar behind a dialog to show through. `icon.coloured`
+is the one definition of that version, so the shape has no second copy.
+
+## The launcher's icon, added 2026-10-17
+
+`vpnbar app` writes a bundle with no `CFBundleIconFile` and no `Resources`, so
+Launchpad and Spotlight showed it with the generic application icon. It gets the
+same mark now, for the same reason the dialog does: a template is black and
+black is nothing on half the Dock backgrounds there are.
+
+It is rendered rather than shipped. `vpnbar app` asks Hammerspoon for
+`icon.coloured` at the ten sizes `iconutil` wants, writes them into an iconset
+and turns that into `Contents/Resources/vpnbar.icns`. A committed `.icns` would
+be a second definition of the shape, free to drift from `icon.lua` the first
+time the mark changes.
+
+Failing to draw one is not a failure of the command. `vpnbar app` has to work on
+a machine where Hammerspoon is not up yet, so the bundle is written without an
+icon, the plist names none, a stale icon from an earlier run is removed, and the
+command says to run it again once Hammerspoon is there. A plist naming an icon
+that is not in the bundle is worse than one naming nothing.
 
 ## What it costs
 

@@ -155,8 +155,73 @@ cmd_link() {
 #
 # LSUIElement, because it starts something else and exits. Without it the Dock
 # shows a bouncing icon for a program that is already finished.
+# The launcher's icon, rendered from the same geometry the menu bar draws.
+#
+# Through Hammerspoon, because `vpnbar/icon.lua` is the one definition of the
+# shape and a committed `.icns` would be a second one, free to drift from it the
+# first time the mark changes. In colour rather than as the template the menu bar
+# uses: a template is black, and black on half the Dock backgrounds there are is
+# nothing at all, which is the same reason the dialog's icon has a colour
+# ([ADR 0037](../../docs/adr/0037-a-dialog-that-looks-like-vpnbar.md)).
+#
+# Failing is not fatal. `vpnbar app` has to work on a machine where Hammerspoon
+# is not up yet, and a launcher with the generic icon still launches.
+app_icon() {
+  local destination="$1" spoon script staging iconset
+  spoon="$(spoon_source)"
+  [ -f "${spoon}/vpnbar/icon.lua" ] || return 1
+  command -v iconutil >/dev/null 2>&1 || return 1
+  hammerspoon_answers 3 || return 1
+  staging="$(mktemp -d)" || return 1
+  iconset="${staging}/vpnbar.iconset"
+  script="${staging}/render.lua"
+  mkdir -p "${iconset}"
+  cat >"${script}" <<LUA
+local icon = dofile("${spoon}/vpnbar/icon.lua")
+-- The system accent blue, the one the dialog already uses.
+local ink = { red = 0.04, green = 0.52, blue = 1.0, alpha = 1 }
+local hole = { white = 1, alpha = 1 }
+-- Every size \`iconutil\` wants, named the way it wants them.
+local wanted = {
+  { 16, "16x16" }, { 32, "16x16@2x" }, { 32, "32x32" }, { 64, "32x32@2x" },
+  { 128, "128x128" }, { 256, "128x128@2x" }, { 256, "256x256" }, { 512, "256x256@2x" },
+  { 512, "512x512" }, { 1024, "512x512@2x" },
+}
+for _, entry in ipairs(wanted) do
+  local px, name = entry[1], entry[2]
+  local canvas = hs.canvas.new({ x = 0, y = 0, w = px, h = px })
+  if not canvas then
+    return "FAIL no canvas"
+  end
+  -- A tenth of the tile on each side, so the lock is not jammed against the
+  -- edges of a Dock icon the way a full-bleed drawing would be.
+  local elements = icon.coloured(px * 0.8, ink, hole)
+  local inset = hs.canvas.matrix.translate(px * 0.1, px * 0.1)
+  for _, element in ipairs(elements) do
+    element.transformation = inset
+  end
+  canvas:replaceElements(elements)
+  local image = canvas:imageFromCanvas()
+  canvas:delete()
+  if not (image and image:saveToFile("${iconset}/icon_" .. name .. ".png")) then
+    return "FAIL could not write " .. name
+  end
+end
+return "ok"
+LUA
+  if ! ask_hammerspoon "dofile('${script}')" 30 >/dev/null; then
+    rm -rf "${staging}"
+    return 1
+  fi
+  if ! iconutil -c icns "${iconset}" -o "${destination}" >/dev/null 2>&1; then
+    rm -rf "${staging}"
+    return 1
+  fi
+  rm -rf "${staging}"
+}
+
 cmd_app() {
-  local me app invoked
+  local me app invoked icon_key=""
   invoked="${BASH_SOURCE[0]}"
   # Absolute, always: the Finder launches a bundle from a working directory that
   # has nothing to do with where this was invoked from, so a relative path here
@@ -173,7 +238,12 @@ cmd_app() {
     *) me="$(command -v "${invoked}")" ;;
   esac
   app="${APP_DIR}/vpnbar.app"
-  mkdir -p "${app}/Contents/MacOS"
+  mkdir -p "${app}/Contents/MacOS" "${app}/Contents/Resources"
+  if app_icon "${app}/Contents/Resources/vpnbar.icns"; then
+    icon_key='  <key>CFBundleIconFile</key><string>vpnbar</string>'
+  else
+    rm -f "${app}/Contents/Resources/vpnbar.icns"
+  fi
   cat >"${app}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -183,6 +253,7 @@ cmd_app() {
   <key>CFBundleDisplayName</key><string>vpnbar</string>
   <key>CFBundleIdentifier</key><string>ch.sapn.vpnbar.launcher</string>
   <key>CFBundleExecutable</key><string>vpnbar</string>
+${icon_key}
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>LSUIElement</key><true/>
@@ -198,6 +269,12 @@ LAUNCHER
   # Without this the Finder can go on showing a bundle it has already cached.
   touch "${app}"
   echo "installed ${app}"
+  if [ -f "${app}/Contents/Resources/vpnbar.icns" ]; then
+    echo "It carries the same mark the menu bar draws."
+  else
+    note "No icon: Hammerspoon has to be up to draw one. Run \`vpnbar app\`"
+    note "again once it is, and the launcher picks it up."
+  fi
   echo "It runs: ${me} start"
 }
 
