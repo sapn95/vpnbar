@@ -12,15 +12,17 @@ is up. vpnbar puts the answer in one glyph and the action one click under it.
 It is a [Hammerspoon](https://www.hammerspoon.org) Spoon. Hammerspoon is already
 running here for the lock and sleep policy; this adds a menu, not a daemon.
 
-The mark itself is drawn, not typed: a shield, filled with a tick cut out of it
-when a tunnel is up, an outline when none is, and faint when it could not be
-read. It is a template image, so macOS tints it to the bar it is sitting on and
-the state is carried by the fill rather than by a colour that would be wrong in
-two of the three tints ([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template-image.md)).
+The mark itself is drawn, not typed: a padlock, shut and filled with the keyhole
+cut out of it when a tunnel is up, **open** when none is, and faint when it
+could not be read. It is a template image, so macOS tints it to the bar it is
+sitting on, and the state is carried by the shape and the fill rather than by a
+colour that would be wrong in two of the three tints
+([ADR 0011](docs/adr/0011-the-menu-bar-mark-is-a-template-image.md),
+[ADR 0045](docs/adr/0045-the-mark-is-a-padlock.md)).
 
 The mark also says when it is busy. The first read after login, the minute after a
 wake, and a click that has to open an app's window and press a row in it all turn
-the shield into an outline with a dot that breathes, and it goes back to reporting
+the body into an outline with a dot that breathes, and it goes back to reporting
 the state once the work is done. On a machine with an always-on tunnel that is the
 difference between an icon that means something and one that reads `connected`
 from login to shutdown
