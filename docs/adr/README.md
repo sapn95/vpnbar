@@ -51,3 +51,4 @@ whether their idea was considered or simply missed.
 | [0043](0043-the-private-space-belongs-to-the-network-you-are-on.md) | The private space belongs to the network you are on |
 | [0044](0044-the-doctor-asks-whether-there-is-an-internet.md) | The doctor asks whether there is an internet |
 | [0045](0045-the-mark-is-a-padlock.md) | The mark is a padlock |
+| [0046](0046-a-switch-presses-what-it-cannot-read.md) | A switch presses what it cannot read |

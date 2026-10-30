@@ -125,6 +125,31 @@ newest_log() {
 # reason the row is clicked rather than asked about. The log can say, so a
 # profile named here is only "connected" when the log says it is that one that
 # connected.
+# Every line the reader below knows how to turn into a state, as one pattern.
+#
+# One list, used by the parser and by the check that notices the parser has gone
+# deaf. Two copies would let the client change its wording and the warning stay
+# quiet, which is the failure this exists to catch.
+#
+# The values, not the prefixes. `Tray state changed to idle` would satisfy a
+# check on `Tray state changed to` and still leave the parser with nothing, and
+# a legible-looking log that yields no state is the one case the warning is for.
+readonly STATE_MARKERS='Tray state changed to (connected|connecting|none)|Refresh state: (connected|none)|\[poll\] Profile (connected|disconnected):|Profile connect succeeded:|SAML authentication required for profile:|Disconnecting all connections'
+
+# Does this log speak a vocabulary the reader knows?
+#
+# Measured 30.10.2026 across three days of logs: client 6.0.3 stopped writing
+# `Tray state changed to` and `Refresh state:` between the 28th and the 29th and
+# writes `[poll] Profile disconnected: <name>` instead. The 28th still had 213
+# lines this reader knew, the 29th and the 30th none at all. From the 29th on it
+# found nothing and returned `unknown` without once saying it could not read the
+# file ([[feedback_parser-must-fail-loud-on-unknown-markup]]).
+log_is_legible() {
+  local log="${1:-}"
+  [ -s "${log}" ] || return 1
+  grep -qE "${STATE_MARKERS}" "${log}"
+}
+
 log_state() {
   local log wanted="${1:-}"
   log="$(newest_log)" || return 1
@@ -151,6 +176,15 @@ log_state() {
       name = $0
       sub(/^.*\[poll\] Profile connected:[[:space:]]*/, "", name)
       set_named(name)
+    }
+    # Its opposite, and the only state line client 6.0.3 writes at all. Named
+    # like the connected one: another profile going down says nothing about
+    # this one.
+    /\[poll\] Profile disconnected:/ {
+      name = $0
+      sub(/^.*\[poll\] Profile disconnected:[[:space:]]*/, "", name)
+      name = trim(name)
+      if (wanted == "" || name == trim(wanted)) { s = "disconnected" }
     }
     /Profile connect succeeded:/ {
       name = $0
@@ -230,6 +264,18 @@ cmd_status() {
     # here is what caused this rewrite: it is a guess, and it was wrong about a
     # live tunnel. `unknown` is left alone by autoconnect, which is the right
     # thing to do with a connection nobody can read.
+    #
+    # A log that exists and says nothing this reader knows is a different thing
+    # from no log at all, and it is the one worth shouting about: silently
+    # unreadable is how this went unnoticed from the 29th of October until he
+    # said the switch did nothing on the 30th. The answer on stdout is still
+    # `unknown`, because callers parse it.
+    local log
+    log="$(newest_log || true)"
+    if [ -n "${log}" ] && ! log_is_legible "${log}"; then
+      echo "none of the state lines this reads are in ${log##*/}:" >&2
+      echo "the client is writing something this version does not know." >&2
+    fi
     echo unknown
     return
   fi
