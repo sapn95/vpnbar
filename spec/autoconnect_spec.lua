@@ -39,6 +39,50 @@ describe("autoconnect.plan", function()
     assert.is_nil(autoconnect.plan(config(), { aws = "unknown" }, {}, 1000))
   end)
 
+  --- The connection a switch is pressing for, at a moment inside its patience.
+  local function pressingFor(id, since)
+    return { preferred = id, switching = { id = id, since = since or 1000 } }
+  end
+
+  it("presses a state nobody could read when somebody asked for it by hand", function()
+    -- Measured 2026-10-30: the AWS client changed what it writes to its log,
+    -- every reading came back `unknown`, and *Switch to* pressed once and then
+    -- sat silent for its whole ten minutes. A person standing there having
+    -- said "this one, now" is the one case worth pressing an unreadable
+    -- connection for.
+    local plan = autoconnect.plan(config(), { aws = "unknown" }, {}, 1000, pressingFor("aws"))
+    -- `switch` rather than `wanted`, so the log says which rule pressed.
+    assert.same({ id = "aws", verb = "connect", reason = "switch" }, plan)
+  end)
+
+  it("goes on pressing it at the switch's own cadence", function()
+    local memory = {}
+    autoconnect.remember(memory, "aws", 1000)
+    assert.is_nil(autoconnect.plan(config(), { aws = "unknown" }, memory, 1000 + 5, pressingFor("aws")))
+    local ready = 1000 + autoconnect.SWITCH_RETRY
+    assert.same(
+      { id = "aws", verb = "connect", reason = "switch" },
+      autoconnect.plan(config(), { aws = "unknown" }, memory, ready, pressingFor("aws"))
+    )
+  end)
+
+  it("stops pressing it once the switch has run out of patience", function()
+    local late = 1000 + autoconnect.SWITCH_PATIENCE
+    assert.is_nil(autoconnect.plan(config(), { aws = "unknown" }, {}, late, pressingFor("aws")))
+  end)
+
+  it("does not unlock an unreadable connection a switch is not for", function()
+    -- The switch is for `alt`, so `aws` is still the unreadable one nobody
+    -- asked about.
+    local context = { preferred = "alt", switching = { id = "alt", since = 1000 } }
+    assert.is_nil(autoconnect.plan(config(), { aws = "unknown", alt = "connected" }, {}, 1000, context))
+  end)
+
+  it("leaves it alone when a preference stands without a switch behind it", function()
+    -- `preferred` outlives the ten minutes; the pressing does not.
+    assert.is_nil(autoconnect.plan(config(), { aws = "unknown" }, {}, 1000, { preferred = "aws" }))
+  end)
+
   it("ignores a connection that was not asked to autoconnect", function()
     assert.is_nil(autoconnect.plan(config({ autoconnect = false }), { aws = "disconnected" }, {}, 1000))
   end)

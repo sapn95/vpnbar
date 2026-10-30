@@ -234,6 +234,66 @@ log_says() {
   [ "${output}" = "connected" ]
 }
 
+# Client 6.0.3 stopped writing `Tray state changed to` and `Refresh state:`
+# between 28 and 29 October 2026 and writes this instead. The reader knew none
+# of it, found nothing, and answered `unknown` from the 29th while saying
+# nothing about being unable to read the file.
+@test "status reads the poll line the client writes now" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-10-30T07:01:03Z  INFO ThreadId(03) [renderer] [poll] Profile disconnected: work"
+  run "${SCRIPT}" status work
+  [ "${output}" = "disconnected" ]
+}
+
+@test "a disconnection of another profile is not this one's" {
+  export STUB_NC_LISTENING=0
+  log_says \
+    "2026-10-30T07:00:00Z  INFO ThreadId(03) [renderer] [poll] Profile connected: work" \
+    "2026-10-30T07:01:03Z  INFO ThreadId(03) [renderer] [poll] Profile disconnected: lab"
+  run "${SCRIPT}" status work
+  [ "${output}" = "connected" ]
+}
+
+@test "the newer poll lines beat an older heartbeat, and the other way round" {
+  export STUB_NC_LISTENING=0
+  log_says \
+    "2026-10-30T07:00:00Z  INFO ThreadId(03) [poll] Tray state changed to connected" \
+    "2026-10-30T07:01:03Z  INFO ThreadId(03) [renderer] [poll] Profile disconnected: work"
+  run "${SCRIPT}" status work
+  [ "${output}" = "disconnected" ]
+}
+
+# Silently unreadable is how the fault above went unnoticed. The answer on
+# stdout stays `unknown`, because callers parse it; the complaint goes to
+# stderr, where a person reads it.
+@test "a known prefix with an unknown value is still unreadable" {
+  # `Tray state changed to idle` satisfies a check on the prefix and leaves the
+  # parser with nothing, which is exactly the case the warning is for.
+  export STUB_NC_LISTENING=0
+  log_says "2026-10-30T07:01:03Z  INFO ThreadId(03) [poll] Tray state changed to idle"
+  run "${SCRIPT}" status work
+  [[ "${output}" == *"unknown"* ]]
+  [[ "${output}" == *"does not know"* ]]
+}
+
+@test "a log it cannot read says so, and still answers unknown" {
+  export STUB_NC_LISTENING=0
+  log_says \
+    "2026-10-30T07:01:03Z  WARN ThreadId(03) Locale key missing or empty in JSON" \
+    "2026-10-30T07:01:04Z  INFO ThreadId(03) [renderer] something nobody taught this"
+  run "${SCRIPT}" status work
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"unknown"* ]]
+  [[ "${output}" == *"does not know"* ]]
+}
+
+@test "a log it can read is not complained about" {
+  export STUB_NC_LISTENING=0
+  log_says "2026-10-30T07:01:03Z  INFO ThreadId(03) [renderer] [poll] Profile disconnected: work"
+  run "${SCRIPT}" status work
+  [[ "${output}" != *"does not know"* ]]
+}
+
 # Down, with the reason attached: the session has ended and only a person can
 # start another. vpnbar holds automatic attempts on this state until one is
 # there, so it must not be folded into plain "disconnected".
@@ -288,10 +348,16 @@ log_says() {
 }
 
 @test "status is unknown when the log holds nothing it recognises" {
+  # And says so now. The answer a caller parses is still the last line of
+  # stdout; the complaint is on stderr, which `run` folds in here.
   export STUB_NC_LISTENING=0
   log_says "2026-09-17T09:00:00Z  INFO ThreadId(01) Sparkle updater started"
   run "${SCRIPT}" status
-  [ "${output}" = "unknown" ]
+  [[ "${output}" == *"unknown"* ]]
+  [[ "${output}" == *"does not know"* ]]
+  local answer
+  answer="$("${SCRIPT}" status 2>/dev/null)"
+  [ "${answer}" = "unknown" ]
 }
 
 # A log is a record, not a live reading, and the tunnel is held by a different

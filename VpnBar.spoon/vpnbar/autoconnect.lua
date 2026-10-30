@@ -209,6 +209,33 @@ local function isDown(state)
   return state == "disconnected" or state == "login"
 end
 
+--- Down enough to be worth asking, which for one connection is more than down.
+---
+--- `unknown` is not down. Nobody could read it, and pressing an unreadable
+--- connection on a timer is how a probe nobody configured turns into a login
+--- prompt every ten seconds, which is what
+--- [ADR 0013](../../docs/adr/0013-autoconnect-is-a-plan-not-a-timer.md) is about.
+---
+--- The connection a switch is being pressed for is the exception, and the only
+--- one. Somebody is standing there having said "this one, now": the asking is
+--- already bounded to `SWITCH_PATIENCE` and paced at `SWITCH_RETRY`, and it
+--- stops the moment anything is readable. Being wrong therefore costs at worst
+--- a press every thirty seconds for ten minutes, each one logged, on a
+--- connection somebody had just asked for by hand. The other answer cost more,
+--- measured on 2026-10-30: the client changed what it writes to its log, every
+--- reading came back `unknown`, and *Switch to* pressed once and then sat
+--- silent for its whole ten minutes
+--- ([ADR 0046](../../docs/adr/0046-a-switch-presses-what-it-cannot-read.md)).
+--- Which connection is being pressed for is the caller's business: the loop
+--- below already considers nothing else while a switch stands, so comparing the
+--- id a second time here would be a branch no test could ever reach.
+--- @param state string|nil
+--- @param pressing boolean whether a switch is pressing for *this* connection
+--- @return boolean
+local function worthPressing(state, pressing)
+  return isDown(state) or (state == "unknown" and pressing)
+end
+
 --- May autoconnect ask this connection to come up at all?
 ---
 --- Two ways the answer is no, and both are about the application rather than
@@ -480,7 +507,7 @@ function autoconnect.plan(cfg, states, memory, now, context)
     if (profile.autoconnect or profile.id == preferred) and (pressedFor == nil or profile.id == pressedFor) then
       local state = states[profile.id] or "unknown"
 
-      if isDown(state) then
+      if worthPressing(state, pressedFor == profile.id) then
         local blocked = false
         if settings.exclusive then
           -- Only something ranked *above* this one may hold it down.
