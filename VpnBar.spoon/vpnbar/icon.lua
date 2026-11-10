@@ -225,10 +225,13 @@ end
 ---   filling in. Halfway, visibly, and the dot breathes as `phase` advances.
 --- - disconnected: the shackle is open. The one state somebody reads across the
 ---   room, and the only one where the outline of the lock is broken.
+--- - unrouted: the body filled as for connected, and the shackle open. There
+---   is a tunnel, which is the filled body, and it holds nothing, which is the
+---   shackle ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
 --- - unknown: the whole lock faint, and shut. Not knowing is not the same as
 ---   being down, and an open shackle would claim it was.
 ---
---- @param state string|nil one of the five states, anything else is unknown
+--- @param state string|nil one of the states above, anything else is unknown
 --- @param size number|nil defaults to icon.SIZE
 --- @param phase number|nil which frame of the busy pulse, ignored by the rest
 --- @return table list of hs.canvas element descriptors
@@ -243,6 +246,9 @@ function icon.elements(state, size, phase)
       shackleElement(size, INK, false),
       dot(size, INK, PULSE[icon.frame(phase)]),
     }
+  elseif state == "unrouted" then
+    local socket, slot = icon.keyholeElements(size)
+    return { bodyElement(size, "fill", INK), shackleElement(size, INK, true), socket, slot }
   elseif state == "disconnected" or state == "login" then
     -- Down is down; which of the two it is belongs in the menu row, not in a
     -- glyph nobody can read at sixteen pixels.

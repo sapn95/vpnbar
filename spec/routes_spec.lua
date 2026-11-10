@@ -174,3 +174,219 @@ describe("routes.explain", function()
     assert.matches("utun4 and utun5, which are down", two)
   end)
 end)
+
+--- The table of 10.11.2026 at 23:14, with the addresses changed: a tunnel that
+--- is up on utun4 with host routes to its two resolvers and nothing wider, so
+--- everything else behind it leaves by the Wi-Fi.
+local NO_AGGREGATE = [[
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.1.1        UGScg                 en0
+10.9.9.29          10.11.12.13        UGHS                utun4
+10.9.9.30          10.11.12.13        UGHS                utun4
+10.11.12.13/32     127.0.0.1          UGSc                  lo0
+192.168.1          link#14            UCS                   en0      !
+192.168.1.1        de:73:31:b:a3:b6   UHLWIir               en0   1191
+]]
+
+--- The same machine a minute later, once the tunnel had its aggregate.
+local WITH_AGGREGATE =
+  NO_AGGREGATE:gsub("10%.9%.9%.29 ", "10                 10.11.12.13        UGSc                utun4\n10.9.9.29 ", 1)
+
+describe("routes.prefixOf", function()
+  it("reads the abbreviations netstat writes", function()
+    assert.same({ "0.0.0.0", 0 }, { routes.prefixOf("default") })
+    assert.same({ "10.0.0.0", 8 }, { routes.prefixOf("10") })
+    assert.same({ "172.16.0.0", 16 }, { routes.prefixOf("172.16") })
+    assert.same({ "192.168.1.0", 24 }, { routes.prefixOf("192.168.1") })
+    assert.same({ "10.9.9.29", 32 }, { routes.prefixOf("10.9.9.29") })
+  end)
+
+  it("lets a written prefix win over the number of octets", function()
+    assert.same({ "172.16.0.0", 12 }, { routes.prefixOf("172.16/12") })
+    assert.same({ "10.9.9.0", 24 }, { routes.prefixOf("10.9.9/24") })
+    assert.same({ "10.11.12.13", 32 }, { routes.prefixOf("10.11.12.13/32") })
+    assert.same({ "192.168.1.0", 24 }, { routes.prefixOf("192.168.1.0/24") })
+  end)
+
+  it("places nothing it cannot read", function()
+    for _, wrong in ipairs({
+      "Destination",
+      "link#14",
+      "fe80::1",
+      "Internet:",
+      "",
+      "10/33",
+      "192.0.2.1.5",
+      "192.0.2.1.5/24",
+      "300",
+      ".",
+      "10/",
+    }) do
+      assert.same({}, { routes.prefixOf(wrong) }, wrong)
+    end
+    assert.same({}, { routes.prefixOf(nil) })
+    assert.same({}, { routes.prefixOf(10) })
+  end)
+end)
+
+describe("routes.interfaceFor", function()
+  it("sends an address behind the tunnel out by the Wi-Fi when only the default covers it", function()
+    assert.equals("en0", routes.interfaceFor(NO_AGGREGATE, "10.0.0.10"))
+  end)
+
+  it("takes the longest prefix, wherever in the table it stands", function()
+    assert.equals("utun4", routes.interfaceFor(WITH_AGGREGATE, "10.0.0.10"))
+    -- A host route beats the aggregate, and the tunnel's own address is local.
+    assert.equals("utun4", routes.interfaceFor(WITH_AGGREGATE, "10.9.9.29"))
+    assert.equals("lo0", routes.interfaceFor(WITH_AGGREGATE, "10.11.12.13"))
+    -- The longer one listed first must not lose to a shorter one after it.
+    local reversed = "10.9.9.29 10.11.12.13 UGHS utun4\n10 10.11.12.13 UGSc utun7\ndefault 192.168.1.1 UGScg en0\n"
+    assert.equals("utun4", routes.interfaceFor(reversed, "10.9.9.29"))
+    assert.equals("utun7", routes.interfaceFor(reversed, "10.9.9.30"))
+  end)
+
+  it("keeps the first of two rows of the same length", function()
+    local twice = "10 10.11.12.13 UGSc utun4\n10 10.11.13.13 UGSc utun5\n"
+    assert.equals("utun4", routes.interfaceFor(twice, "10.0.0.10"))
+  end)
+
+  it("has no answer where nothing covers the address or nothing was asked", function()
+    assert.is_nil(routes.interfaceFor("10.9.9.29 10.11.12.13 UGHS utun4\n", "10.0.0.10"))
+    assert.is_nil(routes.interfaceFor("", "10.0.0.10"))
+    assert.is_nil(routes.interfaceFor(nil, "10.0.0.10"))
+    assert.is_nil(routes.interfaceFor(NO_AGGREGATE, "example.invalid"))
+    assert.is_nil(routes.interfaceFor(NO_AGGREGATE, nil))
+  end)
+end)
+
+describe("routes.carries", function()
+  it("is false for the tunnel of 10.11.2026 and true once it has its aggregate", function()
+    assert.is_false(routes.carries(NO_AGGREGATE, "10.0.0.10", { "utun4" }))
+    assert.is_true(routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun4" }))
+  end)
+
+  it("asks about this tunnel, not about any tunnel", function()
+    assert.is_false(routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun5" }))
+  end)
+
+  it("takes any of the interfaces the probe accepts, wherever it stands in the list", function()
+    assert.is_true(routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun2", "utun4" }))
+    assert.is_true(routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun4", "utun9" }))
+    assert.is_false(routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun2", "utun9" }))
+  end)
+
+  it("is false without an interface, even where nothing covers the address either", function()
+    assert.is_false(routes.carries("", "10.0.0.10", {}))
+    assert.is_false(routes.carries("", "10.0.0.10", nil))
+  end)
+end)
+
+describe("routes.unrouted", function()
+  local SETTLE = routes.UNROUTED_SETTLE
+
+  it("says nothing while a tunnel may still be on its way to its routes", function()
+    local memory = {}
+    assert.same({ {}, {} }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1000) })
+    assert.same({ {}, {} }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1000 + SETTLE - 1) })
+  end)
+
+  it("shows it and announces it once it has lasted, and announces it once only", function()
+    local memory = {}
+    routes.unrouted({ gp = "10.0.0.10" }, memory, 1000)
+    assert.same({ { gp = "10.0.0.10" }, { "gp" } }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1000 + SETTLE) })
+    assert.same({ { gp = "10.0.0.10" }, {} }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1000 + SETTLE + 30) })
+  end)
+
+  it("starts over when the route came back in between", function()
+    local memory = {}
+    routes.unrouted({ gp = "10.0.0.10" }, memory, 1000)
+    routes.unrouted({ gp = "10.0.0.10" }, memory, 1000 + SETTLE)
+    assert.same({ {}, {} }, { routes.unrouted({}, memory, 1100) })
+    assert.same({}, memory)
+    assert.same({ {}, {} }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1200) })
+    assert.same({ { gp = "10.0.0.10" }, { "gp" } }, { routes.unrouted({ gp = "10.0.0.10" }, memory, 1200 + SETTLE) })
+  end)
+
+  it("times each connection by itself and names the news in a fixed order", function()
+    local memory = {}
+    routes.unrouted({ b = "10.0.0.10" }, memory, 1000)
+    routes.unrouted({ b = "10.0.0.10", a = "10.0.0.11" }, memory, 1000 + SETTLE - 5)
+    local shown, news = routes.unrouted({ b = "10.0.0.10", a = "10.0.0.11" }, memory, 1000 + SETTLE)
+    assert.same({ b = "10.0.0.10" }, shown)
+    assert.same({ "b" }, news)
+    -- Eight at once, so that `pairs` handing them over in order by chance is
+    -- one run in forty thousand rather than one in two.
+    memory = {}
+    local many = {}
+    for _, id in ipairs({ "h", "c", "f", "a", "e", "b", "g", "d" }) do
+      many[id] = { address = "10.0.0.10" }
+    end
+    routes.unrouted(many, memory, 1000)
+    local _, all = routes.unrouted(many, memory, 1000 + SETTLE)
+    assert.same({ "a", "b", "c", "d", "e", "f", "g", "h" }, all)
+  end)
+
+  it("reads no finding at all as nothing found", function()
+    assert.same({ {}, {} }, { routes.unrouted(nil, {}, 1000) })
+  end)
+end)
+
+describe("routes.interfaceFor, the table as the adapter hands it over", function()
+  --- Both families in one string, as `runtime.routeTable` returns them: the IPv4
+  --- table without a default route, then the IPv6 one with a default per tunnel.
+  local BOTH = [[
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+10.9.9.29          10.11.12.13        UGHS                utun4
+192.168.1          link#14            UCS                   en0      !
+
+Routing tables
+
+Internet6:
+Destination                             Gateway                                 Flags               Netif Expire
+default                                 fe80::1%en0                             UGcg                  en0
+default                                 fe80::%utun0                            UGcIg               utun0
+default                                 fe80::%utun1                            UGcIg               utun1
+::1                                     ::1                                     UHL                   lo0
+]]
+
+  it("reads no IPv6 row as a route for an IPv4 address", function()
+    -- Read as IPv4, an IPv6 `default` is a route to everything, and with no
+    -- IPv4 default it would have been the answer. The first one here is not
+    -- scoped, which is what a network with IPv6 of its own hands out, so the
+    -- scope rule alone would not have kept it out.
+    assert.same({}, { routes.interfaceFor(BOTH, "10.0.0.10") })
+    assert.same({ "utun4", 32 }, { routes.interfaceFor(BOTH, "10.9.9.29") })
+  end)
+
+  it("reads the IPv4 table again where it comes after the IPv6 one", function()
+    local reversed = "Internet6:\ndefault fe80::%utun0 UGcIg utun0\nInternet:\ndefault 192.168.1.1 UGScg en0\n"
+    assert.same({ "en0", 0 }, { routes.interfaceFor(reversed, "10.0.0.10") })
+  end)
+
+  it("leaves scoped rows out of an ordinary lookup", function()
+    -- `I` is RTF_IFSCOPE: the row serves traffic already bound to its interface.
+    local scoped = "default 192.168.1.1 UGScIg en1\ndefault 192.168.1.1 UGScg en0\n10 10.11.12.13 UGScI utun9\n"
+    assert.same({ "en0", 0 }, { routes.interfaceFor(scoped, "10.0.0.10") })
+  end)
+
+  it("says how wide the winning route is", function()
+    assert.same({ "en0", 0 }, { routes.interfaceFor(NO_AGGREGATE, "10.0.0.10") })
+    assert.same({ "utun4", 8 }, { routes.interfaceFor(WITH_AGGREGATE, "10.0.0.10") })
+    assert.same({ "en0", 24 }, { routes.interfaceFor(NO_AGGREGATE, "192.168.1.50") })
+  end)
+end)
+
+describe("routes.carries, what happened instead", function()
+  it("names the interface and the width of the route the address took", function()
+    assert.same({ false, "en0", 0 }, { routes.carries(NO_AGGREGATE, "10.0.0.10", { "utun4" }) })
+    assert.same({ true, "utun4", 8 }, { routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun4" }) })
+    assert.same({ false, "utun4", 8 }, { routes.carries(WITH_AGGREGATE, "10.0.0.10", { "utun5" }) })
+    assert.same({ false }, { routes.carries("", "10.0.0.10", { "utun4" }) })
+  end)
+end)

@@ -140,8 +140,28 @@ end
 -- ------------------------------------------------- accessibility, for the app
 -- ------------------------------------------------- that has no other way in
 
+--- The running application with exactly this name, or nothing.
+---
+--- Not `hs.application.get`. That one matches on a substring, and when no
+--- application matches it goes on to search window titles and hands back the
+--- `hs.window` objects it found, ahead of their applications. So with the agent
+--- gone and any window on the machine carrying its name in the title, the
+--- answer is a window: truthy where "is it running" is asked, and an error
+--- where it is passed on. The console has that error for 10.11.2026 at
+--- 23:08:58, three seconds after the agent could not be opened again:
+--- `incorrect userdata type for argument 1 (expected hs.application)`.
+---
+--- Read in `hs/application.lua`: with `exact` set, `find` compares names for
+--- equality and returns before the window search. Measured once on the same
+--- evening for a name nothing answers to: 118 ms through `get`, 8 ms this way.
+--- @param appName string
+--- @return hs.application|nil
+local function runningApp(appName)
+  return (hs.application.find(appName, true))
+end
+
 local function menuBarItem(appName)
-  local app = hs.application.get(appName)
+  local app = runningApp(appName)
   if not app then
     return nil, appName .. " is not running"
   end
@@ -257,7 +277,7 @@ local function withPanel(appName, body)
   end
   item:performAction("AXPress")
 
-  local element = hs.axuielement.applicationElement(hs.application.get(appName))
+  local element = hs.axuielement.applicationElement(runningApp(appName))
   local window
   for _ = 1, 30 do
     window = (element:attributeValue("AXWindows") or {})[1]
@@ -317,7 +337,7 @@ local function realWindow(element)
 end
 
 local function windowOf(appName)
-  local app = hs.application.get(appName)
+  local app = runningApp(appName)
   if not app then
     return nil, appName .. " is not running"
   end
@@ -384,7 +404,7 @@ end
 --- @param key string "return" presses a button, "space" opens the chooser
 --- @return boolean
 local function pressElement(appName, element, key)
-  local app = hs.application.get(appName)
+  local app = runningApp(appName)
   if not app or not element then
     return false
   end
@@ -398,7 +418,7 @@ end
 
 --- Every real window of an application, the chooser's included.
 local function windowsOf(appName)
-  local app = hs.application.get(appName)
+  local app = runningApp(appName)
   local element = app and hs.axuielement.applicationElement(app)
   local windows = {}
   for _, candidate in ipairs((element and element:attributeValue("AXWindows")) or {}) do
@@ -464,7 +484,7 @@ end
 --- different VPN than the one somebody asked for.
 --- @return boolean ok, string|nil err
 local function chooseProfile(appName, chooser, row)
-  local app = hs.application.get(appName)
+  local app = runningApp(appName)
   local function escape()
     if app then
       hs.eventtap.keyStroke({}, "escape", 0, app)
@@ -643,7 +663,7 @@ local function panelPress(appName, verbs)
         if not target then
           -- Addressed to the agent. Sent to nowhere in particular, this went
           -- to whatever had the keyboard, which by now was somebody's editor.
-          hs.eventtap.keyStroke({}, "escape", 0, hs.application.get(appName))
+          hs.eventtap.keyStroke({}, "escape", 0, runningApp(appName))
         end
       end
     end
@@ -662,7 +682,7 @@ end
 --- refresh: every probe wants the same output and it does not change between
 --- two profiles a millisecond apart.
 function obj:runtime(allowPanelReads)
-  local cachedIfconfig
+  local cachedIfconfig, cachedRoutes
   return {
     exec = function(command)
       local out, ok = hs.execute(command)
@@ -674,10 +694,15 @@ function obj:runtime(allowPanelReads)
     end,
     -- Both families in one string, because `routes.parse` reads rows and does
     -- not care which table they came from.
+    -- Once per refresh, like `ifconfig`: the sweep for stranded routes and
+    -- every probe that names an address ask for the same table.
     routeTable = function()
-      local four = hs.execute("/usr/sbin/netstat -rn -f inet") or ""
-      local six = hs.execute("/usr/sbin/netstat -rn -f inet6") or ""
-      return four .. "\n" .. six
+      if not cachedRoutes then
+        local four = hs.execute("/usr/sbin/netstat -rn -f inet") or ""
+        local six = hs.execute("/usr/sbin/netstat -rn -f inet6") or ""
+        cachedRoutes = four .. "\n" .. six
+      end
+      return cachedRoutes
     end,
     panel = function(app)
       if not (allowPanelReads and self.panelReads) then
@@ -709,7 +734,7 @@ end
 
 --- Which of the applications the config names are running right now.
 ---
---- `hs.application.get` is the same lookup every way into these clients already
+--- `runningApp` is the same lookup every way into these clients already
 --- makes — the menu-bar panel and the window are both fetched with it — so this
 --- answers the question autoconnect needs answered: would there be anything to
 --- click in? Asked once per profile per refresh, and only when autoconnect may
@@ -719,7 +744,7 @@ function obj:appsRunning()
   local running = {}
   for _, profile in ipairs(store.list(self.config, true)) do
     if profile.app and running[profile.app] == nil then
-      running[profile.app] = hs.application.get(profile.app) ~= nil
+      running[profile.app] = runningApp(profile.app) ~= nil
     end
   end
   return running
@@ -990,16 +1015,17 @@ function obj:paint()
     return
   end
   local busy = work.busy(self.work, os.time())
-  local state = menu.indicator(self.states, busy)
+  local shown = menu.shown(self.states, self.unrouted)
+  local state = menu.indicator(shown, busy)
   local image = menubarIcon(state, self.phase)
   if image then
     self.menubar:setIcon(image)
     -- The count sits beside the icon only when it says something: one tunnel
     -- up is the normal case and the icon already reports it.
-    local connected = menu.connectedCount(self.states)
+    local connected = menu.connectedCount(shown)
     self.menubar:setTitle(connected > 1 and tostring(connected) or "")
   else
-    self.menubar:setTitle(menu.title(self.states, busy))
+    self.menubar:setTitle(menu.title(shown, busy))
   end
   self:pulsate(state == "connecting")
 end
@@ -1075,6 +1101,29 @@ function obj:refresh(options)
       self.quitByHand[profile.app] = nil
     end
   end
+  -- A tunnel that is up and carries nothing: the interface is up, the address
+  -- is on it, and the address it was given to reach leaves by something else.
+  -- On 10.11.2026 one stood like that for three minutes and twenty seconds under a mark
+  -- that read connected
+  -- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+  -- Read before the switch is judged, because a switch to a tunnel that
+  -- carries nothing has not arrived anywhere.
+  local found = {}
+  for _, profile in ipairs(store.list(self.config, true)) do
+    if states[profile.id] == "connected" then
+      local carried, via, prefix = backends.carries(profile, runtime)
+      if carried == false then
+        found[profile.id] = { address = profile.probe.reach, via = via, unclaimed = prefix == 0 }
+      elseif carried then
+        -- It carries, so whatever renewed it worked, and the next time it
+        -- happens is a new incident with a renew of its own.
+        self.renews[profile.id] = nil
+      end
+    end
+  end
+  local news
+  self.unrouted, news = routes.unrouted(found, self.unroutedMemory, os.time())
+
   -- When each connection began its handshake. Cleared the moment it says
   -- anything else, so this is the age of the current `connecting` and not of
   -- the last one (ADR 0036).
@@ -1090,14 +1139,18 @@ function obj:refresh(options)
         othersUp = true
       end
     end
-    if states[target] == "connected" and not othersUp then
+    if states[target] == "connected" and not othersUp and not found[target] then
       self.logger.i(("switch: %s is up and alone"):format(target))
       self.switching = nil
     elseif not autoconnect.switching(target, { switching = self.switching }, os.time()) then
       local name = (store.get(self.config, target) or {}).name or target
       local minutes = autoconnect.SWITCH_PATIENCE // 60
-      if states[target] == "connected" then
+      if states[target] == "connected" and othersUp then
         self:complain(("%s is up, but another connection is still up after %d minutes"):format(name, minutes))
+      elseif states[target] == "connected" then
+        self:complain(
+          ("%s is up, but still carries nothing after %d minutes; it stays preferred"):format(name, minutes)
+        )
       else
         self:complain(("%s did not come up in %d minutes; it stays preferred"):format(name, minutes))
       end
@@ -1158,9 +1211,12 @@ function obj:refresh(options)
       connectingSince = self.connectingSince,
       switching = self.switching,
       paused = self.paused,
+      unrouted = self.unrouted,
+      renews = self.renews,
     }
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
+  local renewSaid
   if plan then
     local profile = store.get(self.config, plan.id)
     self.logger.i(("autoconnect: %s %s (%s)"):format(plan.verb, plan.id, plan.reason))
@@ -1169,6 +1225,17 @@ function obj:refresh(options)
       if context.fresh and states[plan.id] == "login" then
         self.freshSpent = true
       end
+    elseif plan.verb == "renew" then
+      -- One record per incident, kept across the tries the planner allows
+      -- (`autoconnect.renewDue`), and a new one once the hour is up.
+      local now = os.time()
+      local entry = self.renews[plan.id]
+      if not entry or now - entry.since >= autoconnect.RENEW_COOLDOWN then
+        entry = { since = now }
+        self.renews[plan.id] = entry
+      end
+      entry.at = now
+      autoconnect.forget(self.attempts, plan.id)
     else
       -- Taking the stand-in back down ends its history: it is not a failure,
       -- and the next time it is needed it should start from nothing.
@@ -1183,6 +1250,35 @@ function obj:refresh(options)
         -- trace of what any of them met.
         self.logger.w(("autoconnect: %s %s failed: %s"):format(plan.verb, plan.id, tostring(err)))
       end
+      local entry = plan.verb == "renew" and self.renews[plan.id] or nil
+      if entry then
+        entry.failed, entry.err = not ok, (not ok) and tostring(err) or nil
+        -- The first try of an incident is said, whatever came of it: it is
+        -- about to take a tunnel down, or it has just failed to. Retries are
+        -- the console's.
+        if entry.at == entry.since and self.unrouted[plan.id] then
+          self:complain(menu.renewNotice(profile.name or plan.id, self.unrouted[plan.id], ok, err))
+          renewSaid = plan.id
+        end
+      end
+    end
+  end
+
+  -- An incident whose every try was refused is said once, when the planner
+  -- stops trying, so that somebody knows to reconnect it by hand.
+  for id, entry in pairs(self.renews) do
+    if entry.failed and not entry.saidGivingUp and os.time() - entry.since >= autoconnect.SWITCH_PATIENCE then
+      entry.saidGivingUp = true
+      self:complain(menu.renewGaveUp((store.get(self.config, id) or {}).name or id, entry.err))
+    end
+  end
+
+  -- Said once each, after the plan, so that a connection being renewed in the
+  -- same pass gets the one sentence that says so instead of two.
+  for _, id in ipairs(news) do
+    if id ~= renewSaid then
+      local profile = store.get(self.config, id) or {}
+      self:complain(("%s is up, but %s"):format(profile.name or id, menu.unroutedWhere(self.unrouted[id])))
     end
   end
 
@@ -1855,6 +1951,7 @@ function obj:init()
   -- clearing them up (ADR 0035). Not persisted: a reboot is one of the things
   -- that clears them.
   self.routeMemory = {}
+  self.unrouted, self.unroutedMemory, self.renews = {}, {}, {}
   -- When each connection started saying `connecting`, so a handshake that never
   -- finishes can be told from one that is still going
   -- (ADR 0036). Not persisted: a restart is a fresh handshake.
@@ -1908,7 +2005,9 @@ function obj:start()
     -- and the queued read has the icon right by the time the menu closes.
     self:load()
     self:refreshSoon()
-    return self:hammerspoonMenu(menu.build(self.config, self.states, self.preferred, self.quitByHand, self.paused))
+    return self:hammerspoonMenu(
+      menu.build(self.config, self.states, self.preferred, self.quitByHand, self.paused, self.unrouted)
+    )
   end)
   -- Deferred, so the icon is in the bar before anything is read. Hammerspoon
   -- loads this Spoon while it is still starting up, and a synchronous first

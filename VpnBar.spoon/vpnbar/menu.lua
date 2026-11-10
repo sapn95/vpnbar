@@ -15,13 +15,18 @@ local GLYPHS = {
   connecting = "◐",
   disconnected = "○",
   login = "○",
+  unrouted = "⊘",
   unknown = "◌",
 }
 
 -- Worst-to-best, for the one glyph in the menu bar: anything connected shows
 -- as connected, anything mid-flight shows as busy, and only a menu where
 -- nothing is known shows as unknown.
-local PRECEDENCE = { connected = 4, connecting = 3, disconnected = 2, login = 2, unknown = 1 }
+--
+-- A tunnel that carries nothing ranks with the ones that are down: another
+-- connection that really is up speaks for the menu before it does, and by
+-- itself it must not look like one.
+local PRECEDENCE = { connected = 4, connecting = 3, unrouted = 2.5, disconnected = 2, login = 2, unknown = 1 }
 
 local LABELS = {
   connected = "connected",
@@ -30,6 +35,11 @@ local LABELS = {
   -- Down, and the row can say why: the session has ended, and the next connect
   -- opens a login window rather than a tunnel.
   login = "needs your login",
+  -- Not a state a backend reports. It is what a row and the mark show for a
+  -- connection that reads `connected` while the address it is there for leaves
+  -- by another interface
+  -- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+  unrouted = "up, but carries nothing",
   unknown = "state unknown",
 }
 
@@ -43,6 +53,25 @@ end
 --- @return string
 function menu.label(state)
   return LABELS[state or "unknown"] or LABELS.unknown
+end
+
+--- The states as they are shown, which differ from the states as they are read
+--- in exactly one way: a connection that is up without a route to the address
+--- it was given shows as `unrouted`.
+---
+--- For drawing only. Everything that decides what may be done to a connection
+--- keeps reading the real table, where that tunnel is `connected`: it holds an
+--- interface and an address, one at a time still counts it, and Disconnect
+--- everything still has to take it down.
+--- @param states table map of profile id to state
+--- @param unrouted table|nil map of profile id to what it does not carry, see `menu.build`
+--- @return table a new map
+function menu.shown(states, unrouted)
+  local shown = {}
+  for id, state in pairs(states or {}) do
+    shown[id] = (state == "connected" and (unrouted or {})[id]) and "unrouted" or state
+  end
+  return shown
 end
 
 --- The one state that speaks for the whole menu: anything connected beats
@@ -447,15 +476,74 @@ local function switchItem(cfg, preferred)
   return { title = "Switch to", menu = rows }
 end
 
+--- What a row adds when its tunnel carries nothing: which address, and where it
+--- goes instead, so the sentence can be checked against `route -n get` by
+--- whoever reads it.
+--- @param profile table
+--- @param face string|nil the state the row shows
+--- @param unrouted table|nil
+--- @return string
+local function unroutedNote(profile, face, unrouted)
+  if face ~= "unrouted" then
+    return ""
+  end
+  return ". " .. menu.unroutedWhere(unrouted[profile.id])
+end
+
+--- The sentence about a tunnel that carries nothing, for the row and for the
+--- notification alike, so the two cannot disagree.
+--- @param finding table { address = string, via = string|nil }
+--- @return string
+function menu.unroutedWhere(finding)
+  if finding.via == nil then
+    return ("Nothing routes %s."):format(finding.address)
+  end
+  return ("%s leaves by %s, not through it."):format(finding.address, finding.via)
+end
+
+--- What to say when a renew has just been pressed for the first time in an
+--- incident. Later tries go to the console only: the first sentence already
+--- said that vpnbar would try again, and the mark shows it when one works.
+--- @param name string
+--- @param finding table see `menu.unroutedWhere`
+--- @param ok boolean whether the press went through
+--- @param err string|nil what the press met, when it did not
+--- @return string
+function menu.renewNotice(name, finding, ok, err)
+  local opening = ("%s is up, but %s"):format(name, menu.unroutedWhere(finding))
+  if ok then
+    return opening .. " Reconnecting it so that it installs its own routes, which may ask for your login."
+  end
+  return opening
+    .. (" Reconnecting it did not work: %s. vpnbar tries again every %d seconds for %d minutes."):format(
+      tostring(err),
+      autoconnect.SWITCH_RETRY,
+      autoconnect.SWITCH_PATIENCE // 60
+    )
+end
+
+--- What to say once the tries of an incident have all been refused.
+--- @param name string
+--- @param err string|nil what the last press met
+--- @return string
+function menu.renewGaveUp(name, err)
+  local minutes = autoconnect.SWITCH_PATIENCE // 60
+  return ("Reconnecting %s did not work for %d minutes: %s."):format(name, minutes, tostring(err))
+    .. " vpnbar leaves it as it is until it carries again, or for an hour."
+end
+
 --- Build the whole menu.
 --- @param cfg table
 --- @param states table map of profile id to state
 --- @param preferred string|nil the id somebody switched to for this session
 --- @param quitByHand table|nil the applications somebody closed, `{ [app] = true }`
 --- @param paused boolean|nil everything was disconnected on purpose (ADR 0041)
+--- @param unrouted table|nil map of profile id to what it does not carry:
+---   `{ address, via, unclaimed }`, see `routes.carries`
 --- @return table list of items: { title, action?, separator?, disabled?, menu?, tooltip? }
-function menu.build(cfg, states, preferred, quitByHand, paused)
+function menu.build(cfg, states, preferred, quitByHand, paused, unrouted)
   states = states or {}
+  local shown = menu.shown(states, unrouted)
   local items = {}
   local visible = store.list(cfg)
 
@@ -485,29 +573,30 @@ function menu.build(cfg, states, preferred, quitByHand, paused)
     -- a quit made outside this menu leaves the connection up for as long as the
     -- client's own service holds it, and the moment it drops nothing is going
     -- to bring it back.
-    local note = standingDownNote(profile, quitByHand)
+    local note = unroutedNote(profile, shown[profile.id], unrouted) .. standingDownNote(profile, quitByHand)
+    local face = shown[profile.id] or state
     if profile.protected and not isDown(state) then
       -- Protected means protected from being brought *down*: an always-on
       -- corporate VPN is a policy, and a menu item that would breach it is
       -- worse than no menu item. Up or on its way up, there is nothing this
       -- row may do, so it only reports.
       items[#items + 1] = {
-        title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s, protected from disconnecting"):format(profile.name, menu.label(state)) .. note,
+        title = ("%s  %s"):format(menu.glyph(face), profile.name),
+        tooltip = ("%s — %s, protected from disconnecting"):format(profile.name, menu.label(face)) .. note,
         disabled = true,
       }
     elseif profile.protected then
       -- Down, though, it may be brought back: that is the direction the
       -- protection points in.
       items[#items + 1] = {
-        title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s, protected once it is up"):format(profile.name, menu.label(state)) .. note,
+        title = ("%s  %s"):format(menu.glyph(face), profile.name),
+        tooltip = ("%s — %s, protected once it is up"):format(profile.name, menu.label(face)) .. note,
         action = { kind = "connect", id = profile.id },
       }
     else
       items[#items + 1] = {
-        title = ("%s  %s"):format(menu.glyph(state), profile.name),
-        tooltip = ("%s — %s"):format(profile.name, menu.label(state)) .. note,
+        title = ("%s  %s"):format(menu.glyph(face), profile.name),
+        tooltip = ("%s — %s"):format(profile.name, menu.label(face)) .. note,
         -- A connection whose state is unknown is still clickable: refusing to
         -- act because the probe could not answer would make an unconfigured
         -- probe look like a broken connection.

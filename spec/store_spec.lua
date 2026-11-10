@@ -78,6 +78,19 @@ describe("store.validate", function()
     assert.matches("probe.cidr", err)
   end)
 
+  it("takes one address for a probe to reach, and nothing that is not one", function()
+    local function with(reach)
+      return store.validate(scutilProfile({ probe = { cidr = "10.0.0.0/8", reach = reach } }))
+    end
+    assert.is_true((with("10.0.0.10")))
+    assert.is_true((with(nil)))
+    for _, wrong in ipairs({ "10.0.0.0/8", "example.invalid", "10.0.0", "10.0.0.256", "", 10, "10.0.0.10 " }) do
+      local ok, err = with(wrong)
+      assert.is_false(ok, tostring(wrong))
+      assert.matches("probe.reach", err)
+    end
+  end)
+
   it("rejects things that are not profiles at all", function()
     assert.is_false((store.validate("nope")))
   end)

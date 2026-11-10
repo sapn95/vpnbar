@@ -11,6 +11,8 @@
 --- Everything here is a pure reading of two commands. What to do about it is
 --- one offer, and the offer is the adapter's to make.
 
+local parse = require("vpnbar.parse")
+
 local routes = {}
 
 --- Seconds the condition has to hold before it is offered.
@@ -62,6 +64,171 @@ function routes.parse(output)
     end
   end
   return parsed
+end
+
+--- The CIDR a destination in `netstat -rn` stands for.
+---
+--- The table abbreviates, and the abbreviation is the old classful one: `10` is
+--- 10.0.0.0/8, `172.16` is a /16 and `192.168.0` a /24, a destination with all
+--- four octets and no prefix is a single host, and `default` is everything. A
+--- written prefix wins over the count (`10.9.9/24`), with the octets left out
+--- read as zeroes. Measured against this machine's own table on 10.11.2026,
+--- which had `10`, `10.94.175/24` and plain host rows side by side.
+---
+--- Anything else is not a destination this can place: a `link#14`, an IPv6
+--- row, a header.
+--- @param destination string
+--- @return string|nil network, number|nil prefix length
+function routes.prefixOf(destination)
+  if destination == "default" then
+    return "0.0.0.0", 0
+  end
+  if type(destination) ~= "string" then
+    return nil, nil
+  end
+  local digits, written = destination:match("^([%d%.]+)/(%d+)$")
+  digits = digits or destination:match("^([%d%.]+)$")
+  if not digits then
+    return nil, nil
+  end
+  local octets = {}
+  for octet in digits:gmatch("%d+") do
+    octets[#octets + 1] = octet
+  end
+  -- More than four octets needs no check of its own: without a written prefix
+  -- the count makes it wider than 32 bits, and with one the network is not an
+  -- address.
+  local count = #octets
+  if count < 1 then
+    return nil, nil
+  end
+  local prefix = written and tonumber(written) or count * 8
+  for index = count + 1, 4 do
+    octets[index] = "0"
+  end
+  local network = table.concat(octets, ".")
+  if prefix > 32 or not parse.ipToInt(network) then
+    return nil, nil
+  end
+  return network, prefix
+end
+
+--- Which interface a packet to this address leaves by, and how wide the route
+--- is that sends it there.
+---
+--- The longest prefix that covers it wins, which is the rule the kernel uses
+--- and the reason this cannot be a search for one line: on 10.11.2026 a tunnel
+--- was up with host routes to its resolvers and nothing wider, so every other
+--- address behind it matched only `default` and left by the Wi-Fi. Between two
+--- rows of the same length the first one in the table is taken, as `netstat`
+--- prints the one in use first.
+---
+--- Every interface counts here, unlike in `routes.parse`: the answer that
+--- matters most is the one that is not a tunnel. Two kinds of row do not:
+---
+--- - Rows below `Internet6:`. The adapter hands over both families in one
+---   string, and the IPv6 table has `default` rows of its own, one per tunnel
+---   on this machine (`default fe80::%utun0 UGcIg utun0`). Read as IPv4, any of
+---   them is a route to everything, and on a machine with no IPv4 default it
+---   would have been the answer.
+--- - Scoped rows, the ones flagged `I`. They serve traffic already bound to
+---   their interface and are not what an ordinary packet is routed by.
+--- @param output string `netstat -rn`
+--- @param address string
+--- @return string|nil interface name, nil when nothing covers the address
+--- @return number|nil the prefix length of the route that won, 0 for `default`
+function routes.interfaceFor(output, address)
+  if type(output) ~= "string" or not parse.ipToInt(address) then
+    return nil, nil
+  end
+  local best, bestPrefix
+  local inet = true
+  for line in output:gmatch("[^\n]+") do
+    if line:match("^Internet6:") then
+      inet = false
+    elseif line:match("^Internet:") then
+      inet = true
+    elseif inet then
+      local destination, _, flags, netif = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+      local network, prefix = routes.prefixOf(destination)
+      local scoped = flags ~= nil and flags:find("I", 1, true) ~= nil
+      local covers = network and not scoped and parse.inCidr(network .. "/" .. prefix, address)
+      if covers and (not bestPrefix or prefix > bestPrefix) then
+        best, bestPrefix = netif, prefix
+      end
+    end
+  end
+  return best, bestPrefix
+end
+
+--- Does the tunnel carry what it is there for?
+---
+--- A probe says a tunnel exists: an address on a live interface
+--- ([ADR 0022](../../docs/adr/0022-a-probe-reads-the-interface-not-just-the-address.md)).
+--- This asks the question somebody actually has, which is whether an address
+--- on the far side leaves through it
+--- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+---
+--- The other two answers say what happened instead, which is what decides
+--- whether reconnecting can help: an address that leaves by `default` has
+--- nothing in the way of the route a fresh tunnel would install, and one that
+--- leaves by a narrower route belongs to whatever installed that one.
+--- @param output string `netstat -rn`
+--- @param address string the address that has to go through the tunnel
+--- @param interfaces table the interfaces the probe found the tunnel on
+--- @return boolean carried
+--- @return string|nil the interface it leaves by instead, nil when nothing routes it
+--- @return number|nil the prefix length of that route, 0 for `default`
+function routes.carries(output, address, interfaces)
+  local via, prefix = routes.interfaceFor(output, address)
+  for _, name in ipairs(interfaces or {}) do
+    if via == name then
+      return true, via, prefix
+    end
+  end
+  return false, via, prefix
+end
+
+--- Seconds a tunnel may be up without its route before anybody is told.
+---
+--- A tunnel arrives address first and routes second, so every connect passes
+--- through this condition on its way to working. On 10.11.2026 the routes
+--- followed the address within two seconds, both times, and the tunnel that
+--- never got them stood for three minutes and twenty seconds. Twenty seconds is
+--- far from both.
+routes.UNROUTED_SETTLE = 20
+
+--- Which of the tunnels that carry nothing to show, and which to announce.
+---
+--- The memory is the caller's, keyed by connection. A connection that is no
+--- longer in `found` is forgotten, so the next time it happens is a new
+--- occurrence with its own settling time and its own announcement, and one that
+--- stays is announced once and shown for as long as it lasts.
+--- @param found table map of profile id to the address it does not reach
+--- @param memory table owned by the caller
+--- @param now number seconds
+--- @return table shown map of id to address, table news list of ids, sorted
+function routes.unrouted(found, memory, now)
+  found = found or {}
+  for id in pairs(memory) do
+    if not found[id] then
+      memory[id] = nil
+    end
+  end
+  local shown, news = {}, {}
+  for id, address in pairs(found) do
+    local entry = memory[id] or { since = now }
+    memory[id] = entry
+    if now - entry.since >= routes.UNROUTED_SETTLE then
+      shown[id] = address
+      if not entry.told then
+        entry.told = true
+        news[#news + 1] = id
+      end
+    end
+  end
+  table.sort(news)
+  return shown, news
 end
 
 --- Is this interface one that cannot carry anything right now?

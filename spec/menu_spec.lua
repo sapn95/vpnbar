@@ -144,6 +144,104 @@ describe("menu.build", function()
   end)
 end)
 
+describe("menu, a tunnel that carries nothing", function()
+  local unrouted = { gp = { address = "10.0.0.10", via = "en0", unclaimed = true } }
+
+  it("shows it as its own thing and leaves every other state as read", function()
+    local states = { gp = "connected", aws = "connected", old = "login" }
+    assert.same({ gp = "unrouted", aws = "connected", old = "login" }, menu.shown(states, unrouted))
+    -- The table that decisions are made from is not the one that was changed.
+    assert.equals("connected", states.gp)
+    assert.same(states, menu.shown(states, nil))
+    assert.same({}, menu.shown(nil, unrouted))
+  end)
+
+  it("only ever relabels a connection that reads connected", function()
+    -- A finding that outlived its tunnel by one refresh must not paint a
+    -- connection that is down as a tunnel.
+    assert.same({ gp = "disconnected" }, menu.shown({ gp = "disconnected" }, unrouted))
+    assert.same({ gp = "connecting" }, menu.shown({ gp = "connecting" }, unrouted))
+  end)
+
+  it("does not let it speak for the menu while something else is really up", function()
+    assert.equals("connected", menu.indicator({ gp = "unrouted", aws = "connected" }))
+    assert.equals("connecting", menu.indicator({ gp = "unrouted", aws = "connecting" }))
+    assert.equals("unrouted", menu.indicator({ gp = "unrouted", aws = "login" }))
+    assert.equals("unrouted", menu.indicator({ gp = "unrouted", aws = "disconnected" }))
+    assert.equals("unrouted", menu.indicator({ gp = "unrouted", aws = "unknown" }))
+  end)
+
+  it("is not counted among the tunnels that are up", function()
+    assert.equals(1, menu.connectedCount(menu.shown({ gp = "connected", aws = "connected" }, unrouted)))
+    assert.equals("⊘", menu.title(menu.shown({ gp = "connected" }, unrouted)))
+    assert.equals("up, but carries nothing", menu.label("unrouted"))
+  end)
+
+  it("says so on the row, with the address, whatever kind of row it is", function()
+    local plain = config("gp")
+    local row = menu.build(plain, { gp = "connected" }, nil, nil, nil, unrouted)[1]
+    assert.equals("⊘  GP", row.title)
+    assert.equals("GP — up, but carries nothing. 10.0.0.10 leaves by en0, not through it.", row.tooltip)
+    -- Still a tunnel that is up: the click on it is the disconnect.
+    assert.same({ kind = "disconnect", id = "gp" }, row.action)
+
+    local protected = assert(store.update(plain, "gp", { protected = true }))
+    row = menu.build(protected, { gp = "connected" }, nil, nil, nil, unrouted)[1]
+    assert.equals("⊘  GP", row.title)
+    assert.equals(
+      "GP — up, but carries nothing, protected from disconnecting. 10.0.0.10 leaves by en0, not through it.",
+      row.tooltip
+    )
+    assert.is_true(row.disabled)
+  end)
+
+  it("leaves a row alone that has its route, or is down", function()
+    local cfg = config("gp", "aws")
+    local items = menu.build(cfg, { gp = "connected", aws = "connected" }, nil, nil, nil, unrouted)
+    assert.is_truthy(find(items, "⊘  GP"))
+    assert.equals("AWS — connected", find(items, "●  AWS").tooltip)
+    local down = assert(store.update(config("gp"), "gp", { protected = true }))
+    local row = menu.build(down, { gp = "login" }, nil, nil, nil, unrouted)[1]
+    assert.equals("○  GP", row.title)
+    assert.equals("GP — needs your login, protected once it is up", row.tooltip)
+  end)
+
+  it("says where the address goes instead, or that nothing routes it", function()
+    assert.equals(
+      "10.0.0.10 leaves by utun5, not through it.",
+      menu.unroutedWhere({ address = "10.0.0.10", via = "utun5" })
+    )
+    assert.equals("Nothing routes 10.0.0.10.", menu.unroutedWhere({ address = "10.0.0.10" }))
+  end)
+
+  it("says what a first renew did, either way", function()
+    local finding = { address = "10.0.0.10", via = "en0" }
+    assert.equals(
+      "GP is up, but 10.0.0.10 leaves by en0, not through it. Reconnecting it so that it installs its own routes,"
+        .. " which may ask for your login.",
+      menu.renewNotice("GP", finding, true)
+    )
+    assert.equals(
+      "GP is up, but 10.0.0.10 leaves by en0, not through it. Reconnecting it did not work: GP has no menu-bar item."
+        .. " vpnbar tries again every 30 seconds for 10 minutes.",
+      menu.renewNotice("GP", finding, false, "GP has no menu-bar item")
+    )
+  end)
+
+  it("says when it has stopped trying", function()
+    assert.equals(
+      "Reconnecting GP did not work for 10 minutes: GP has no menu-bar item."
+        .. " vpnbar leaves it as it is until it carries again, or for an hour.",
+      menu.renewGaveUp("GP", "GP has no menu-bar item")
+    )
+  end)
+
+  it("still takes it down with everything else", function()
+    local plan = menu.disconnectAll(config("gp"), { gp = "connected" })
+    assert.equals(1, #plan)
+  end)
+end)
+
 describe("menu.build, protected profiles", function()
   -- Some tunnels are policy, not preference: an always-on corporate VPN must
   -- still be visible and must never be offered a disconnect.

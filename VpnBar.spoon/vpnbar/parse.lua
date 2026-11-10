@@ -217,6 +217,37 @@ function parse.probeState(output, probe)
   return "disconnected", nil
 end
 
+--- Every live interface the probe accepts, by name and in order.
+---
+--- All of them rather than the first: `ifconfigInterfaces` is a table keyed by
+--- name, so "the first" is whichever one `pairs` happened to hand over, and a
+--- probe whose range two tunnels share would answer differently from one
+--- refresh to the next. A range only this VPN hands out has one entry here,
+--- which is what the probe is for
+--- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+--- @param output string ifconfig output
+--- @param probe table { cidr = string, interface = string|nil }
+--- @return table list of interface names, sorted
+function parse.probeInterfaces(output, probe)
+  local names = {}
+  if type(probe) ~= "table" or type(probe.cidr) ~= "string" then
+    return names
+  end
+  local wanted = probe.interface
+  for name, interface in pairs(parse.ifconfigInterfaces(output)) do
+    if interface.up and (not wanted or name:sub(1, #wanted) == wanted) then
+      for _, address in ipairs(interface.addresses) do
+        if parse.inCidr(probe.cidr, address) then
+          names[#names + 1] = name
+          break
+        end
+      end
+    end
+  end
+  table.sort(names)
+  return names
+end
+
 --- Does GlobalProtect's own event log say the session has ended?
 ---
 --- The agent writes one line per event to a world-readable log. A session that

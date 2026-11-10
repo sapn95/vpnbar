@@ -1333,3 +1333,268 @@ describe("autoconnect.plan, nobody at the machine, the rules that still hold", f
     assert.is_nil(autoconnect.plan(cfg, both, {}, 1000, { preferred = "s", switching = switching, locked = true }))
   end)
 end)
+
+describe("autoconnect.plan, a tunnel that carries nothing", function()
+  -- Measured 10.11.2026: GlobalProtect came up while the AWS tunnel held the
+  -- private aggregates, skipped every route it found taken, and carried nothing
+  -- once the AWS tunnel had gone (ADR 0047).
+  local function pair(settings)
+    return assert(store.normalise({
+      settings = settings or { exclusive = true, fallback = true },
+      profiles = {
+        {
+          id = "gp",
+          name = "GP",
+          backend = "globalprotect",
+          app = "GlobalProtect",
+          autoconnect = true,
+          protected = true,
+          fallback = "aws",
+          order = 10,
+        },
+        {
+          id = "aws",
+          name = "AWS",
+          backend = "awsvpn",
+          app = "AWS VPN Client",
+          row = "w",
+          autoconnect = true,
+          order = 20,
+        },
+      },
+    }))
+  end
+  local defaultOnly = { gp = { address = "10.0.0.10", via = "en0", unclaimed = true } }
+  local function context(overrides)
+    local base = { idle = 0, unrouted = defaultOnly, renews = {} }
+    for key, value in pairs(overrides or {}) do
+      base[key] = value
+    end
+    return base
+  end
+  local alone = { gp = "connected", aws = "login" }
+
+  it("takes it down so that it comes back with routes of its own", function()
+    assert.same(
+      { id = "gp", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(pair(), alone, {}, 1000, context())
+    )
+  end)
+
+  it("supersedes the tunnel that holds the routes first, and renews only after", function()
+    local both = { gp = "connected", aws = "connected" }
+    local beside = { gp = { address = "10.0.0.10", via = "utun5", unclaimed = false } }
+    assert.same(
+      { id = "aws", verb = "supersede", reason = "outranked by gp" },
+      autoconnect.plan(pair(), both, {}, 1000, context({ unrouted = beside }))
+    )
+    -- With one at a time off nothing is superseded, and the route is claimed by
+    -- the other tunnel, so a reconnect would be shadowed again.
+    local off = pair({ exclusive = false, fallback = true })
+    assert.is_nil(autoconnect.plan(off, both, {}, 1000, context({ unrouted = beside })))
+  end)
+
+  it("does nothing while any other tunnel is up or on its way", function()
+    local off = pair({ exclusive = false, fallback = true })
+    assert.is_nil(autoconnect.plan(off, { gp = "connected", aws = "connected" }, {}, 1000, context()))
+    assert.is_nil(autoconnect.plan(off, { gp = "connected", aws = "connecting" }, {}, 1000, context()))
+    assert.same(
+      { id = "gp", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(off, { gp = "connected", aws = "disconnected" }, {}, 1000, context())
+    )
+  end)
+
+  it("leaves it where a narrower route than the default covers the address", function()
+    -- That route would shadow the reconnected tunnel's exactly as the old one did.
+    local lan = { gp = { address = "10.0.0.10", via = "en0", unclaimed = false } }
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ unrouted = lan })))
+    local nothing = { gp = { address = "10.0.0.10", unclaimed = false } }
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ unrouted = nothing })))
+  end)
+
+  it("needs a finding, and a tunnel that is up", function()
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ unrouted = {} })))
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, { idle = 0 }))
+    -- Down already: the ordinary loop brings it up, which is not a renew.
+    local plan = autoconnect.plan(pair(), { gp = "login", aws = "login" }, {}, 1000, context())
+    assert.not_equals("renew", plan and plan.verb)
+  end)
+
+  it("renews once an incident, not on every pass", function()
+    local now = 5000
+    local since = now - autoconnect.RENEW_COOLDOWN + 1
+    local just = context({ renews = { gp = { since = since, at = since } } })
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, now, just))
+    since = now - autoconnect.RENEW_COOLDOWN
+    local spent = context({ renews = { gp = { since = since, at = since } } })
+    assert.same(
+      { id = "gp", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(pair(), alone, {}, now, spent)
+    )
+    -- Another connection's renew is not this one's.
+    local other = context({ renews = { aws = { since = now, at = now } } })
+    assert.equals("renew", autoconnect.plan(pair(), alone, {}, now, other).verb)
+  end)
+
+  it("only renews a connection it would bring back up", function()
+    -- Marked to autoconnect, or the one somebody switched to. Anything else
+    -- would be taken down and left there.
+    local unmarked = assert(store.update(pair(), "gp", { autoconnect = false }))
+    assert.is_nil(autoconnect.plan(unmarked, alone, {}, 1000, context()))
+    assert.same(
+      { id = "gp", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(unmarked, alone, {}, 1000, context({ preferred = "gp" }))
+    )
+  end)
+
+  it("takes nothing down while nobody is there, even a connection a command reaches", function()
+    -- A command needs no window, so only the rule of ADR 0042 holds this one.
+    local cfg = assert(store.normalise({
+      profiles = {
+        { id = "s", name = "S", backend = "scutil", service = "S", autoconnect = true, protected = true, order = 10 },
+      },
+    }))
+    local finding = { s = { address = "10.0.0.10", via = "en0", unclaimed = true } }
+    assert.is_nil(autoconnect.plan(cfg, { s = "connected" }, {}, 1000, context({ unrouted = finding, locked = true })))
+    assert.same(
+      { id = "s", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(cfg, { s = "connected" }, {}, 1000, context({ unrouted = finding }))
+    )
+  end)
+
+  it("does nothing while nobody is there, or while the client cannot be pressed", function()
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ locked = true })))
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ appRunning = { GlobalProtect = false } })))
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ quitByHand = { GlobalProtect = true } })))
+    assert.is_nil(autoconnect.plan(pair(), alone, {}, 1000, context({ paused = true })))
+  end)
+
+  it("leaves it alone while a switch is pressing for another connection", function()
+    local switch = { preferred = "aws", switching = { id = "aws", since = 1000 } }
+    local plan = autoconnect.plan(pair(), alone, {}, 1000, context(switch))
+    assert.same({ id = "aws", verb = "connect", reason = "switch" }, plan)
+    -- Once that switch has run out of patience, it is this connection's turn.
+    local later = 1000 + autoconnect.SWITCH_PATIENCE
+    local spent = autoconnect.plan(pair(), alone, { aws = { attempts = 1, lastTry = later } }, later, context(switch))
+    assert.same({ id = "gp", verb = "renew", reason = "carries nothing" }, spent)
+  end)
+
+  it("renews the connection a switch is pressing for, once the other one is gone", function()
+    local switching = { id = "gp", since = 1000 }
+    local both = { gp = "connected", aws = "connected" }
+    local beside = { gp = { address = "10.0.0.10", via = "utun5", unclaimed = false } }
+    assert.same(
+      { id = "aws", verb = "supersede", reason = "switched to gp" },
+      autoconnect.plan(pair(), both, {}, 1010, context({ unrouted = beside, preferred = "gp", switching = switching }))
+    )
+    assert.same(
+      { id = "gp", verb = "renew", reason = "carries nothing" },
+      autoconnect.plan(pair(), alone, {}, 1040, context({ preferred = "gp", switching = switching }))
+    )
+  end)
+
+  it("brings it back promptly once it is down, whoever is typing", function()
+    -- The cached login finished by itself on 10.11.2026; holding it for a pause
+    -- in the typing would leave the machine on nothing meanwhile.
+    local down = { gp = "login", aws = "login" }
+    local busy = { idle = 5, renews = { gp = { since = 1000, at = 1000 } } }
+    assert.same({ id = "gp", verb = "connect", reason = "renew" }, autoconnect.plan(pair(), down, {}, 1010, busy))
+    -- The same machine with no renew behind it waits for a quiet moment (ADR 0029).
+    assert.is_nil(autoconnect.plan(pair(), down, {}, 1010, { idle = 5 }))
+  end)
+
+  it("presses on the switch's cadence, and for as long as a switch would", function()
+    local down = { gp = "login", aws = "login" }
+    local busy = { idle = 5, renews = { gp = { since = 1000, at = 1000 } } }
+    local memory = { gp = { attempts = 1, lastTry = 1010 } }
+    assert.is_nil(autoconnect.plan(pair(), down, memory, 1010 + autoconnect.SWITCH_RETRY - 1, busy))
+    assert.same(
+      { id = "gp", verb = "connect", reason = "renew" },
+      autoconnect.plan(pair(), down, memory, 1010 + autoconnect.SWITCH_RETRY, busy)
+    )
+    assert.is_true(autoconnect.renewing("gp", busy, 1000 + autoconnect.SWITCH_PATIENCE - 1))
+    assert.is_false(autoconnect.renewing("gp", busy, 1000 + autoconnect.SWITCH_PATIENCE))
+    assert.is_false(autoconnect.renewing("aws", busy, 1000))
+    assert.is_false(autoconnect.renewing("gp", nil, 1000))
+    assert.is_false(autoconnect.renewing("gp", { renews = { gp = { since = 1000, at = "soon" } } }, 1000))
+    assert.is_false(autoconnect.renewing("gp", { renews = { gp = "soon" } }, 1000))
+    -- A press that was refused took nothing down, so there is nothing owed back.
+    local refused = { renews = { gp = { since = 1000, at = 1000, failed = true } } }
+    assert.is_false(autoconnect.renewing("gp", refused, 1010))
+    -- Counted from the latest press, not the first.
+    local retried = { renews = { gp = { since = 1000, at = 1090 } } }
+    assert.is_true(autoconnect.renewing("gp", retried, 1000 + autoconnect.SWITCH_PATIENCE + 10))
+  end)
+
+  it("calls a press a switch when it is one, even right after a renew", function()
+    local down = { gp = "login", aws = "login" }
+    local both = {
+      idle = 5,
+      renews = { gp = { since = 1000, at = 1000 } },
+      preferred = "gp",
+      switching = { id = "gp", since = 1000 },
+    }
+    assert.same({ id = "gp", verb = "connect", reason = "switch" }, autoconnect.plan(pair(), down, {}, 1010, both))
+  end)
+
+  it("starts nothing else while the renewed connection is on its way back", function()
+    -- One unanswered press used to be enough for the stand-in to come up
+    -- (`ATTEMPTS_BEFORE_FALLBACK`), and a stand-in up meanwhile holds the very
+    -- routes the renew was for. The stand-in reconnects without a window, so
+    -- nothing else would have held it back.
+    local down = { gp = "login", aws = "disconnected" }
+    local busy = { idle = 0, renews = { gp = { since = 1000, at = 1000 } } }
+    local memory = { gp = { attempts = 3, lastTry = 1005 } }
+    assert.is_nil(autoconnect.plan(pair(), down, memory, 1010, busy))
+    -- Once a switch would have stopped asking, the ordinary rules are back.
+    local later = 1000 + autoconnect.SWITCH_PATIENCE
+    memory.gp.lastTry = later - 5
+    assert.same(
+      { id = "aws", verb = "connect", reason = "fallback" },
+      autoconnect.plan(pair(), down, memory, later, busy)
+    )
+    -- And none of it applies once the renewed connection is up again: with one
+    -- at a time off, the other connection marked to autoconnect comes up as it
+    -- always would.
+    local off = pair({ exclusive = false, fallback = true })
+    local up = { gp = "connected", aws = "disconnected" }
+    assert.same(
+      { id = "aws", verb = "connect", reason = "wanted" },
+      autoconnect.plan(off, up, {}, 1010, context({ unrouted = {}, renews = busy.renews }))
+    )
+  end)
+end)
+
+describe("autoconnect.renewDue", function()
+  local RETRY, PATIENCE, COOLDOWN = autoconnect.SWITCH_RETRY, autoconnect.SWITCH_PATIENCE, autoconnect.RENEW_COOLDOWN
+
+  it("is due when nothing has been tried", function()
+    assert.is_true(autoconnect.renewDue(nil, 1000))
+    assert.is_true(autoconnect.renewDue({}, 1000))
+    assert.is_true(autoconnect.renewDue("yesterday", 1000))
+  end)
+
+  it("waits out the hour after a press that went through", function()
+    local entry = { since = 1000, at = 1000 }
+    assert.is_false(autoconnect.renewDue(entry, 1000 + COOLDOWN - 1))
+    assert.is_true(autoconnect.renewDue(entry, 1000 + COOLDOWN))
+  end)
+
+  it("tries a refused press again on the switch's cadence while a switch would", function()
+    local entry = { since = 1000, at = 1060, failed = true }
+    assert.is_false(autoconnect.renewDue(entry, 1060 + RETRY - 1))
+    assert.is_true(autoconnect.renewDue(entry, 1060 + RETRY))
+    -- Without a latest press on record the first one counts.
+    assert.is_true(autoconnect.renewDue({ since = 1000, failed = true }, 1000 + RETRY))
+    assert.is_false(autoconnect.renewDue({ since = 1000, failed = true }, 1000 + RETRY - 1))
+  end)
+
+  it("stops trying once a switch would have, and waits for the hour from the first", function()
+    -- The latest try is old enough for another one, and the patience is spent.
+    local entry = { since = 1000, at = 1000 + PATIENCE - RETRY - 1, failed = true }
+    assert.is_true(autoconnect.renewDue(entry, 1000 + PATIENCE - 1))
+    assert.is_false(autoconnect.renewDue(entry, 1000 + PATIENCE))
+    assert.is_false(autoconnect.renewDue(entry, 1000 + COOLDOWN - 1))
+    assert.is_true(autoconnect.renewDue(entry, 1000 + COOLDOWN))
+  end)
+end)

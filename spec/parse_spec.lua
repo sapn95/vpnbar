@@ -279,3 +279,44 @@ describe("parse.globalprotectNeedsLogin", function()
     assert.is_false(parse.globalprotectNeedsLogin(nil))
   end)
 end)
+
+describe("parse.probeInterfaces", function()
+  local probe = { cidr = "10.0.0.0/8", interface = "utun" }
+
+  it("names the live interface the probe accepts", function()
+    assert.same({ "utun4" }, parse.probeInterfaces(IFCONFIG, probe))
+  end)
+
+  it("names none for a tunnel that is down, or not running, or a probe that cannot answer", function()
+    assert.same({}, parse.probeInterfaces(IFCONFIG_STALE, probe))
+    assert.same({}, parse.probeInterfaces(IFCONFIG_NOT_RUNNING, probe))
+    assert.same({}, parse.probeInterfaces(IFCONFIG, nil))
+    assert.same({}, parse.probeInterfaces(IFCONFIG, {}))
+    assert.same({}, parse.probeInterfaces(IFCONFIG, { cidr = "192.168.0.0/16", interface = "utun" }))
+  end)
+
+  it("names every one that matches, the same way on every read", function()
+    -- `pairs` hands the interfaces over in no defined order, which is why
+    -- "the first one that matches" is not an answer.
+    local function tunnel(name, ...)
+      local lines = { name .. ": flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400" }
+      for _, address in ipairs({ ... }) do
+        lines[#lines + 1] = ("\tinet %s --> %s netmask 0xffffffff"):format(address, address)
+      end
+      return table.concat(lines, "\n") .. "\n"
+    end
+    local several = IFCONFIG .. tunnel("utun9", "10.11.13.13") .. tunnel("utun2", "10.11.12.99", "10.11.12.98")
+    assert.same({ "utun2", "utun4", "utun9" }, parse.probeInterfaces(several, probe))
+    -- Eight more, so that `pairs` handing them over in order by chance is one
+    -- read in millions rather than one in six.
+    for _, n in ipairs({ 17, 12, 15, 11, 18, 13, 16, 14 }) do
+      several = several .. tunnel("utun" .. n, "10.11.12." .. n)
+    end
+    assert.same(
+      { "utun11", "utun12", "utun13", "utun14", "utun15", "utun16", "utun17", "utun18", "utun2", "utun4", "utun9" },
+      parse.probeInterfaces(several, probe)
+    )
+    -- Without an interface prefix the probe looks everywhere, as `probeState` does.
+    assert.same({ "en0" }, parse.probeInterfaces(IFCONFIG, { cidr = "192.168.0.0/16" }))
+  end)
+end)
