@@ -328,6 +328,17 @@ end
 autoconnect.SWITCH_PATIENCE = 600
 autoconnect.SWITCH_RETRY = 30
 
+--- Seconds from the first renew of an incident before the next incident may
+--- have one.
+---
+--- A renew costs a login: GlobalProtect logs the session out on a disconnect,
+--- and the connect after it starts a fresh one. One that did not help says the
+--- cause is something a reconnect does not reach, and asking again every few
+--- minutes would be a login window on a loop. The record is dropped as soon as
+--- the connection carries again, so a later incident gets its own renew at once
+--- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+autoconnect.RENEW_COOLDOWN = 3600
+
 --- Is this connection the one a switch is still pressing for?
 --- @param id string
 --- @param context table|nil { switching = { id = string, since = number } }
@@ -339,6 +350,57 @@ function autoconnect.switching(id, context, now)
     return false
   end
   return now - switching.since < autoconnect.SWITCH_PATIENCE
+end
+
+--- What the adapter keeps about a connection's renew, one record per incident:
+--- `since` is the first try, `at` the latest, and `failed` whether the latest
+--- press came back refused.
+
+--- May this connection be renewed now?
+---
+--- Once an incident, the way a switch presses: a press that was refused (the
+--- panel was not there, or offered no Disconnect) is tried again on the
+--- switch's cadence for as long as a switch keeps asking, because a renew that
+--- never happened has cost nobody a login yet. After that, and after any press
+--- that went through, the next one waits for `RENEW_COOLDOWN` from the first.
+--- @param entry table|nil { since = number, at = number, failed = boolean }
+--- @param now number
+--- @return boolean
+function autoconnect.renewDue(entry, now)
+  if type(entry) ~= "table" or type(entry.since) ~= "number" then
+    return true
+  end
+  if entry.failed and now - entry.since < autoconnect.SWITCH_PATIENCE then
+    local at = type(entry.at) == "number" and entry.at or entry.since
+    return now - at >= autoconnect.SWITCH_RETRY
+  end
+  return now - entry.since >= autoconnect.RENEW_COOLDOWN
+end
+
+--- Has this connection been taken down to renew it, recently enough that it is
+--- still owed its way back?
+---
+--- A renew takes away a tunnel nobody asked to lose, so the connect after it is
+--- pressed for the way a switch is: on the switch's cadence, not held for a
+--- quiet moment while somebody types, and with nothing else started meanwhile.
+--- Measured on 10.11.2026, the login after GlobalProtect's disconnect finished
+--- by itself from the cached identity, with the portal answering half a second
+--- after it was asked. Holding that for a pause in the typing would leave the
+--- machine on nothing for as long as the typing lasts, and letting the stand-in
+--- come up meanwhile would put back the very routes the renew was for. For as
+--- long as a switch would press, and no longer
+--- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+--- @param id string
+--- @param context table|nil { renews = { [id] = { since, at, failed } } }
+--- @param now number
+--- @return boolean
+function autoconnect.renewing(id, context, now)
+  local renews = context and context.renews
+  local entry = type(renews) == "table" and renews[id] or nil
+  if type(entry) ~= "table" or entry.failed or type(entry.at) ~= "number" then
+    return false
+  end
+  return now - entry.at < autoconnect.SWITCH_PATIENCE
 end
 
 --- The ranking autoconnect works from: the order in the menu, with one
@@ -382,7 +444,9 @@ end
 --- @param context table|nil what the adapter knows about the person, see
 ---   `wouldInterrupt`, plus `preferred`: the id somebody switched to, see
 ---   `ranked`, plus `appRunning` and `quitByHand`, see `mayStart`
---- @return table|nil { id, verb = "connect"|"disconnect"|"supersede", reason }
+---   plus `unrouted`, the tunnels that have been up and carrying nothing for
+---   long enough to count, and `renews`, see `renewDue`
+--- @return table|nil { id, verb = "connect"|"disconnect"|"supersede"|"renew", reason }
 function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
   -- Before anything else looks at them, so the one-at-a-time rule reads a
@@ -482,6 +546,56 @@ function autoconnect.plan(cfg, states, memory, now, context)
     end
   end
 
+  -- A tunnel that is up and carries nothing is taken down so that it comes back
+  -- with routes of its own. Measured on 10.11.2026: GlobalProtect installs its
+  -- routes once, as the tunnel comes up, and skips every one another tunnel
+  -- already holds (`Route 10 shadows access route 10.0.0.0/8`). The supersede
+  -- above then takes that other tunnel down, its routes go with it, and nothing
+  -- installs them again. Every switch from AWS and every return from the
+  -- fallback ends there
+  -- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+  --
+  -- After the supersede, never instead of it: only with every other tunnel down,
+  -- so the reconnect installs routes nobody holds. Only when nothing but the
+  -- default route covers the address: a narrower route on somebody's network
+  -- either shadows the new one the way the old tunnel did or, being longer,
+  -- wins over it anyway. Only a connection this planner brings back up, which
+  -- is one marked to autoconnect or the one somebody switched to: anything
+  -- else would be taken down and left there. Not while a switch is pressing
+  -- for another connection, not while nobody is there, and once per incident
+  -- (`renewDue`): a renew is a login, and one that did not help will not help
+  -- on the next pass either.
+  if not away then
+    local unrouted = context and context.unrouted or {}
+    local renews = context and context.renews or {}
+    local switchingTo = context and type(context.switching) == "table" and context.switching.id or nil
+    for _, profile in ipairs(order) do
+      local finding = unrouted[profile.id]
+      local mine = switchingTo == nil
+        or switchingTo == profile.id
+        or not autoconnect.switching(switchingTo, context, now)
+      if
+        states[profile.id] == "connected"
+        and (profile.autoconnect or profile.id == preferred)
+        and finding ~= nil
+        and finding.unclaimed
+        and autoconnect.renewDue(renews[profile.id], now)
+        and mine
+        and autoconnect.mayStartNow(profile, context)
+      then
+        local alone = true
+        for _, other in ipairs(order) do
+          if other.id ~= profile.id and isUp(states[other.id]) then
+            alone = false
+          end
+        end
+        if alone then
+          return { id = profile.id, verb = "renew", reason = "carries nothing" }
+        end
+      end
+    end
+  end
+
   -- Anything that is up has arrived, so its failures are history. Deliberately
   -- not gated on `autoconnect`: a fallback is connected *by* autoconnect without
   -- being marked for it itself, and a record that was never cleared would only
@@ -500,6 +614,16 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- pass, and a stand-in coming up for a switch that is failing is the
   -- opposite of what was asked for.
   local pressedFor = preferred and autoconnect.switching(preferred, context, now) and preferred or nil
+  -- A renew holds the same line for the connection it took down, until it is
+  -- back: a stand-in that came up meanwhile would hold the routes again, and
+  -- the connection would come back as empty as it went.
+  if pressedFor == nil then
+    for _, profile in ipairs(order) do
+      if pressedFor == nil and states[profile.id] ~= "connected" and autoconnect.renewing(profile.id, context, now) then
+        pressedFor = profile.id
+      end
+    end
+  end
 
   for _, profile in ipairs(order) do
     -- The connection somebody switched to is wanted whether or not it was ever
@@ -534,8 +658,11 @@ function autoconnect.plan(cfg, states, memory, now, context)
         local last = lastTryFor(memory, profile.id)
         local ready = last == nil or (now - last) >= autoconnect.cooldown(attempts)
         -- A switch still being pressed for retries on its own short cadence and
-        -- is not held for a login window: the person asked for exactly that.
-        local pressing = autoconnect.switching(profile.id, context, now)
+        -- is not held for a login window: the person asked for exactly that. So
+        -- does a connection that was just taken down to renew it.
+        local switched = autoconnect.switching(profile.id, context, now)
+        local renewing = autoconnect.renewing(profile.id, context, now)
+        local pressing = switched or renewing
         if pressing then
           ready = last == nil or (now - last) >= autoconnect.SWITCH_RETRY
         end
@@ -552,7 +679,11 @@ function autoconnect.plan(cfg, states, memory, now, context)
           -- stayed on second best. A fallback is there to carry traffic while
           -- the preferred one is unavailable, not to replace the preference.
           if mayStart and ready and (pressing or not autoconnect.wouldInterrupt(state, context)) then
-            return { id = profile.id, verb = "connect", reason = pressing and "switch" or "wanted" }
+            return {
+              id = profile.id,
+              verb = "connect",
+              reason = switched and "switch" or renewing and "renew" or "wanted",
+            }
           end
 
           -- Not ready means this one is inside its cooldown, and that gap is

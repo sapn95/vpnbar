@@ -83,7 +83,7 @@ describe("form.fields", function()
   end)
 
   it("asks a scutil profile for its service", function()
-    assert.same({ "name", "service", "probe.cidr", "probe.interface", "fallback" }, keys("scutil"))
+    assert.same({ "name", "service", "probe.cidr", "probe.interface", "probe.reach", "fallback" }, keys("scutil"))
   end)
 
   it("asks a shell profile for its three commands", function()
@@ -95,6 +95,7 @@ describe("form.fields", function()
       "commands.force",
       "probe.cidr",
       "probe.interface",
+      "probe.reach",
       "fallback",
     }, keys("shell"))
   end)
@@ -102,13 +103,14 @@ describe("form.fields", function()
   it("asks every backend about a probe, after its own fields", function()
     for _, backend in ipairs({ "scutil", "globalprotect", "shell" }) do
       local ordered = keys(backend)
-      assert.equals("probe.cidr", ordered[#ordered - 2])
-      assert.equals("probe.interface", ordered[#ordered - 1])
+      assert.equals("probe.cidr", ordered[#ordered - 3])
+      assert.equals("probe.interface", ordered[#ordered - 2])
+      assert.equals("probe.reach", ordered[#ordered - 1])
     end
   end)
 
   it("has nothing to ask about a backend it does not know", function()
-    assert.same({ "name", "probe.cidr", "probe.interface", "fallback" }, keys("carrier-pigeon"))
+    assert.same({ "name", "probe.cidr", "probe.interface", "probe.reach", "fallback" }, keys("carrier-pigeon"))
   end)
 
   it("marks what may not be left empty", function()
@@ -146,6 +148,20 @@ describe("form.defaults", function()
 end)
 
 describe("form.applies", function()
+  it("asks for an address behind the tunnel only once there is a probe, and suggests none", function()
+    local reach
+    for _, field in ipairs(form.fields("globalprotect")) do
+      if field.key == "probe.reach" then
+        reach = field
+      end
+    end
+    assert.is_false(form.applies(reach, { ["probe.cidr"] = "" }))
+    assert.is_true(form.applies(reach, { ["probe.cidr"] = "10.0.0.0/8" }))
+    -- An address is somebody's own network. There is no default worth guessing.
+    assert.is_nil(reach.default)
+    assert.is_false(reach.required)
+  end)
+
   it("skips the probe interface until there is a probe", function()
     local field = { key = "probe.interface", onlyWith = "probe.cidr" }
     assert.is_false(form.applies(field, { ["probe.cidr"] = "" }))

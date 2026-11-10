@@ -163,6 +163,17 @@ describe("icon.elements", function()
     assert.equals(open, icon.elements("login")[2].endAngle)
   end)
 
+  it("draws a tunnel that carries nothing as a lock that is there and not shut", function()
+    local unrouted = icon.elements("unrouted")
+    local open = icon.shackle(icon.SIZE, true).endAngle
+    -- The body of a tunnel that is up, the shackle of one that is down.
+    assert.equals("fill", unrouted[1].action)
+    assert.equals(open, unrouted[2].endAngle)
+    assert.equals(#icon.elements("connected"), #unrouted)
+    assert.not_same(icon.elements("connected"), unrouted)
+    assert.not_same(icon.elements("disconnected"), unrouted)
+  end)
+
   it("says nothing about the shackle it cannot know", function()
     -- Not knowing is not the same as being down, and an open shackle is the
     -- loudest thing this mark can say.

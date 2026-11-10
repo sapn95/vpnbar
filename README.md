@@ -35,6 +35,7 @@ from login to shutdown
 ├─ ●  Work VPN            → click to disconnect
 ├─ ○  Gateway VPN         → click to connect
 ├─ ◐  GlobalProtect       → working, click to disconnect anyway
+├─ ⊘  Office VPN          → up, but carries nothing
 ├─ ────────────
 ├─ Disconnect everything  → all of them that are not protected
 ├─ Quit every VPN app     → closes the clients, one row per app
@@ -225,7 +226,9 @@ for: asked every thirty seconds while it is down or wants a login, login window
 or not, because that window is the thing you asked for, and nothing else is
 started meanwhile. Once it is up, everything else that is up goes down, whether
 or not *Only one connection at a time* is on. After ten minutes it is an
-ordinary preference again, and vpnbar says so once.
+ordinary preference again, and vpnbar says so once. A switch to a connection
+whose probe names an address to reach is over only once that address goes
+through it ([The probe](#the-probe)).
 
 ## Force disconnect
 
@@ -445,6 +448,32 @@ enough, and a `globalprotect` connection reads `unknown` until you click
 **Refresh now**. That asymmetry is deliberate, and
 [ADR 0003](docs/adr/0003-a-probe-beats-asking-the-app.md) says why.
 
+A probe on its own says that a tunnel exists. Give it one address behind the
+tunnel as well, and vpnbar checks on every refresh that a packet to that address
+leaves through the tunnel's own interface:
+
+```json
+"probe": { "cidr": "10.0.0.0/8", "interface": "utun", "reach": "10.0.0.10" }
+```
+
+Pick an address that only the tunnel's wide routes cover, such as a server you
+use there. Not one of its resolvers: those get host routes of their own, and
+they stay even when the wide routes are missing. Up without the route, the row
+reads `⊘` and *up, but carries nothing*, the mark keeps its filled body and
+opens its shackle, and a notification names the interface the address leaves
+by instead.
+
+On 10.11.2026 the cause was a tunnel that came up while another one held the
+same routes. GlobalProtect installs its routes once, as the tunnel comes up, and
+skips every one already routed elsewhere, so when the other tunnel went it was
+left with nothing. vpnbar then renews it: it takes the tunnel down once and brings it
+straight back, which costs a login, usually one the client finishes by itself.
+It does that only for a connection marked to connect on its own or one you
+switched to, only with every other tunnel down, only when nothing but the
+default route covers the address, only while somebody is at the machine, and at
+most once an hour unless the tunnel carries again in between
+([ADR 0047](docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+
 ## Install
 
 ```bash
@@ -567,12 +596,14 @@ menu:
   with the application in the background: the chooser opens, its highlight
   moves under the arrow keys, and the selection sticks. The state comes from
   the client's own log, and the helper that reads it has a suite of its own.
-- **Not yet exercised against a live tunnel.** Three write paths: the click
-  that disconnects GlobalProtect, the Disconnect inside an AWS connection's
-  block, and the Connect that follows the chooser. That last keystroke starts a
-  real session and a SAML login, so it was left for the first real use rather
-  than tried on a working machine to see what happens. Every read path is
-  proved.
+- **Proved on 10.11.2026.** The click that disconnects GlobalProtect:
+  **Disconnect everything** pressed it at 23:15:02, and the agent logged `User
+  disconnecting tunnel starts` a second later.
+- **Not yet exercised against a live tunnel.** Two write paths: the Disconnect
+  inside an AWS connection's block, and the Connect that follows the chooser.
+  That last keystroke starts a real session and a SAML login, so it was left
+  for the first real use rather than tried on a working machine to see what
+  happens. Every read path is proved.
 - **Deliberately not done.** Nothing here presses *Disable*: on a GlobalProtect
   panel that is a different action with a different meaning, and this menu
   cannot undo it.

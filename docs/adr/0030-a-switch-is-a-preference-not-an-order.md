@@ -1,6 +1,8 @@
 # 0030 — A switch is a preference, not an order
 
-**Status:** accepted, 2026-09-20.
+**Status:** accepted, 2026-09-20. Amended by
+[ADR 0047](0047-a-tunnel-that-carries-nothing.md): a switch is over once its
+target carries, not once it reads `connected`.
 
 ## The decision
 

@@ -116,6 +116,22 @@ function store.freeId(cfg, name)
   return candidate
 end
 
+local function isAddress(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  local octets = { value:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+  if #octets ~= 4 then
+    return false
+  end
+  for _, octet in ipairs(octets) do
+    if tonumber(octet) > 255 then
+      return false
+    end
+  end
+  return true
+end
+
 local function validateProbe(probe)
   if probe == nil then
     return true
@@ -128,6 +144,11 @@ local function validateProbe(probe)
   end
   if probe.interface ~= nil and not isNonEmptyString(probe.interface) then
     return false, "probe.interface must be an interface name prefix"
+  end
+  -- One address, not a name and not a block: the question asked of it is which
+  -- interface a packet to it leaves by, and only an address has one answer.
+  if probe.reach ~= nil and not isAddress(probe.reach) then
+    return false, "probe.reach must be one IPv4 address such as 10.0.0.10"
   end
   return true
 end

@@ -12,6 +12,7 @@
 ---   panel(app)           -> state             read that panel's state text
 
 local parse = require("vpnbar.parse")
+local routes = require("vpnbar.routes")
 
 local backends = {}
 
@@ -524,7 +525,14 @@ end
 ---
 --- `supersede` is deliberately not a verb any menu item produces. Every button
 --- goes on being refused, so protection still means what the menu says it means.
-backends.PROTECTED_VERBS = { connect = true, restart = true, supersede = true, quit = true, standdown = true }
+---
+--- `renew` is the planner's as well: a tunnel that is up and carries nothing,
+--- taken down so that the connect that follows installs its routes. It ends with
+--- the tunnel up, which is the reason a restart is allowed here too
+--- ([ADR 0034](../../docs/adr/0034-a-protected-connection-keeps-its-repair.md),
+--- [ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+backends.PROTECTED_VERBS =
+  { connect = true, restart = true, supersede = true, renew = true, quit = true, standdown = true }
 
 --- The verbs that act on an application rather than on a tunnel. They are only
 --- allowed on a protected connection where the application is not the tunnel.
@@ -560,6 +568,31 @@ function backends.status(profile, runtime)
   end
   local ok, state = pcall(backend.status, profile, runtime)
   return (ok and parse.STATES[state] and state) or "unknown"
+end
+
+--- Does a tunnel that is up carry the address it was given to reach?
+---
+--- Three answers, and the third is the common one. `nil` means nobody can say:
+--- the profile names no address, or its probe does not find a tunnel, and a
+--- tunnel that is not there has no routes to be missing. `false` is the finding:
+--- the interface is up, the address is on it, and a packet to the far side
+--- leaves by something else
+--- ([ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
+--- @param profile table
+--- @param runtime table
+--- @return boolean|nil carried
+--- @return string|nil the interface the address leaves by instead, see `routes.carries`
+--- @return number|nil the prefix length of that route
+function backends.carries(profile, runtime)
+  local probe = type(profile) == "table" and profile.probe or nil
+  if type(probe) ~= "table" or type(probe.reach) ~= "string" then
+    return nil, nil, nil
+  end
+  local interfaces = parse.probeInterfaces(runtime.ifconfig(), probe)
+  if #interfaces == 0 then
+    return nil, nil, nil
+  end
+  return routes.carries(runtime.routeTable(), probe.reach, interfaces)
 end
 
 --- @param profile table
@@ -599,7 +632,7 @@ function backends.act(profile, verb, runtime, cfg)
   -- protected connection it would close. It takes the harder path where the
   -- config has one (ADR 0041).
   local action = verb
-  if verb == "supersede" then
+  if verb == "supersede" or verb == "renew" then
     action = "disconnect"
   elseif verb == "standdown" then
     action = backends.hasForceCommand(profile) and "force" or "disconnect"

@@ -18,6 +18,10 @@ local function fakeRuntime(answers)
       calls.ifconfig = (calls.ifconfig or 0) + 1
       return answers.ifconfig or ""
     end,
+    routeTable = function()
+      calls.routeTable = (calls.routeTable or 0) + 1
+      return answers.routeTable or ""
+    end,
     panel = function(app)
       calls.panel[#calls.panel + 1] = app
       return answers.panel or "unknown"
@@ -125,6 +129,63 @@ describe("the shell backend", function()
     backends.act(profile, "connect", runtime)
     backends.act(profile, "disconnect", runtime)
     assert.same({ "vpn up", "vpn down" }, runtime.calls.exec)
+  end)
+end)
+
+describe("backends.carries", function()
+  local ifconfig = "utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n"
+    .. "\tinet 10.11.12.13 --> 10.11.12.13 netmask 0xffffffff"
+  local hostRoutesOnly = "default 192.168.1.1 UGScg en0\n10.9.9.29 10.11.12.13 UGHS utun4\n"
+  local aggregate = hostRoutesOnly .. "10 10.11.12.13 UGSc utun4\n"
+
+  local function profile(probe)
+    return { id = "gp", name = "GP", backend = "globalprotect", app = "GlobalProtect", probe = probe }
+  end
+  local reaching = { cidr = "10.11.12.0/24", interface = "utun", reach = "10.0.0.10" }
+
+  it("finds the tunnel that is up with nothing going through it, and says where it goes", function()
+    local runtime = fakeRuntime({ ifconfig = ifconfig, routeTable = hostRoutesOnly })
+    assert.same({ false, "en0", 0 }, { backends.carries(profile(reaching), runtime) })
+  end)
+
+  it("counts every interface the probe accepts, so two tunnels in its range read the same every time", function()
+    local two = ifconfig
+      .. "\nutun9: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n"
+      .. "\tinet 10.11.12.99 --> 10.11.12.99 netmask 0xffffffff"
+    local viaNine = hostRoutesOnly .. "10 10.11.12.99 UGSc utun9\n"
+    assert.same(
+      { true, "utun9", 8 },
+      { backends.carries(profile(reaching), fakeRuntime({ ifconfig = two, routeTable = viaNine })) }
+    )
+    assert.same(
+      { true, "utun4", 8 },
+      { backends.carries(profile(reaching), fakeRuntime({ ifconfig = two, routeTable = aggregate })) }
+    )
+  end)
+
+  it("is satisfied once the address leaves by the tunnel's own interface", function()
+    assert.is_true(backends.carries(profile(reaching), fakeRuntime({ ifconfig = ifconfig, routeTable = aggregate })))
+    -- Another tunnel holding the route is not this one carrying it.
+    local other = aggregate:gsub("UGSc utun4", "UGSc utun5")
+    assert.is_false(backends.carries(profile(reaching), fakeRuntime({ ifconfig = ifconfig, routeTable = other })))
+  end)
+
+  it("has nothing to say about a tunnel that is not there, and reads no table to say it", function()
+    local runtime = fakeRuntime({ ifconfig = "", routeTable = hostRoutesOnly })
+    assert.equals(3, select("#", backends.carries(profile(reaching), runtime)))
+    assert.is_nil(backends.carries(profile(reaching), runtime))
+    assert.is_nil(runtime.calls.routeTable)
+    assert.equals(3, select("#", backends.carries(nil, runtime)))
+  end)
+
+  it("has nothing to say where no address was named", function()
+    local runtime = fakeRuntime({ ifconfig = ifconfig, routeTable = hostRoutesOnly })
+    assert.is_nil(backends.carries(profile({ cidr = "10.11.12.0/24", interface = "utun" }), runtime))
+    assert.is_nil(backends.carries(profile({ cidr = "10.11.12.0/24", reach = 10 }), runtime))
+    assert.is_nil(backends.carries(profile(nil), runtime))
+    assert.is_nil(backends.carries(profile("utun"), runtime))
+    assert.is_nil(backends.carries(nil, runtime))
+    assert.is_nil(runtime.calls.ifconfig)
   end)
 end)
 
@@ -831,5 +892,61 @@ describe("a disconnect somebody asked for by name", function()
     assert.same({ "k" }, runtime.calls.exec)
     assert.is_true(backends.hasForceCommand(locked))
     assert.is_false(backends.canForce(locked), "the menu row stays off a protected connection")
+  end)
+end)
+
+describe("backends.act, a renew", function()
+  local function gp(protected)
+    return {
+      id = "gp",
+      name = "GP",
+      backend = "globalprotect",
+      app = "GlobalProtect",
+      protected = protected,
+      probe = { cidr = "10.11.12.0/24", reach = "10.0.0.10" },
+    }
+  end
+  local function recorder()
+    local calls = { press = {}, exec = {} }
+    return calls,
+      {
+        exec = function(command)
+          calls.exec[#calls.exec + 1] = command
+          return "", true
+        end,
+        press = function(app, verbs)
+          calls.press[#calls.press + 1] = { app = app, verbs = verbs }
+          return true, nil
+        end,
+      }
+  end
+
+  it("is the backend's own disconnect, protected or not", function()
+    for _, protected in ipairs({ true, false }) do
+      local calls, runtime = recorder()
+      assert.same({ true }, { backends.act(gp(protected), "renew", runtime) })
+      assert.same({ { app = "GlobalProtect", verbs = { "disconnect" } } }, calls.press)
+    end
+  end)
+
+  it("never reaches for the harder way down, the way Disconnect everything does", function()
+    local profile = gp(true)
+    profile.backend, profile.app, profile.commands =
+      "shell", nil, {
+        disconnect = "/bin/echo down",
+        force = "/bin/echo harder",
+        connect = "/bin/echo up",
+      }
+    local calls, runtime = recorder()
+    assert.is_true((backends.act(profile, "renew", runtime)))
+    assert.same({ "/bin/echo down" }, calls.exec)
+  end)
+
+  it("is not a plain disconnect, which protection still refuses", function()
+    local calls, runtime = recorder()
+    local ok, err = backends.act(gp(true), "disconnect", runtime)
+    assert.is_false(ok)
+    assert.matches("protected", err)
+    assert.same({}, calls.press)
   end)
 end)

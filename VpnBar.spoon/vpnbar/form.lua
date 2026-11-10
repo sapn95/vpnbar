@@ -132,6 +132,14 @@ local PROBE = {
     default = "utun",
     onlyWith = "probe.cidr",
   },
+  {
+    key = "probe.reach",
+    label = "Address behind the tunnel",
+    informative = "Optional. One IPv4 address that only this VPN reaches, such as 10.0.0.10. "
+      .. "With one, a tunnel that is up without a route to it is shown as carrying nothing.",
+    required = false,
+    onlyWith = "probe.cidr",
+  },
 }
 
 --- Read a dotted path out of a table.
