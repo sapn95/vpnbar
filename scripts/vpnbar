@@ -703,6 +703,25 @@ route_add_host() {
   esac
 }
 
+# The tunnels that carry an address the config names as a connection's
+# `reach`, one interface per line.
+#
+# Read with grep rather than a JSON parser: `reach` is only ever a key inside a
+# probe, and the CLI runs where no parser can be assumed. The interface is the
+# kernel's answer for that address, so it is the tunnel that carries it now.
+reach_interfaces() {
+  local config="${HOME}/.config/vpnbar/profiles.json"
+  [ -f "${config}" ] || return 0
+  local reach netif
+  grep -o '"reach"[[:space:]]*:[[:space:]]*"[^"]*"' "${config}" 2>/dev/null |
+    sed 's/.*"\([^"]*\)"$/\1/' |
+    while IFS= read -r reach; do
+      [ -n "${reach}" ] || continue
+      netif="$(route -n get "${reach}" 2>/dev/null | awk '$1 == "interface:" { print $2 }')"
+      [ -z "${netif}" ] || printf '%s\n' "${netif}"
+    done
+}
+
 # Every aggregate route a tunnel that is up has claimed, in the same
 # `family|destination|gateway|flags|netif` shape.
 #
@@ -712,13 +731,20 @@ route_add_host() {
 # the network the machine is physically on with it, so a host one subnet over, a
 # printer or a Pi at home is unreachable for as long as the VPN is up, with
 # nothing in the table looking broken.
+#
+# A tunnel that carries an address the config names as its `reach` is left out
+# (ADR 0049). That address is behind the tunnel on purpose, and on this machine
+# it is behind GlobalProtect's `10`: GlobalProtect installs its routes once, at
+# tunnel creation, so deleting them leaves it connected and carrying nothing
+# until it reconnects (ADR 0047).
 claimed_routes() {
   command -v netstat >/dev/null 2>&1 || return 0
-  local up
+  local up named
   up="$(tunnel_interfaces_up | tr '\n' ' ')"
   [ -n "${up# }" ] || return 0
-  netstat -rn -f inet 2>/dev/null | awk -v up=" ${up} " -v wanted=" ${CLAIMED_AGGREGATES} " '
-    NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(up, " " $4 " ") > 0 && index(wanted, " " $1 " ") > 0 {
+  named="$(reach_interfaces | tr '\n' ' ')"
+  netstat -rn -f inet 2>/dev/null | awk -v up=" ${up} " -v named=" ${named} " -v wanted=" ${CLAIMED_AGGREGATES} " '
+    NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(up, " " $4 " ") > 0 && index(named, " " $4 " ") == 0 && index(wanted, " " $1 " ") > 0 {
       printf "inet|%s|%s|%s|%s\n", $1, $2, $3, $4
     }
   '

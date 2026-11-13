@@ -1012,6 +1012,57 @@ stub_one_greedy_tunnel() {
   [[ "$output" == *"vpnbar clean"* ]]
 }
 
+# A config whose GlobalProtect probe names an address behind the tunnel, as the
+# menu writes it.
+write_reach_config() {
+  mkdir -p "${HOME}/.config/vpnbar"
+  cat >"${HOME}/.config/vpnbar/profiles.json" <<'JSON'
+{
+  "profiles" : [
+    {
+      "id" : "globalprotect",
+      "probe" : {
+        "cidr" : "10.11.13.0\/24",
+        "interface" : "utun",
+        "reach" : "10.0.0.10"
+      }
+    }
+  ]
+}
+JSON
+}
+
+@test "a tunnel that carries a named reach keeps its aggregates" {
+  # GlobalProtect installs its routes once, at tunnel creation. Deleting its
+  # `10` leaves it connected and carrying nothing until it reconnects (ADR 0049).
+  stub_one_greedy_tunnel
+  write_reach_config
+  printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No live tunnel has claimed the private address space."* ]]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 0 ]
+  run "${SCRIPT}" doctor
+  [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
+}
+
+@test "a reach carried by another tunnel does not spare this one" {
+  stub_one_greedy_tunnel
+  write_reach_config
+  printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.9|utun9' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+}
+
+@test "a reach that leaves by the network the machine is on spares nothing" {
+  stub_one_greedy_tunnel
+  write_reach_config
+  printf '%s\n' '10.0.0.10|default||192.168.1.1|en0' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+}
+
 @test "doctor is quiet when no tunnel has claimed the private space" {
   run "${SCRIPT}" doctor
   [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
