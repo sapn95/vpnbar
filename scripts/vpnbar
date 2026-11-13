@@ -706,19 +706,47 @@ route_add_host() {
 # The tunnels that carry an address the config names as a connection's
 # `reach`, one interface per line.
 #
-# Read with grep rather than a JSON parser: `reach` is only ever a key inside a
-# probe, and the CLI runs where no parser can be assumed. The interface is the
-# kernel's answer for that address, so it is the tunnel that carries it now.
+# Two conditions, both from the kernel. The address leaves by that interface
+# (`route -n get`), and the interface holds an address inside a probe's `cidr`,
+# which is what makes it that connection's tunnel. The second one matters: a
+# different tunnel holding `10` carries every private `reach` too, and without
+# it an AWS session would have been spared because GlobalProtect's probe named
+# an address behind its aggregate.
+#
+# Read with grep rather than a JSON parser: `reach` and `cidr` are only ever
+# keys inside a probe, and the CLI runs where no parser can be assumed. A
+# `reach` that is not a dotted IPv4 address is skipped before `route` sees it,
+# so a hostname costs no DNS lookup and nothing is read as a flag.
 reach_interfaces() {
   local config="${HOME}/.config/vpnbar/profiles.json"
   [ -f "${config}" ] || return 0
-  local reach netif
-  grep -o '"reach"[[:space:]]*:[[:space:]]*"[^"]*"' "${config}" 2>/dev/null |
+  local cidrs reach netif
+  cidrs="$( { grep -o '"cidr"[[:space:]]*:[[:space:]]*"[^"]*"' "${config}" 2>/dev/null || true; } |
+    sed -e 's/.*"\([^"]*\)"$/\1/' -e 's#\\/#/#g' | tr '\n' ' ')"
+  [ -n "${cidrs// /}" ] || return 0
+  { grep -o '"reach"[[:space:]]*:[[:space:]]*"[^"]*"' "${config}" 2>/dev/null || true; } |
     sed 's/.*"\([^"]*\)"$/\1/' |
     while IFS= read -r reach; do
-      [ -n "${reach}" ] || continue
+      case "${reach}" in
+        "" | *[!0-9.]* | .* | *. | *..*) continue ;;
+      esac
       netif="$(route -n get "${reach}" 2>/dev/null | awk '$1 == "interface:" { print $2 }')"
-      [ -z "${netif}" ] || printf '%s\n' "${netif}"
+      [ -n "${netif}" ] || continue
+      ifconfig -a 2>/dev/null | awk -v want="${netif}" -v cidrs="${cidrs}" '
+        function ip(a,   p) {
+          if (split(a, p, ".") != 4) { return -1 }
+          return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+        }
+        /^[a-zA-Z0-9]+:/ { name = $1; sub(/:$/, "", name) }
+        name == want && $1 == "inet" {
+          n = split(cidrs, list, " ")
+          for (i = 1; i <= n; i++) {
+            if (split(list[i], c, "/") != 2) { continue }
+            size = 2 ^ (32 - c[2])
+            if (ip($2) >= 0 && int(ip($2) / size) == int(ip(c[1]) / size)) { print want; exit }
+          }
+        }
+      '
     done
 }
 
@@ -742,7 +770,7 @@ claimed_routes() {
   local up named
   up="$(tunnel_interfaces_up | tr '\n' ' ')"
   [ -n "${up# }" ] || return 0
-  named="$(reach_interfaces | tr '\n' ' ')"
+  named="$(reach_interfaces | tr '\n' ' ')" || true
   netstat -rn -f inet 2>/dev/null | awk -v up=" ${up} " -v named=" ${named} " -v wanted=" ${CLAIMED_AGGREGATES} " '
     NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(up, " " $4 " ") > 0 && index(named, " " $4 " ") == 0 && index(wanted, " " $1 " ") > 0 {
       printf "inet|%s|%s|%s|%s\n", $1, $2, $3, $4
