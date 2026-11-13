@@ -25,17 +25,27 @@ are what the tunnel is for.
 
 ## The decision
 
-A tunnel that carries an address named as a connection's `reach` keeps its
-aggregates. `vpnbar clean` leaves them, and `vpnbar doctor` does not report
-them. Which tunnel that is comes from the kernel: `route -n get <reach>` names
-the interface the address leaves by right now.
+A tunnel that carries an address named as a connection's `reach`, and is that
+connection's tunnel, keeps its aggregates. `vpnbar clean` leaves them, and
+`vpnbar doctor` does not report them. Both conditions come from the kernel:
+`route -n get <reach>` names the interface the address leaves by right now, and
+that interface has to hold an address inside a probe's `cidr`.
+
+The second condition is what keeps the rule from swallowing ADR 0043. Any
+tunnel that holds `10` carries every private `reach`. With GlobalProtect down
+and an AWS session holding the aggregates, the `reach` leaves by the AWS
+tunnel, and without the `cidr` check that tunnel would have been spared.
 
 Everything else in ADR 0043 stands. A tunnel nobody named a `reach` for is
 still counted, and so is a second tunnel that holds aggregates while the named
 one carries the address.
 
-The config is read with `grep` for the `reach` key, which only ever sits
-inside a probe. The CLI runs where no JSON parser can be assumed.
+The config is read with `grep` for the `reach` and `cidr` keys, which only
+ever sit inside a probe. The CLI runs where no JSON parser can be assumed. So
+the two are not paired per connection: a tunnel is spared when it carries any
+`reach` and holds an address in any probe's `cidr`. A `reach` that is not a
+dotted IPv4 address is skipped before `route` sees it, so a hostname costs no
+DNS lookup.
 
 ## What was rejected
 

@@ -1032,10 +1032,16 @@ write_reach_config() {
 JSON
 }
 
+# The greedy tunnel as GlobalProtect's: an address inside the probe's `cidr`.
+give_utun6_the_probe_address() {
+  printf '%s\n' '	inet 10.11.13.5 --> 10.11.13.5 netmask 0xffffffff' >>"${NET_IFCONFIG}"
+}
+
 @test "a tunnel that carries a named reach keeps its aggregates" {
   # GlobalProtect installs its routes once, at tunnel creation. Deleting its
   # `10` leaves it connected and carrying nothing until it reconnects (ADR 0049).
   stub_one_greedy_tunnel
+  give_utun6_the_probe_address
   write_reach_config
   printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
   run "${SCRIPT}" clean --yes
@@ -1046,8 +1052,21 @@ JSON
   [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
 }
 
+@test "another tunnel holding 10 is not spared by a reach it happens to carry" {
+  # GlobalProtect down, an AWS session up with the aggregates: the reach leaves
+  # by the AWS tunnel, whose own address is outside the probe's range.
+  stub_one_greedy_tunnel
+  printf '%s\n' '	inet 198.51.100.7 --> 198.51.100.7 netmask 0xffffffff' >>"${NET_IFCONFIG}"
+  write_reach_config
+  printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+}
+
 @test "a reach carried by another tunnel does not spare this one" {
   stub_one_greedy_tunnel
+  give_utun6_the_probe_address
   write_reach_config
   printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.9|utun9' >"${NET_ROUTE_GET}"
   run "${SCRIPT}" clean --dry-run
@@ -1057,8 +1076,44 @@ JSON
 
 @test "a reach that leaves by the network the machine is on spares nothing" {
   stub_one_greedy_tunnel
+  give_utun6_the_probe_address
   write_reach_config
   printf '%s\n' '10.0.0.10|default||192.168.1.1|en0' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+}
+
+@test "a config without a reach spares nothing" {
+  stub_one_greedy_tunnel
+  give_utun6_the_probe_address
+  mkdir -p "${HOME}/.config/vpnbar"
+  printf '%s\n' '{"profiles":[{"id":"gp","probe":{"cidr":"10.11.13.0\/24","interface":"utun"}}]}' \
+    >"${HOME}/.config/vpnbar/profiles.json"
+  printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
+}
+
+@test "a reach in a compact config with two connections is found" {
+  stub_one_greedy_tunnel
+  give_utun6_the_probe_address
+  mkdir -p "${HOME}/.config/vpnbar"
+  printf '%s\n' '{"profiles":[{"id":"aws"},{"id":"gp","probe":{"cidr":"10.11.13.0\/24","reach":"10.0.0.10"}}]}' \
+    >"${HOME}/.config/vpnbar/profiles.json"
+  printf '%s\n' '10.0.0.10|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
+  run "${SCRIPT}" clean --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No live tunnel has claimed the private address space."* ]]
+}
+
+@test "a reach that is not an address is never handed to route" {
+  stub_one_greedy_tunnel
+  give_utun6_the_probe_address
+  mkdir -p "${HOME}/.config/vpnbar"
+  printf '%s\n' '{"profiles":[{"id":"gp","probe":{"cidr":"10.11.13.0\/24","reach":"vpn.example.invalid"}}]}' \
+    >"${HOME}/.config/vpnbar/profiles.json"
+  printf '%s\n' 'vpn.example.invalid|10.0.0.0|255.0.0.0|198.51.100.1|utun6' >"${NET_ROUTE_GET}"
   run "${SCRIPT}" clean --dry-run
   [[ "$output" == *"3 route(s) send the private address space into a live tunnel"* ]]
 }

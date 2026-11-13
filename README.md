@@ -395,8 +395,8 @@ a `utun` that **is** UP. The tunnel keeps every route of its own that is more
 specific than an aggregate, so what it was configured to carry it still carries
 ([ADR 0043](docs/adr/0043-the-private-space-belongs-to-the-network-you-are-on.md)).
 
-A tunnel that carries a connection's `reach` keeps its aggregates. Those are
-the routes that address leaves by, and GlobalProtect installs its routes only
+A tunnel that carries a connection's `reach` and holds an address in that
+probe's range keeps its aggregates. Those are the routes that address leaves by, and GlobalProtect installs its routes only
 once, so deleting them would leave it connected and carrying nothing
 ([ADR 0049](docs/adr/0049-a-tunnel-you-named-keeps-its-routes.md)).
 
