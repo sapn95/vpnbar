@@ -303,16 +303,55 @@ describe("the globalprotect backend, restarting the agent", function()
     assert.matches("^/bin/launchctl bootout gui/", command)
     assert.matches("com%.paloaltonetworks%.gp%.pangpa", command)
     -- The check that it came back is last, so it is the exit status that
-    -- reaches the caller.
-    assert.matches("/usr/bin/pgrep %-x 'GlobalProtect' >/dev/null$", command)
+    -- reaches the caller, and it is launchd's answer: a `pgrep` here matched
+    -- the old agent on its way out and called a restart that loaded nothing a
+    -- success (ADR 0048).
+    assert.matches(
+      "/bin/launchctl print gui/%$%(/usr/bin/id %-u%)/com%.paloaltonetworks%.gp%.pangpa 2>/dev/null"
+        .. " | /usr/bin/grep %-Eq 'state = running|pid = %[0%-9%]' ; }$",
+      command
+    )
     assert.is_true(command:find("bootout", 1, true) < command:find("bootstrap", 1, true))
   end)
 
-  it("waits after the unload, and again before it asks whether it is back", function()
-    local runtime = fakeRuntime()
-    backends.act(profile, "restart", runtime)
-    local _, sleeps = runtime.calls.exec[1]:gsub("/bin/sleep", "")
-    assert.equals(2, sleeps)
+  it("does not ask the process list whether the agent came back", function()
+    local command = backends.bootstrapCommand({ label = "a.b.c", plist = "/p.plist" }, "App")
+    local afterLoad = command:sub(command:find("launchctl bootstrap", 1, true))
+    assert.is_nil(afterLoad:find("pgrep", 1, true), afterLoad)
+  end)
+
+  it("only loads once the unload has been seen to finish", function()
+    -- The load hangs off the check that ends the unload, so a service launchd
+    -- still has is never bootstrapped over.
+    local agent = { label = "a.b.c", plist = "/p.plist" }
+    local unload = backends.bootoutCommand(agent, "App")
+    local command = backends.bootstrapCommand(agent, "App")
+    assert.equals(unload .. " && { ", command:sub(1, #unload + 6))
+    local gone = "! /bin/launchctl print gui/$(/usr/bin/id -u)/a.b.c >/dev/null 2>&1"
+      .. " && ! /usr/bin/pgrep -x 'App' >/dev/null"
+    assert.equals(gone, unload:sub(-#gone))
+  end)
+
+  it("bounds every wait with a count", function()
+    local command = backends.bootstrapCommand({ label = "a.b.c", plist = "/p.plist" }, "App")
+    local _, loops = command:gsub("while ", "")
+    local _, bounded = command:gsub('while %[ "%$n" %-lt %d+ %] && ', "")
+    assert.equals(5, loops)
+    assert.equals(loops, bounded)
+  end)
+
+  it("waits for launchd to drop the service for up to fifteen seconds", function()
+    local command = backends.bootoutCommand({ label = "a.b.c", plist = "/p.plist" }, "App")
+    assert.equals(15, backends.AGENT_REMOVAL_TRIES * backends.AGENT_POLL)
+    assert.is_truthy(
+      command:find(
+        '/bin/launchctl bootout gui/$(/usr/bin/id -u)/a.b.c ; n=0 ; while [ "$n" -lt 30 ]'
+          .. " && /bin/launchctl print gui/$(/usr/bin/id -u)/a.b.c >/dev/null 2>&1 ; do /bin/sleep 0.5 ;",
+        1,
+        true
+      ),
+      command
+    )
   end)
 
   it("quotes the app name, which is allowed to contain a space", function()
@@ -553,8 +592,23 @@ describe("quitting and restarting an application", function()
     local ran = runtime.calls.exec[1]
     assert.is_truthy(ran:find("launchctl bootout gui/", 1, true), ran)
     assert.is_truthy(ran:find("com.paloaltonetworks.gp.pangpa", 1, true), ran)
-    assert.is_nil(ran:find("pkill", 1, true), "a kill is the thing that does not stick")
     assert.is_nil(ran:find("bootstrap", 1, true), "quit does not start it again")
+    -- A kill of the agent is the thing that does not stick, so every signal in
+    -- the command is behind launchd saying it has no such service. What is
+    -- left then is a copy somebody opened beside launchd (ADR 0048).
+    local notLoaded = "! /bin/launchctl print gui/$(/usr/bin/id -u)/com.paloaltonetworks.gp.pangpa >/dev/null 2>&1"
+    local at = 1
+    local kills = 0
+    while true do
+      local from = ran:find("/usr/bin/pkill", at, true)
+      if not from then
+        break
+      end
+      local guard = notLoaded .. " && /usr/bin/pgrep -x 'GP' >/dev/null && "
+      assert.equals(guard, ran:sub(from - #guard, from - 1))
+      kills, at = kills + 1, from + 1
+    end
+    assert.equals(2, kills)
   end)
 
   it("asks a plain application to quit, then insists, and does not reopen it", function()

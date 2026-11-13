@@ -279,6 +279,30 @@ which is what a Quit that appears to do nothing really is
 ([ADR 0033](docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
 Everything else is quit with a signal and opened again.
 
+`bootout` returns before the agent is gone, so vpnbar asks `launchctl print`
+until launchd has removed the service, for at most fifteen seconds, and loads
+the plist only then. A restart has worked when launchd says the service runs.
+On 2026-11-13 the load came one second after the unload, hit a service that was
+still being taken down and loaded nothing, and a `pgrep` that matched the old
+agent on its way out called that a success
+([ADR 0048](docs/adr/0048-an-agent-that-stays-loaded.md)).
+
+Three things follow from the same evening:
+
+- vpnbar never runs `open -a` on a client that is a launchd agent. `open`
+  starts a copy beside launchd that nothing keeps alive. The agent is loaded
+  in its place.
+- On every refresh the planner asks launchd whether it still has the agent of
+  each connection it would bring up. If not, it loads it, on a backoff of its
+  own. A client you quit from the menu stays quit, and a copy running beside
+  launchd is only replaced once its connection is down.
+- GlobalProtect is pressed through its menu-bar item. When the agent has run
+  for a minute without one and Bartender is running, vpnbar quits Bartender
+  and opens it again, at most once in ten minutes. That is what brought the
+  item back by hand, twice. Without a menu-bar manager it knows, vpnbar only
+  tells you the item is missing. Neither happens while nobody is at the
+  machine.
+
 Closing either of these clients ends its session. For the AWS client that was
 always clear, since it is the tunnel's own parent. For GlobalProtect it took a
 measurement: the agent logs out of the gateway on its way out, and the tunnel is
@@ -604,6 +628,13 @@ menu:
   That last keystroke starts a real session and a SAML login, so it was left
   for the first real use rather than tried on a working machine to see what
   happens. Every read path is proved.
+- **Run against a stand-in, not against launchd.** The commands that unload
+  and load the GlobalProtect agent, and the one that restarts Bartender, are
+  run in the specs with every program in them swapped for a script that plays
+  launchd. Their order and their bounds are proved that way. They have not yet
+  been run on a live agent, and whether macOS asks before Hammerspoon may quit
+  Bartender is not known
+  ([ADR 0048](docs/adr/0048-an-agent-that-stays-loaded.md)).
 - **Deliberately not done.** Nothing here presses *Disable*: on a GlobalProtect
   panel that is a different action with a different meaning, and this menu
   cannot undo it.

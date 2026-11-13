@@ -28,6 +28,7 @@ local icon = require("vpnbar.icon")
 local work = require("vpnbar.work")
 local awsui = require("vpnbar.awsui")
 local routes = require("vpnbar.routes")
+local statusitem = require("vpnbar.statusitem")
 
 --- VpnBar.configPath
 --- Variable
@@ -336,7 +337,7 @@ local function realWindow(element)
   return nil
 end
 
-local function windowOf(appName)
+local function windowOf(appName, cfg)
   local app = runningApp(appName)
   if not app then
     return nil, appName .. " is not running"
@@ -348,7 +349,11 @@ local function windowOf(appName)
   end
   -- Not `open -g`. Measured: plain `open -a` on the running client left the
   -- focus where it was, and `-g` moved the focused window to the client's.
-  hs.execute("/usr/bin/open -a " .. backends.shellQuote(appName))
+  --
+  -- Which command that is belongs to `backends.launchCommand`, because for a
+  -- client that is a launchd agent it must not be `open` at all: `open` starts
+  -- a copy beside launchd that nothing keeps alive (ADR 0048).
+  hs.execute(backends.launchCommand(appName, cfg))
   for _ = 1, 25 do
     window = realWindow(element)
     if window then
@@ -434,8 +439,8 @@ end
 --- An open chooser is a window of the application in its own right, and it
 --- comes first in the list, so the plain "first window" this used to take was
 --- whichever of the two happened to be there.
-local function clientWindow(appName)
-  local _, err = windowOf(appName)
+local function clientWindow(appName, cfg)
+  local _, err = windowOf(appName, cfg)
   if err then
     return nil, nil, err
   end
@@ -483,7 +488,7 @@ end
 --- the highlight is readable, and a count that was one out would connect a
 --- different VPN than the one somebody asked for.
 --- @return boolean ok, string|nil err
-local function chooseProfile(appName, chooser, row)
+local function chooseProfile(appName, chooser, row, cfg)
   local app = runningApp(appName)
   local function escape()
     if app then
@@ -548,7 +553,7 @@ local function chooseProfile(appName, chooser, row)
     hs.eventtap.keyStroke({}, "return", 0, app)
   end
   local chosen = settle(function()
-    local current = clientWindow(appName)
+    local current = clientWindow(appName, cfg)
     return (current and awsui.chosen(current) == row) or nil
   end)
   if not chosen then
@@ -563,8 +568,8 @@ end
 --- Which button that is comes from `awsui`; this only presses it. The block is
 --- bounded there, so a profile that does not offer the button being asked for
 --- cannot reach into the next one and press that.
-local function pressRow(appName, row, buttonTitle)
-  local nodes, elements, err = clientWindow(appName)
+local function pressRow(appName, row, buttonTitle, cfg)
+  local nodes, elements, err = clientWindow(appName, cfg)
   if not nodes then
     return false, err
   end
@@ -583,8 +588,8 @@ end
 --- profile means setting the chooser first, and the chooser is a list that only
 --- an arrow key moves
 --- ([ADR 0032](../../docs/adr/0032-the-aws-client-is-driven-by-keyboard.md)).
-local function connectRow(appName, row)
-  local nodes, elements, err = clientWindow(appName)
+local function connectRow(appName, row, cfg)
+  local nodes, elements, err = clientWindow(appName, cfg)
   if not nodes then
     return false, err
   end
@@ -599,7 +604,7 @@ local function connectRow(appName, row)
     local cleared = dismiss
       and pressElement(appName, elements[dismiss], "return")
       and settle(function()
-        local fresh = clientWindow(appName)
+        local fresh = clientWindow(appName, cfg)
         return (fresh and not awsui.failure(fresh)) or nil
       end)
     if cleared then
@@ -621,13 +626,13 @@ local function connectRow(appName, row)
     if not chooser then
       return false, ("%s has no profile chooser to pick %s with"):format(appName, tostring(row))
     end
-    local ok, chooseErr = chooseProfile(appName, elements[chooser], row)
+    local ok, chooseErr = chooseProfile(appName, elements[chooser], row, cfg)
     if not ok then
       return false, chooseErr
     end
     -- The window is rebuilt around the new selection, so the elements read
     -- before it are stale.
-    nodes, elements = clientWindow(appName)
+    nodes, elements = clientWindow(appName, cfg)
     if not nodes then
       return false, appName .. " closed its window mid-way"
     end
@@ -719,12 +724,12 @@ function obj:runtime(allowPanelReads)
     end,
     pressRow = function(app, row, buttonTitle)
       return keepingFocus(function()
-        return pressRow(app, row, buttonTitle)
+        return pressRow(app, row, buttonTitle, self.config)
       end)
     end,
     connectRow = function(app, row)
       return keepingFocus(function()
-        return connectRow(app, row)
+        return connectRow(app, row, self.config)
       end)
     end,
   }
@@ -748,6 +753,91 @@ function obj:appsRunning()
     end
   end
   return running
+end
+
+--- What launchd says about each agent the config names, keyed by application:
+--- `missing`, `loaded` or `running`.
+---
+--- One `launchctl print` per agent per refresh. It is the only reading that
+--- tells an agent under launchd from a copy somebody opened beside it: the
+--- process list shows a GlobalProtect either way (ADR 0048).
+--- @return table { [app] = string }
+function obj:agentStates()
+  local seen = {}
+  for _, profile in ipairs(store.list(self.config, true)) do
+    local agent = backends.agentOf(profile)
+    if agent and profile.app and seen[profile.app] == nil then
+      local out, ok = hs.execute(backends.agentPrintCommand(agent))
+      seen[profile.app] = backends.agentState(out, ok == true)
+    end
+  end
+  return seen
+end
+
+--- Look after the menu-bar item of every client that is driven through one.
+---
+--- What is measured here and decided in `vpnbar/statusitem.lua`: whether the
+--- agent runs, whether its item is there, and which menu-bar manager is
+--- running. Reading `AXExtrasMenuBar` opens nothing and moves nothing.
+--- @param agents table from `agentStates`
+--- @param context table the planner's context
+function obj:tendStatusItems(agents, context)
+  -- One reading per application, however many connections go through it.
+  local observations, read = {}, {}
+  for _, profile in ipairs(store.list(self.config, true)) do
+    local state = profile.app and agents[profile.app]
+    if state and not read[profile.app] and backends.needsMenuBarItem(profile) then
+      local running = state == "running"
+      observations[#observations + 1] =
+        { app = profile.app, running = running, item = running and menuBarItem(profile.app) ~= nil }
+      read[profile.app] = true
+    end
+  end
+  local managers = {}
+  for _, manager in ipairs(statusitem.MANAGERS) do
+    local found = hs.application.applicationsForBundleID(manager.bundle)
+    if found and found[1] then
+      managers[manager.bundle] = found[1]:name()
+    end
+  end
+  local standing = { away = autoconnect.away(context), paused = self.paused }
+  local action = statusitem.plan(observations, managers, self.itemMemory, os.time(), standing)
+  if not action then
+    return
+  end
+  if action.verb == "restart" then
+    statusitem.restarted(self.itemMemory, action.manager, os.time())
+    self.logger.i(
+      ("statusitem: restart %s (%s has had no menu-bar item for %d s)"):format(
+        action.manager.name,
+        action.app,
+        action.seconds
+      )
+    )
+    -- As a task, because it waits for the manager to quit and the run loop
+    -- must not wait with it (ADR 0038).
+    local command = statusitem.restartCommand(action.manager, action.process)
+    local task = hs.task.new("/bin/sh", function(code)
+      if code ~= 0 then
+        self.logger.w(("statusitem: %s did not restart (exit %s)"):format(action.manager.name, tostring(code)))
+      end
+    end, { "-c", command })
+    if not task or not task:start() then
+      self.logger.w(("statusitem: could not start the restart of %s"):format(action.manager.name))
+    end
+  elseif action.verb == "report" then
+    self:complain(statusitem.explain(action))
+  elseif action.verb == "returned" then
+    -- The presses made meanwhile had nothing to press. Their backoff is not a
+    -- verdict on the connection, so it goes, the way a resume clears it
+    -- (ADR 0031).
+    self.logger.i(("statusitem: %s has its menu-bar item back"):format(action.app))
+    for _, profile in ipairs(store.list(self.config, true)) do
+      if profile.app == action.app then
+        autoconnect.succeeded(self.attempts, profile.id)
+      end
+    end
+  end
 end
 
 --- Where the command line half of vpnbar is, for the one job the Spoon cannot
@@ -1214,6 +1304,19 @@ function obj:refresh(options)
       unrouted = self.unrouted,
       renews = self.renews,
     }
+    -- Whether launchd still has each agent, which the process list cannot say
+    -- (ADR 0048). Measured only here, where the planner may act on it.
+    local agents = self:agentStates()
+    context.agentLoaded = {}
+    for app, state in pairs(agents) do
+      context.agentLoaded[app] = state ~= "missing"
+    end
+    -- Under its own pcall: a manager that will not answer is no reason to
+    -- lose the planner's pass.
+    local tended, tendErr = pcall(self.tendStatusItems, self, agents, context)
+    if not tended then
+      self.logger.w("statusitem: " .. tostring(tendErr))
+    end
   end
   local plan = options.autoconnect and autoconnect.plan(self.config, states, self.attempts, os.time(), context) or nil
   local renewSaid
@@ -1236,6 +1339,10 @@ function obj:refresh(options)
       end
       entry.at = now
       autoconnect.forget(self.attempts, plan.id)
+    elseif plan.verb == "load" then
+      -- Remembered under the agent's own key, so a load that keeps failing
+      -- backs off without slowing the connect down (ADR 0048).
+      autoconnect.remember(self.attempts, plan.key, os.time())
     else
       -- Taking the stand-in back down ends its history: it is not a failure,
       -- and the next time it is needed it should start from nothing.
@@ -1956,6 +2063,10 @@ function obj:init()
   -- finishes can be told from one that is still going
   -- (ADR 0036). Not persisted: a restart is a fresh handshake.
   self.connectingSince = {}
+  -- Since when a client has run without its menu-bar item, and when a menu-bar
+  -- manager was last restarted for it (ADR 0048). Not persisted: a restart of
+  -- vpnbar may restart the manager once more, and that is all it costs.
+  self.itemMemory = {}
   -- The switch being pressed for, if any: `{ id, since }`. Not persisted, like
   -- the preference it belongs to (ADR 0030).
   self.switching = nil

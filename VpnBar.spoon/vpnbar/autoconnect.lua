@@ -294,6 +294,41 @@ function autoconnect.mayStartNow(profile, context)
   return not (autoconnect.away(context) and backends.pressesInterface(profile))
 end
 
+--- Where the planner keeps what it tried for an agent, in the memory the
+--- connections share. A prefix no profile id can carry, so a load that keeps
+--- failing backs off on its own and does not slow the connect down.
+--- @param app string
+--- @return string
+function autoconnect.agentKey(app)
+  return "agent:" .. tostring(app)
+end
+
+--- Has launchd lost the agent behind this connection, with nobody having
+--- asked for that?
+---
+--- `agentLoaded` is what the adapter measured with `launchctl print`, keyed by
+--- application. Only an explicit `false` counts, for the reason `appRunning`
+--- has: a context that measured nothing loads nothing.
+---
+--- A quit from this menu is a decision and stands
+--- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)). For
+--- this client the quit *is* the unload, so without that line the planner
+--- would load back what somebody had just closed, ten seconds later.
+--- @param profile table
+--- @param context table|nil { agentLoaded = { [app] = boolean }, quitByHand = { [app] = boolean } }
+--- @return boolean
+function autoconnect.agentMissing(profile, context)
+  local app = type(profile) == "table" and profile.app or nil
+  if app == nil or backends.agentOf(profile) == nil then
+    return false
+  end
+  context = context or {}
+  if context.quitByHand and context.quitByHand[app] then
+    return false
+  end
+  return type(context.agentLoaded) == "table" and context.agentLoaded[app] == false
+end
+
 --- Has this connection just arrived, rather than having been up all along?
 ---
 --- The question a quit turns on: a tunnel that comes up while autoconnect is
@@ -443,10 +478,12 @@ end
 --- @param now number seconds
 --- @param context table|nil what the adapter knows about the person, see
 ---   `wouldInterrupt`, plus `preferred`: the id somebody switched to, see
----   `ranked`, plus `appRunning` and `quitByHand`, see `mayStart`
----   plus `unrouted`, the tunnels that have been up and carrying nothing for
----   long enough to count, and `renews`, see `renewDue`
---- @return table|nil { id, verb = "connect"|"disconnect"|"supersede"|"renew", reason }
+---   `ranked`, plus `appRunning` and `quitByHand`, see `mayStart`, plus
+---   `agentLoaded`, see `agentMissing`, plus `unrouted`, the tunnels that have
+---   been up and carrying nothing for long enough to count, and `renews`, see
+---   `renewDue`
+--- @return table|nil { id, verb = "connect"|"disconnect"|"supersede"|"renew"|"load", reason },
+---   and for a `load` the `key` to remember the attempt under
 function autoconnect.plan(cfg, states, memory, now, context)
   states, memory = states or {}, memory or {}
   -- Before anything else looks at them, so the one-at-a-time rule reads a
@@ -630,6 +667,48 @@ function autoconnect.plan(cfg, states, memory, now, context)
       local wanted = (profile.autoconnect or profile.id == preferred) and autoconnect.mayStart(profile, context)
       if pressedFor == nil and wanted and autoconnect.renewing(profile.id, context, now) then
         pressedFor = profile.id
+      end
+    end
+  end
+
+  -- An agent launchd no longer has is loaded before anything is pressed: there
+  -- is nothing to press until it is back. Measured on 2026-11-13: a restart
+  -- left `launchctl print` answering `Could not find service`, and nothing in
+  -- vpnbar looked, so the client stayed out of launchd until somebody did
+  -- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+  --
+  -- Only for a connection the planner would bring up, the same line the
+  -- connect loop below draws, and on a backoff of its own.
+  --
+  -- Not held while nobody is there. A load is a command and not a press, it
+  -- runs the same on a locked screen, and it takes nothing down: a copy of the
+  -- client that runs beside launchd is only replaced once every connection
+  -- through it reads down, because stopping it is a disconnect
+  -- ([ADR 0033](../../docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)).
+  local agents = context and context.agentLoaded or {}
+  local appRunning = context and context.appRunning or {}
+  for _, profile in ipairs(order) do
+    local key = profile.app and autoconnect.agentKey(profile.app)
+    if key and agents[profile.app] == true then
+      -- Back under launchd, so the next time it goes missing starts from
+      -- nothing.
+      autoconnect.succeeded(memory, key)
+    end
+    local wanted = (profile.autoconnect or profile.id == preferred) and (pressedFor == nil or profile.id == pressedFor)
+    if wanted and autoconnect.agentMissing(profile, context) then
+      -- Only an explicit `false` says no copy is running. Anything else may be
+      -- one, and then a connection that does not read down may be its tunnel.
+      local carrying = false
+      for _, other in ipairs(order) do
+        if appRunning[profile.app] ~= false and other.app == profile.app and not isDown(states[other.id]) then
+          carrying = true
+        end
+      end
+      local last = lastTryFor(memory, key)
+      local ready = last == nil or (now - last) >= autoconnect.cooldown(attemptsFor(memory, key))
+      if ready and not carrying then
+        local reason = appRunning[profile.app] == true and "running beside launchd" or "agent not loaded"
+        return { id = profile.id, verb = "load", reason = reason, key = key }
       end
     end
   end

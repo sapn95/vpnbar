@@ -53,3 +53,4 @@ whether their idea was considered or simply missed.
 | [0045](0045-the-mark-is-a-padlock.md) | The mark is a padlock |
 | [0046](0046-a-switch-presses-what-it-cannot-read.md) | A switch presses what it cannot read |
 | [0047](0047-a-tunnel-that-carries-nothing.md) | A tunnel that carries nothing |
+| [0048](0048-an-agent-that-stays-loaded.md) | An agent that stays loaded |
