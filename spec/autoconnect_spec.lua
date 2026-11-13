@@ -1553,15 +1553,41 @@ describe("autoconnect.plan, a tunnel that carries nothing", function()
       { id = "aws", verb = "connect", reason = "fallback" },
       autoconnect.plan(pair(), down, memory, later, busy)
     )
-    -- And none of it applies once the renewed connection is up again: with one
-    -- at a time off, the other connection marked to autoconnect comes up as it
-    -- always would.
+    -- Up is not the end of it: a tunnel says connected before its routes
+    -- arrive, and the record stands until the adapter has seen it carry. With
+    -- one at a time off, the other connection still waits.
     local off = pair({ exclusive = false, fallback = true })
     local up = { gp = "connected", aws = "disconnected" }
+    assert.is_nil(autoconnect.plan(off, up, {}, 1010, context({ unrouted = {}, renews = busy.renews })))
+    -- Once it carries, the adapter drops the record, and the other connection
+    -- marked to autoconnect comes up as it always would.
     assert.same(
       { id = "aws", verb = "connect", reason = "wanted" },
-      autoconnect.plan(off, up, {}, 1010, context({ unrouted = {}, renews = busy.renews }))
+      autoconnect.plan(off, up, {}, 1010, context({ unrouted = {}, renews = {} }))
     )
+  end)
+
+  it("holds nothing for a renewed connection this loop would not start", function()
+    local off = pair({ exclusive = false, fallback = true })
+    local down = { gp = "disconnected", aws = "disconnected" }
+    local renews = { gp = { since = 1000, at = 1000 } }
+    -- Still wanted: the line is held for it.
+    assert.same(
+      { id = "gp", verb = "connect", reason = "renew" },
+      autoconnect.plan(off, down, {}, 1010, context({ unrouted = {}, renews = renews }))
+    )
+    -- Autoconnect switched off on it meanwhile.
+    local unmarked = pair({ exclusive = false, fallback = true })
+    unmarked.profiles[1].autoconnect = false
+    assert.same(
+      { id = "aws", verb = "connect", reason = "wanted" },
+      autoconnect.plan(unmarked, down, {}, 1010, context({ unrouted = {}, renews = renews }))
+    )
+    -- Its client closed by hand (ADR 0031), or not running at all.
+    local quit = context({ unrouted = {}, renews = renews, quitByHand = { GlobalProtect = true } })
+    assert.same({ id = "aws", verb = "connect", reason = "fallback" }, autoconnect.plan(off, down, {}, 1010, quit))
+    local gone = context({ unrouted = {}, renews = renews, appRunning = { GlobalProtect = false } })
+    assert.same({ id = "aws", verb = "connect", reason = "fallback" }, autoconnect.plan(off, down, {}, 1010, gone))
   end)
 end)
 

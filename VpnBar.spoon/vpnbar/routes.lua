@@ -131,8 +131,12 @@ end
 ---   on this machine (`default fe80::%utun0 UGcIg utun0`). Read as IPv4, any of
 ---   them is a route to everything, and on a machine with no IPv4 default it
 ---   would have been the answer.
---- - Scoped rows, the ones flagged `I`. They serve traffic already bound to
----   their interface and are not what an ordinary packet is routed by.
+--- - Scoped rows, the ones flagged `I`, with one exception. They serve traffic
+---   already bound to their interface. But when the unscoped lookup ends at
+---   `default`, the kernel looks again in the scope of the primary interface,
+---   the one the unscoped `default` leaves by, and takes a narrower scoped
+---   route there. So a scoped row counts only on that interface, and only
+---   against `default`.
 --- @param output string `netstat -rn`
 --- @param address string
 --- @return string|nil interface name, nil when nothing covers the address
@@ -142,6 +146,8 @@ function routes.interfaceFor(output, address)
     return nil, nil
   end
   local best, bestPrefix
+  local primary
+  local scopedRows = {}
   local inet = true
   for line in output:gmatch("[^\n]+") do
     if line:match("^Internet6:") then
@@ -152,9 +158,23 @@ function routes.interfaceFor(output, address)
       local destination, _, flags, netif = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
       local network, prefix = routes.prefixOf(destination)
       local scoped = flags ~= nil and flags:find("I", 1, true) ~= nil
-      local covers = network and not scoped and parse.inCidr(network .. "/" .. prefix, address)
-      if covers and (not bestPrefix or prefix > bestPrefix) then
-        best, bestPrefix = netif, prefix
+      local covers = network and parse.inCidr(network .. "/" .. prefix, address)
+      if covers and scoped then
+        scopedRows[#scopedRows + 1] = { netif = netif, prefix = prefix }
+      elseif covers then
+        if prefix == 0 and primary == nil then
+          primary = netif
+        end
+        if not bestPrefix or prefix > bestPrefix then
+          best, bestPrefix = netif, prefix
+        end
+      end
+    end
+  end
+  if bestPrefix == 0 then
+    for _, row in ipairs(scopedRows) do
+      if row.netif == primary and row.prefix > bestPrefix then
+        best, bestPrefix = row.netif, row.prefix
       end
     end
   end
