@@ -21,8 +21,8 @@ local statusitem = {}
 --- tried. Data, so that a second one is a row and not a branch.
 ---
 --- Named by bundle id, which a new version does not change. The process is
---- called `Bartender 7` today, so the adapter reads that name from the running
---- application and it is not written down here.
+--- called `Bartender 7` today, so it is not named here at all: the adapter
+--- reads the pid of the running application and follows that.
 statusitem.MANAGERS = {
   { name = "Bartender", bundle = "com.surteesstudios.Bartender" },
 }
@@ -39,11 +39,17 @@ statusitem.GRACE = 60
 ---
 --- A restart reshuffles the whole menu bar in front of whoever is looking at
 --- it. Once is a repair. Every refresh would be a fault of its own, and an item
---- that a restart did not bring back is not brought back by the next one.
+--- that a restart did not bring back is not brought back by the next one. So
+--- there is also one restart per occurrence: the item has to come back, or the
+--- occurrence end, before the manager is restarted for it again.
 statusitem.RESTART_EVERY = 600
 
 --- How long the manager gets to quit, as a count of half seconds.
-statusitem.QUIT_TRIES = 20
+---
+--- Thirty seconds. The restart runs as a task beside Hammerspoon, so the wait
+--- holds nothing up, and a manager that took longer than a short wait would
+--- otherwise go after the wait had given up and not be opened again.
+statusitem.QUIT_TRIES = 60
 
 --- Quit a menu-bar manager, wait for it to go, and open it again.
 ---
@@ -52,11 +58,14 @@ statusitem.QUIT_TRIES = 20
 --- again once its process has gone: `open` on a manager that is still running
 --- brings its settings window to the front and restarts nothing.
 --- @param manager table { name = string, bundle = string }
---- @param process string the name of its running process
+---
+--- The process is followed by its pid, not by its name: the name Hammerspoon
+--- reports is the localised application name, which need not be the name of
+--- the executable, and a wait on a name nothing has ends at once.
+--- @param pid number the pid of its running process
 --- @return string command
-function statusitem.restartCommand(manager, process)
-  local quoted = backends.shellQuote(process)
-  local running = "/usr/bin/pgrep -x " .. quoted .. " >/dev/null"
+function statusitem.restartCommand(manager, pid)
+  local running = ("/bin/kill -0 %d 2>/dev/null"):format(math.tointeger(pid) or 0)
   return table.concat({
     "/usr/bin/osascript -e " .. backends.shellQuote(('tell application id "%s" to quit'):format(manager.bundle)),
     ('n=0 ; while [ "$n" -lt %d ] && %s ; do /bin/sleep 0.5 ; n=$((n+1)) ; done'):format(
@@ -76,14 +85,15 @@ function statusitem.restarted(memory, manager, now)
   memory.restarted[manager.bundle] = now
 end
 
---- The first known manager that is running, with the name of its process.
---- @param running table|nil { [bundle] = process name }
---- @return table|nil manager, string|nil process
+--- The first known manager that is running, with the pid of its process.
+--- @param running table|nil { [bundle] = pid }
+--- @return table|nil manager, number|nil pid
 local function runningManager(running)
   for _, manager in ipairs(statusitem.MANAGERS) do
-    local process = type(running) == "table" and running[manager.bundle] or nil
-    if type(process) == "string" and process ~= "" then
-      return manager, process
+    local value = type(running) == "table" and running[manager.bundle] or nil
+    local pid = type(value) == "number" and math.tointeger(value) or nil
+    if pid and pid > 0 then
+      return manager, pid
     end
   end
   return nil, nil
@@ -115,11 +125,11 @@ end
 --- @param observations table list of { app = string, running = boolean, item = boolean }:
 ---   one per client that needs an item, with what launchd says about its agent
 ---   and whether the item is there
---- @param running table|nil { [bundle] = process name } for the managers that run
+--- @param running table|nil { [bundle] = pid } for the managers that run
 --- @param memory table owned by the caller
 --- @param now number seconds
 --- @param context table|nil { away = boolean, paused = boolean }
---- @return table|nil { verb = "restart"|"report"|"returned", app, manager, process, seconds }
+--- @return table|nil { verb = "restart"|"report"|"returned", app, manager, pid, seconds }
 function statusitem.plan(observations, running, memory, now, context)
   memory.since = memory.since or {}
   memory.reported = memory.reported or {}
@@ -137,14 +147,20 @@ function statusitem.plan(observations, running, memory, now, context)
       if seen.item and wasMissing then
         action = action or { verb = "returned", app = app }
       end
+    elseif context.away then
+      -- Not counted while nobody is there. The item cannot be read on a
+      -- locked screen, so time spent away says nothing about it, and the
+      -- grace starts again from the first look after the return.
+      memory.since[app] = nil
     else
       memory.since[app] = memory.since[app] or now
       local seconds = now - memory.since[app]
-      if seconds >= statusitem.GRACE and not context.away and not context.paused then
-        local manager, process = runningManager(running)
+      if seconds >= statusitem.GRACE and not context.paused then
+        local manager, pid = runningManager(running)
         local last = manager and memory.restarted[manager.bundle] or nil
-        if manager and (last == nil or now - last >= statusitem.RESTART_EVERY) then
-          action = action or { verb = "restart", app = app, manager = manager, process = process, seconds = seconds }
+        local spent = last ~= nil and (last >= memory.since[app] or now - last < statusitem.RESTART_EVERY)
+        if manager and not spent then
+          action = action or { verb = "restart", app = app, manager = manager, pid = pid, seconds = seconds }
         elseif action == nil and not memory.reported[app] and (manager == nil or now - last >= statusitem.GRACE) then
           -- A manager that was restarted gets the same grace the agent got
           -- before the restart is called a failure.

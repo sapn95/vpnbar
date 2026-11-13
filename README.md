@@ -280,7 +280,7 @@ which is what a Quit that appears to do nothing really is
 Everything else is quit with a signal and opened again.
 
 `bootout` returns before the agent is gone, so vpnbar asks `launchctl print`
-until launchd has removed the service, for at most fifteen seconds, and loads
+until launchd has removed the service, for at most twenty-five seconds, and loads
 the plist only then. A restart has worked when launchd says the service runs.
 On 2026-11-13 the load came one second after the unload, hit a service that was
 still being taken down and loaded nothing, and a `pgrep` that matched the old
@@ -294,11 +294,13 @@ Three things follow from the same evening:
   in its place.
 - On every refresh the planner asks launchd whether it still has the agent of
   each connection it would bring up. If not, it loads it, on a backoff of its
-  own. A client you quit from the menu stays quit, and a copy running beside
-  launchd is only replaced once its connection is down.
+  own. A client you quit from the menu stays quit, also across a reload of
+  Hammerspoon. A copy running beside launchd is only replaced once its
+  connection is down, and only when launchd can load the agent.
 - GlobalProtect is pressed through its menu-bar item. When the agent has run
   for a minute without one and Bartender is running, vpnbar quits Bartender
-  and opens it again, at most once in ten minutes. That is what brought the
+  and opens it again, once per occurrence and at most once in ten minutes.
+  That is what brought the
   item back by hand, twice. Without a menu-bar manager it knows, vpnbar only
   tells you the item is missing. Neither happens while nobody is at the
   machine.

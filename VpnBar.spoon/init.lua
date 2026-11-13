@@ -797,7 +797,7 @@ function obj:tendStatusItems(agents, context)
   for _, manager in ipairs(statusitem.MANAGERS) do
     local found = hs.application.applicationsForBundleID(manager.bundle)
     if found and found[1] then
-      managers[manager.bundle] = found[1]:name()
+      managers[manager.bundle] = found[1]:pid()
     end
   end
   local standing = { away = autoconnect.away(context), paused = self.paused }
@@ -816,7 +816,7 @@ function obj:tendStatusItems(agents, context)
     )
     -- As a task, because it waits for the manager to quit and the run loop
     -- must not wait with it (ADR 0038).
-    local command = statusitem.restartCommand(action.manager, action.process)
+    local command = statusitem.restartCommand(action.manager, action.pid)
     local task = hs.task.new("/bin/sh", function(code)
       if code ~= 0 then
         self.logger.w(("statusitem: %s did not restart (exit %s)"):format(action.manager.name, tostring(code)))
@@ -1310,7 +1310,11 @@ function obj:refresh(options)
     context.agentLoaded = {}
     for app, state in pairs(agents) do
       context.agentLoaded[app] = state ~= "missing"
+      if state ~= "missing" then
+        self.agentSeen[app] = true
+      end
     end
+    context.agentSeen = self.agentSeen
     -- Under its own pcall: a manager that will not answer is no reason to
     -- lose the planner's pass.
     local tended, tendErr = pcall(self.tendStatusItems, self, agents, context)
@@ -2067,6 +2071,7 @@ function obj:init()
   -- manager was last restarted for it (ADR 0048). Not persisted: a restart of
   -- vpnbar may restart the manager once more, and that is all it costs.
   self.itemMemory = {}
+  self.agentSeen = {}
   -- The switch being pressed for, if any: `{ id, since }`. Not persisted, like
   -- the preference it belongs to (ADR 0030).
   self.switching = nil

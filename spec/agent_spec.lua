@@ -10,10 +10,12 @@ local statusitem = require("vpnbar.statusitem")
 --- swapped for a stand-in in a temporary directory before it runs, the spec
 --- refuses to run a command that still names a real one, and the agent it is
 --- built for does not exist: a label and an application name nobody has.
-local AGENT = { label = "ch.example.vpnbar-spec", plist = "/nonexistent/vpnbar spec.plist" }
+-- The plist is a file the setup writes into the temporary directory, because
+-- the commands ask whether it is there before they stop anything.
+local AGENT = { label = "ch.example.vpnbar-spec", plist = "" }
 local APP = "vpnbar-spec-app"
 local MANAGER = { name = "Spec Manager", bundle = "ch.example.vpnbar-spec-manager" }
-local MANAGER_PROCESS = "vpnbar-spec manager 7"
+local MANAGER_PID = 4711
 
 local REAL = {
   "/bin/launchctl",
@@ -23,16 +25,23 @@ local REAL = {
   "/usr/bin/id",
   "/usr/bin/osascript",
   "/usr/bin/open",
+  "/bin/kill",
 }
 
 --- launchd, as far as these commands can tell. State is files in `$FAKE`:
 --- `loaded` while the service is there, `going` with the number of `print`s it
---- survives after a `bootout`, and `proc/<name>` for every process `pgrep`
---- would find.
+--- survives after a `bootout`, `proc/<name>` for every process `pgrep`
+--- would find, `proc/<pid>` for the manager `kill -0` asks after, and
+--- `disabled` for a service `print-disabled` names as disabled.
 local STAND_INS = {
   launchctl = [[
 echo "launchctl $1" >> "$FAKE/log"
 case "$1" in
+  print-disabled)
+    printf 'disabled services = {\n'
+    [ -f "$FAKE/disabled" ] && printf '\t"%s" => disabled\n' "$FAKE_LABEL"
+    printf '}\n'
+    ;;
   bootout)
     [ -f "$FAKE/loaded" ] || exit 3
     cp "$FAKE/linger" "$FAKE/going"
@@ -85,11 +94,24 @@ echo 501
 ]],
   osascript = [[
 echo "osascript $2" >> "$FAKE/log"
-[ -f "$FAKE/wont-quit" ] || rm -f "$FAKE/proc/$FAKE_MANAGER"
+[ -f "$FAKE/wont-quit" ] || [ -f "$FAKE/quit-after" ] || rm -f "$FAKE/proc/$FAKE_MANAGER"
 ]],
   open = [[
 echo "open $*" >> "$FAKE/log"
 touch "$FAKE/proc/$FAKE_MANAGER"
+]],
+  -- Only `kill -0 <pid>`. A manager told to quit slowly keeps answering for
+  -- the number of looks in `quit-after`.
+  kill = [[
+if [ -f "$FAKE/quit-after" ]; then
+  left="$(cat "$FAKE/quit-after")"
+  if [ "$left" -le 0 ]; then
+    rm -f "$FAKE/quit-after" "$FAKE/proc/$2"
+  else
+    echo $((left - 1)) > "$FAKE/quit-after"
+  fi
+fi
+[ -f "$FAKE/proc/$2" ]
 ]],
 }
 
@@ -136,6 +158,7 @@ describe("the agent commands, run against a stand-in for launchd", function()
       write(root .. "/fakes/" .. name, "#!/bin/sh\n" .. body)
     end
     assert(os.execute("chmod +x " .. backends.shellQuote(root .. "/fakes") .. "/*"))
+    AGENT.plist = root .. "/vpnbar spec.plist"
   end)
 
   teardown(function()
@@ -147,6 +170,7 @@ describe("the agent commands, run against a stand-in for launchd", function()
     assert(os.execute("rm -rf " .. backends.shellQuote(dir)))
     assert(os.execute("mkdir -p " .. backends.shellQuote(dir .. "/proc")))
     write(dir .. "/linger", "0\n")
+    write(AGENT.plist, "")
   end)
 
   --- The service is loaded and its process runs.
@@ -170,10 +194,11 @@ describe("the agent commands, run against a stand-in for launchd", function()
     for _, real in ipairs(REAL) do
       assert.is_nil(command:find(real, 1, true), "still names " .. real)
     end
-    local env = ("FAKE=%s FAKE_APP=%s FAKE_MANAGER=%s"):format(
+    local env = ("FAKE=%s FAKE_APP=%s FAKE_MANAGER=%d FAKE_LABEL=%s"):format(
       backends.shellQuote(dir),
       backends.shellQuote(APP),
-      backends.shellQuote(MANAGER_PROCESS)
+      MANAGER_PID,
+      backends.shellQuote(AGENT.label)
     )
     local ok = os.execute(env .. " /bin/sh -c " .. backends.shellQuote(command))
     return ok == true, read(dir .. "/log")
@@ -261,6 +286,15 @@ describe("the agent commands, run against a stand-in for launchd", function()
       assert.equals(0, count(log, "pkill -9"), "a TERM that worked is not followed by a KILL: " .. log)
     end)
 
+    it("stops a copy beside launchd even when the agent could not be loaded again", function()
+      -- A quit is about the copy, not about what comes after it.
+      write(dir .. "/proc/" .. APP, "")
+      os.remove(AGENT.plist)
+      local ok, log = run(backends.bootoutCommand(AGENT, APP))
+      assert.is_true(ok, log)
+      assert.equals(1, count(log, "pkill -x " .. APP), log)
+    end)
+
     it("insists when the copy ignores the first signal, and says so when it stays", function()
       write(dir .. "/proc/" .. APP, "")
       write(dir .. "/unkillable", "")
@@ -298,17 +332,49 @@ describe("the agent commands, run against a stand-in for launchd", function()
       assert.is_true(kill < load, log)
     end)
 
-    it("fails when launchd will not take the plist", function()
+    it("fails when launchd will not take the plist, without waiting for it to run", function()
       write(dir .. "/refusals", "100000\n")
       local ok, log = run(backends.loadCommand(AGENT, APP))
       assert.is_false(ok, log)
+      assert.equals(0, count(log, "sleep 0.5"), "nothing to wait for on a service launchd has not got: " .. log)
+    end)
+
+    it("fails while launchd has no service, however alive the process looks", function()
+      -- The machine of 2026-11-13 22:20: a process called GlobalProtect, and
+      -- `launchctl print` answering `Could not find service`. A `pgrep` said
+      -- yes to that; launchd's answer is the one that counts.
+      write(dir .. "/proc/" .. APP, "")
+      write(dir .. "/unkillable", "")
+      write(dir .. "/refusals", "100000\n")
+      local ok, log = run(backends.loadCommand(AGENT, APP))
+      assert.is_false(ok, log)
+      assert.is_truthy(io.open(dir .. "/proc/" .. APP), "the process is still there")
+    end)
+
+    it("leaves the only client running when the plist is gone", function()
+      write(dir .. "/proc/" .. APP, "")
+      os.remove(AGENT.plist)
+      local ok, log = run(backends.loadCommand(AGENT, APP))
+      assert.is_false(ok, log)
+      assert.equals(0, count(log, "pkill"), log)
+      assert.equals(0, count(log, "launchctl bootstrap"), log)
+      assert.is_truthy(io.open(dir .. "/proc/" .. APP), "the copy beside launchd is still there")
+    end)
+
+    it("leaves the only client running when the service is disabled", function()
+      write(dir .. "/proc/" .. APP, "")
+      write(dir .. "/disabled", "")
+      local ok, log = run(backends.loadCommand(AGENT, APP))
+      assert.is_false(ok, log)
+      assert.equals(0, count(log, "pkill"), log)
+      assert.equals(0, count(log, "launchctl bootstrap"), log)
     end)
   end)
 
   describe("restarting a menu-bar manager", function()
     it("asks it to quit by bundle id, and opens it once it has gone", function()
-      write(dir .. "/proc/" .. MANAGER_PROCESS, "")
-      local ok, log = run(statusitem.restartCommand(MANAGER, MANAGER_PROCESS))
+      write(dir .. "/proc/" .. MANAGER_PID, "")
+      local ok, log = run(statusitem.restartCommand(MANAGER, MANAGER_PID))
       assert.is_true(ok, log)
       local quit = log:find('osascript tell application id "ch.example.vpnbar-spec-manager" to quit', 1, true)
       local open = log:find("open -b ch.example.vpnbar-spec-manager", 1, true)
@@ -316,10 +382,18 @@ describe("the agent commands, run against a stand-in for launchd", function()
       assert.is_true(quit < open, log)
     end)
 
+    it("waits for a manager that takes its time to quit, and opens it after", function()
+      write(dir .. "/proc/" .. MANAGER_PID, "")
+      write(dir .. "/quit-after", "40\n")
+      local ok, log = run(statusitem.restartCommand(MANAGER, MANAGER_PID))
+      assert.is_true(ok, log)
+      assert.equals(1, count(log, "open -b"), log)
+    end)
+
     it("does not open a manager that would not quit", function()
-      write(dir .. "/proc/" .. MANAGER_PROCESS, "")
+      write(dir .. "/proc/" .. MANAGER_PID, "")
       write(dir .. "/wont-quit", "")
-      local ok, log = run(statusitem.restartCommand(MANAGER, MANAGER_PROCESS))
+      local ok, log = run(statusitem.restartCommand(MANAGER, MANAGER_PID))
       assert.is_false(ok, log)
       assert.equals(0, count(log, "open "), log)
       assert.equals(statusitem.QUIT_TRIES, count(log, "sleep 0.5"), log)

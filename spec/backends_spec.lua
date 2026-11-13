@@ -324,7 +324,7 @@ describe("the globalprotect backend, restarting the agent", function()
     -- The load hangs off the check that ends the unload, so a service launchd
     -- still has is never bootstrapped over.
     local agent = { label = "a.b.c", plist = "/p.plist" }
-    local unload = backends.bootoutCommand(agent, "App")
+    local unload = backends.bootoutCommand(agent, "App", true)
     local command = backends.bootstrapCommand(agent, "App")
     assert.equals(unload .. " && { ", command:sub(1, #unload + 6))
     local gone = "! /bin/launchctl print gui/$(/usr/bin/id -u)/a.b.c >/dev/null 2>&1"
@@ -340,12 +340,14 @@ describe("the globalprotect backend, restarting the agent", function()
     assert.equals(loops, bounded)
   end)
 
-  it("waits for launchd to drop the service for up to fifteen seconds", function()
+  it("waits for launchd to drop the service for longer than launchd's own twenty seconds", function()
+    -- The GlobalProtect plist sets no ExitTimeOut, so launchd waits its default
+    -- twenty seconds before it kills the agent.
     local command = backends.bootoutCommand({ label = "a.b.c", plist = "/p.plist" }, "App")
-    assert.equals(15, backends.AGENT_REMOVAL_TRIES * backends.AGENT_POLL)
+    assert.equals(25, backends.AGENT_REMOVAL_TRIES * backends.AGENT_POLL)
     assert.is_truthy(
       command:find(
-        '/bin/launchctl bootout gui/$(/usr/bin/id -u)/a.b.c ; n=0 ; while [ "$n" -lt 30 ]'
+        '/bin/launchctl bootout gui/$(/usr/bin/id -u)/a.b.c ; n=0 ; while [ "$n" -lt 50 ]'
           .. " && /bin/launchctl print gui/$(/usr/bin/id -u)/a.b.c >/dev/null 2>&1 ; do /bin/sleep 0.5 ;",
         1,
         true
