@@ -137,14 +137,17 @@ end
 --- inside one blocking `exec`, and a loop that waited for launchd without a
 --- bound would hold Hammerspoon for as long as launchd took.
 ---
---- Fifteen seconds for a removal. Measured on 2026-11-13: `bootout` at
+--- Twenty-five seconds for a removal. Measured on 2026-11-13: `bootout` at
 --- 22:20:26.5, the agent gone at 22:20:28.6, because it unloads its network
---- extension configuration before it exits. Two seconds on a good day, so the
---- bound is several of those. Five tries for a `bootstrap`, a second apart, and
+--- extension configuration before it exits. Two seconds on a good day. The
+--- bound is past launchd's own: the GlobalProtect plist sets no `ExitTimeOut`,
+--- so launchd waits its default twenty seconds before it kills the agent, and
+--- a wait that gave up sooner would skip the load and leave the service to be
+--- removed after the command had finished. Five tries for a `bootstrap`, a second apart, and
 --- five seconds for launchd to say the service runs. A copy that launchd does
 --- not own gets five seconds to leave on a TERM and two more after a KILL.
 backends.AGENT_POLL = 0.5
-backends.AGENT_REMOVAL_TRIES = 30
+backends.AGENT_REMOVAL_TRIES = 50
 backends.AGENT_BOOTSTRAP_TRIES = 5
 backends.AGENT_START_TRIES = 10
 backends.STRAY_TERM_TRIES = 10
@@ -183,6 +186,19 @@ local function agentIsRunning(agent)
   return backends.agentPrintCommand(agent) .. " | /usr/bin/grep -Eq 'state = running|pid = [0-9]'"
 end
 
+--- Shell: can launchd load this service at all?
+---
+--- The plist has to be there and the service must not be disabled. Asked
+--- before anything is stopped: a copy beside launchd is the only client there
+--- is, and stopping it for a load that cannot work would leave none.
+local function agentCanLoad(agent)
+  return ("[ -r %s ] && ! /bin/launchctl print-disabled %s 2>/dev/null | /usr/bin/grep -Fq %s"):format(
+    backends.shellQuote(agent.plist),
+    GUI_DOMAIN,
+    backends.shellQuote(('"%s" => disabled'):format(agent.label))
+  )
+end
+
 --- Shell: repeat a sleep while something holds, a bounded number of times.
 local function waitWhile(condition, tries)
   return ('n=0 ; while [ "$n" -lt %d ] && %s ; do /bin/sleep %s ; n=$((n+1)) ; done'):format(
@@ -200,10 +216,17 @@ end
 --- removed. What is left when the service is not loaded is a copy somebody
 --- started with `open`, which nothing restarts, so a signal sticks.
 --- TERM first, because the agent logs out of its gateway on a TERM.
+---
+--- Where the copy is stopped to make way for the agent, it is only stopped once
+--- launchd can load the agent: with the plist gone or the service disabled,
+--- the copy is the only client there is.
 --- @return table commands
-local function strayCommands(agent, app)
+local function strayCommands(agent, app, toReload)
   local quoted = backends.shellQuote(app)
   local stray = ("! %s && /usr/bin/pgrep -x %s >/dev/null"):format(agentIsLoaded(agent), quoted)
+  if toReload then
+    stray = agentCanLoad(agent) .. " && " .. stray
+  end
   return {
     stray .. " && /usr/bin/pkill -x " .. quoted,
     waitWhile(stray, backends.STRAY_TERM_TRIES),
@@ -221,12 +244,15 @@ end
 local function startCommands(agent)
   local bootstrap = ("/bin/launchctl bootstrap %s %s"):format(GUI_DOMAIN, backends.shellQuote(agent.plist))
   return {
-    ('n=0 ; while [ "$n" -lt %d ] && ! %s ; do %s || /bin/sleep 1 ; n=$((n+1)) ; done'):format(
+    ('n=0 ; while [ "$n" -lt %d ] && %s && ! %s ; do %s || /bin/sleep 1 ; n=$((n+1)) ; done'):format(
       backends.AGENT_BOOTSTRAP_TRIES,
+      agentCanLoad(agent),
       agentIsLoaded(agent),
       bootstrap
     ),
-    waitWhile("! " .. agentIsRunning(agent), backends.AGENT_START_TRIES),
+    -- Only for a service launchd has. Waiting for one it refused to load is
+    -- seconds of a blocked menu for an answer that is already known.
+    waitWhile(agentIsLoaded(agent) .. " && ! " .. agentIsRunning(agent), backends.AGENT_START_TRIES),
     agentIsRunning(agent),
   }
 end
@@ -256,13 +282,14 @@ end
 --- status is not the one that counts.
 --- @param agent table { label = string, plist = string }
 --- @param app string
+--- @param toReload boolean|nil true when a load follows, see `strayCommands`
 --- @return string command
-function backends.bootoutCommand(agent, app)
+function backends.bootoutCommand(agent, app, toReload)
   local parts = {
     ("/bin/launchctl bootout %s/%s"):format(GUI_DOMAIN, agent.label),
     waitWhile(agentIsLoaded(agent), backends.AGENT_REMOVAL_TRIES),
   }
-  for _, command in ipairs(strayCommands(agent, app)) do
+  for _, command in ipairs(strayCommands(agent, app, toReload)) do
     parts[#parts + 1] = command
   end
   parts[#parts + 1] = ("! %s && ! /usr/bin/pgrep -x %s >/dev/null"):format(
@@ -287,7 +314,7 @@ end
 --- @param app string
 --- @return string command
 function backends.bootstrapCommand(agent, app)
-  return ("%s && { %s ; }"):format(backends.bootoutCommand(agent, app), table.concat(startCommands(agent), " ; "))
+  return ("%s && { %s ; }"):format(backends.bootoutCommand(agent, app, true), table.concat(startCommands(agent), " ; "))
 end
 
 --- Make sure a launchd agent is loaded and running, without unloading it.
@@ -300,7 +327,7 @@ end
 --- @param app string
 --- @return string command
 function backends.loadCommand(agent, app)
-  local parts = strayCommands(agent, app)
+  local parts = strayCommands(agent, app, true)
   for _, command in ipairs(startCommands(agent)) do
     parts[#parts + 1] = command
   end

@@ -1656,7 +1656,11 @@ describe("autoconnect.plan, an agent launchd no longer has", function()
   --- What the adapter measured on 2026-11-13 after the restart: launchd has no
   --- such service and no process of that name runs.
   local function gone(extra)
-    local context = { agentLoaded = { GlobalProtect = false }, appRunning = { GlobalProtect = false } }
+    local context = {
+      agentLoaded = { GlobalProtect = false },
+      agentSeen = { GlobalProtect = true },
+      appRunning = { GlobalProtect = false },
+    }
     for key, value in pairs(extra or {}) do
       context[key] = value
     end
@@ -1689,6 +1693,20 @@ describe("autoconnect.plan, an agent launchd no longer has", function()
       { id = "gp", verb = "connect", reason = "wanted" },
       autoconnect.plan(clients(), down, {}, 1000, context)
     )
+  end)
+
+  it("does not load back an agent it never saw loaded, so a quit outlives a reload", function()
+    -- Quit from the menu, then Hammerspoon reloads: the hold is gone with it,
+    -- and the agent has not been seen loaded since (ADR 0031).
+    local unseen = gone({ agentSeen = {} })
+    assert.is_false(autoconnect.agentMissing(first(clients()), unseen))
+    local plan = autoconnect.plan(clients(), down, {}, 1000, unseen)
+    assert.is_true(plan == nil or plan.verb ~= "load")
+    -- A copy running beside launchd is a different case: somebody started the
+    -- client, and launchd does not have it.
+    local beside = gone({ agentSeen = {}, appRunning = { GlobalProtect = true } })
+    assert.is_true(autoconnect.agentMissing(first(clients()), beside))
+    assert.equals("load", autoconnect.plan(clients(), down, {}, 1000, beside).verb)
   end)
 
   it("loads nothing when nobody measured launchd", function()

@@ -314,8 +314,15 @@ end
 --- ([ADR 0031](../../docs/adr/0031-autoconnect-does-not-undo-a-quit.md)). For
 --- this client the quit *is* the unload, so without that line the planner
 --- would load back what somebody had just closed, ten seconds later.
+---
+--- That hold lives as long as Hammerspoon does. So a missing agent is only
+--- loaded back where it was seen loaded since Hammerspoon started
+--- (`agentSeen`), or where a copy of the client runs beside launchd. An agent
+--- quit before a reload was not seen since, and stays down; the agent lost on
+--- 2026-11-13 had been loaded all afternoon.
 --- @param profile table
---- @param context table|nil { agentLoaded = { [app] = boolean }, quitByHand = { [app] = boolean } }
+--- @param context table|nil { agentLoaded = { [app] = boolean }, agentSeen = { [app] = boolean },
+---   appRunning = { [app] = boolean }, quitByHand = { [app] = boolean } }
 --- @return boolean
 function autoconnect.agentMissing(profile, context)
   local app = type(profile) == "table" and profile.app or nil
@@ -326,7 +333,12 @@ function autoconnect.agentMissing(profile, context)
   if context.quitByHand and context.quitByHand[app] then
     return false
   end
-  return type(context.agentLoaded) == "table" and context.agentLoaded[app] == false
+  if not (type(context.agentLoaded) == "table" and context.agentLoaded[app] == false) then
+    return false
+  end
+  local seen = type(context.agentSeen) == "table" and context.agentSeen[app] == true
+  local beside = type(context.appRunning) == "table" and context.appRunning[app] == true
+  return seen or beside
 end
 
 --- Has this connection just arrived, rather than having been up all along?
