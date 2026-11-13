@@ -375,6 +375,26 @@ default                                 fe80::%utun1                            
     assert.same({ "en0", 0 }, { routes.interfaceFor(scoped, "10.0.0.10") })
   end)
 
+  it("takes a scoped row on the primary interface where the lookup would end at default", function()
+    -- The kernel looks again in the primary interface's scope when the
+    -- unscoped answer is `default`, so a narrower scoped route there wins.
+    local primary = "default 192.168.1.1 UGScg en0\n10 192.168.1.1 UGScI en0\n10 10.11.12.13 UGScI utun9\n"
+    assert.same({ "en0", 8 }, { routes.interfaceFor(primary, "10.0.0.10") })
+    -- The same row is still left out when an unscoped route already covers it.
+    local covered = primary .. "10.0/16 10.11.12.13 UGSc utun4\n"
+    assert.same({ "utun4", 16 }, { routes.interfaceFor(covered, "10.0.0.10") })
+    -- Nor against an unscoped route narrower than `default`, however narrow
+    -- the scoped one is: the second look happens only after `default`.
+    local narrower = "default 192.168.1.1 UGScg en0\n10 10.11.12.13 UGSc utun4\n10.0/16 192.168.1.1 UGScI en0\n"
+    assert.same({ "utun4", 8 }, { routes.interfaceFor(narrower, "10.0.0.10") })
+    -- The primary interface is the first unscoped `default`, the one in use.
+    local two = "default 192.168.1.1 UGScg en0\ndefault 192.0.2.1 UGSc en1\n10 192.0.2.1 UGScI en1\n"
+    assert.same({ "en0", 0 }, { routes.interfaceFor(two, "10.0.0.10") })
+    -- And a scoped row on another interface never counts.
+    local other = "default 192.168.1.1 UGScg en0\n10 10.11.12.13 UGScI utun9\n"
+    assert.same({ "en0", 0 }, { routes.interfaceFor(other, "10.0.0.10") })
+  end)
+
   it("says how wide the winning route is", function()
     assert.same({ "en0", 0 }, { routes.interfaceFor(NO_AGGREGATE, "10.0.0.10") })
     assert.same({ "utun4", 8 }, { routes.interfaceFor(WITH_AGGREGATE, "10.0.0.10") })

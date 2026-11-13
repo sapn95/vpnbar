@@ -60,7 +60,9 @@ by, and whether that is the tunnel's. The question is answered from
 uses: the longest prefix that covers the address wins. Two kinds of row are left
 out. The IPv6 table has `default` rows of its own, and one of those read as IPv4
 is a route to everything. Scoped rows, flagged `I`, carry only traffic already
-bound to their interface. The tunnel's interface is every live one the probe
+bound to their interface, with one exception the kernel makes: when the
+unscoped lookup ends at `default`, it looks again in the scope of the primary
+interface, so a narrower scoped row on that interface wins there. The tunnel's interface is every live one the probe
 accepts, so a range two tunnels happen to share gives the same answer on every
 read. A range only this VPN hands out, which is what a probe is for, has one.
 
@@ -107,7 +109,10 @@ Protection allows it, for the reason it allows a restart: it ends with the
 tunnel up. Once the renew has taken it down, the connect that brings it back is
 pressed for the way a switch's target is: every thirty seconds, not held for a
 quiet moment, with nothing else started meanwhile, for as long as a switch would
-press. Holding it back while somebody types would leave the machine on nothing
+press. The hold ends when the tunnel carries again, not when it says connected:
+a tunnel reports connected before its routes arrive. It is also dropped for a
+connection the loop would no longer start, one whose autoconnect was switched
+off or whose client was closed, so that nothing else waits on it. Holding it back while somebody types would leave the machine on nothing
 for as long as the typing lasts, and a stand-in that came up in the gap would
 hold the routes again, so the connection would come back as empty as it went.
 

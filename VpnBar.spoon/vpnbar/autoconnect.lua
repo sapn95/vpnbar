@@ -614,12 +614,21 @@ function autoconnect.plan(cfg, states, memory, now, context)
   -- pass, and a stand-in coming up for a switch that is failing is the
   -- opposite of what was asked for.
   local pressedFor = preferred and autoconnect.switching(preferred, context, now) and preferred or nil
-  -- A renew holds the same line for the connection it took down, until it is
-  -- back: a stand-in that came up meanwhile would hold the routes again, and
-  -- the connection would come back as empty as it went.
+  -- A renew holds the same line for the connection it took down, until it
+  -- carries again: a stand-in that came up meanwhile would hold the routes
+  -- again, and the connection would come back as empty as it went. "Connected"
+  -- is not the end of it. A tunnel reports connected before its routes arrive,
+  -- and the adapter clears the record only once the tunnel carries, so the
+  -- record is what says the renew is over.
+  --
+  -- The hold is only for a connection this loop would still start. One whose
+  -- autoconnect was switched off, or whose client was closed by hand or is not
+  -- running, is skipped below, and holding the line for it would stop every
+  -- other connection for the rest of the patience with nothing to show for it.
   if pressedFor == nil then
     for _, profile in ipairs(order) do
-      if pressedFor == nil and states[profile.id] ~= "connected" and autoconnect.renewing(profile.id, context, now) then
+      local wanted = (profile.autoconnect or profile.id == preferred) and autoconnect.mayStart(profile, context)
+      if pressedFor == nil and wanted and autoconnect.renewing(profile.id, context, now) then
         pressedFor = profile.id
       end
     end
