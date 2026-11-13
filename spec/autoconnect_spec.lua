@@ -1624,3 +1624,202 @@ describe("autoconnect.renewDue", function()
     assert.is_true(autoconnect.renewDue(entry, 1000 + COOLDOWN))
   end)
 end)
+
+describe("autoconnect.plan, an agent launchd no longer has", function()
+  --- GlobalProtect first, wanted, with a second connection through the same
+  --- client and the AWS one beside them.
+  local function clients(overrides)
+    local gp = {
+      id = "gp",
+      name = "GP",
+      backend = "globalprotect",
+      app = "GlobalProtect",
+      autoconnect = true,
+      order = 10,
+    }
+    for key, value in pairs(overrides or {}) do
+      gp[key] = value
+    end
+    return assert(store.normalise({
+      settings = { exclusive = false, fallback = true },
+      profiles = {
+        gp,
+        { id = "gp2", name = "GP 2", backend = "globalprotect", app = "GlobalProtect", order = 15 },
+        { id = "aws", name = "AWS", backend = "awsvpn", app = "AWS VPN Client", row = "w", order = 20 },
+      },
+    }))
+  end
+
+  local KEY = "agent:GlobalProtect"
+  local down = { gp = "disconnected", gp2 = "disconnected", aws = "disconnected" }
+
+  --- What the adapter measured on 2026-11-13 after the restart: launchd has no
+  --- such service and no process of that name runs.
+  local function gone(extra)
+    local context = { agentLoaded = { GlobalProtect = false }, appRunning = { GlobalProtect = false } }
+    for key, value in pairs(extra or {}) do
+      context[key] = value
+    end
+    return context
+  end
+
+  local function first(cfg)
+    return store.get(cfg, "gp")
+  end
+
+  it("loads it, under a verb and a memory key of its own", function()
+    assert.same(
+      { id = "gp", verb = "load", reason = "agent not loaded", key = KEY },
+      autoconnect.plan(clients(), down, {}, 1000, gone())
+    )
+    assert.equals(KEY, autoconnect.agentKey("GlobalProtect"))
+  end)
+
+  it("loads before it presses, because there is nothing to press", function()
+    -- With the client measured as running the connect would be allowed, and
+    -- the load still comes first.
+    local context = gone({ appRunning = { GlobalProtect = true } })
+    local plan = autoconnect.plan(clients(), down, {}, 1000, context)
+    assert.equals("load", plan.verb)
+  end)
+
+  it("leaves an agent alone that launchd has", function()
+    local context = { agentLoaded = { GlobalProtect = true }, appRunning = { GlobalProtect = true } }
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(clients(), down, {}, 1000, context)
+    )
+  end)
+
+  it("loads nothing when nobody measured launchd", function()
+    assert.same(
+      { id = "gp", verb = "connect", reason = "wanted" },
+      autoconnect.plan(clients(), down, {}, 1000, { appRunning = { GlobalProtect = true } })
+    )
+    assert.is_false(autoconnect.agentMissing(first(clients()), nil))
+    assert.is_false(autoconnect.agentMissing(first(clients()), { agentLoaded = {} }))
+  end)
+
+  it("does not undo a quit somebody made from the menu", function()
+    -- For this client the quit is the unload (ADR 0031, ADR 0033).
+    local context = gone({ quitByHand = { GlobalProtect = true } })
+    assert.is_nil(autoconnect.plan(clients(), down, {}, 1000, context))
+    assert.is_false(autoconnect.agentMissing(first(clients()), context))
+    assert.is_true(autoconnect.agentMissing(first(clients()), gone()))
+  end)
+
+  it("does nothing while everything is switched off", function()
+    assert.is_nil(autoconnect.plan(clients(), down, {}, 1000, gone({ paused = true })))
+  end)
+
+  it("only loads the agent of a connection it would bring up", function()
+    assert.is_nil(autoconnect.plan(clients({ autoconnect = false }), down, {}, 1000, gone()))
+    -- A switch is that mark, for this session.
+    local plan = autoconnect.plan(clients({ autoconnect = false }), down, {}, 1000, gone({ preferred = "gp" }))
+    assert.equals("load", plan.verb)
+  end)
+
+  it("loads nothing for another connection while a switch is being pressed for", function()
+    local context = gone({ preferred = "aws", switching = { id = "aws", since = 1000 } })
+    local plan = autoconnect.plan(clients(), down, {}, 1000, context)
+    assert.is_truthy(plan)
+    assert.equals("aws", plan.id)
+    assert.equals("connect", plan.verb)
+  end)
+
+  it("asks nothing of a backend that names no agent", function()
+    local aws = store.get(clients(), "aws")
+    assert.is_false(autoconnect.agentMissing(aws, { agentLoaded = { ["AWS VPN Client"] = false } }))
+    assert.is_false(autoconnect.agentMissing({ id = "x", backend = "globalprotect" }, { agentLoaded = {} }))
+    assert.is_false(autoconnect.agentMissing(nil, gone()))
+  end)
+
+  it("still loads while nobody is there, because a load presses nothing", function()
+    -- ADR 0042 holds presses and anything that takes a tunnel down. This is
+    -- neither: a command, and nothing of that name is running.
+    for _, away in ipairs({ { locked = true }, { idle = autoconnect.IDLE_BEFORE_AWAY } }) do
+      local plan = autoconnect.plan(clients(), down, {}, 1000, gone(away))
+      assert.equals("load", plan and plan.verb)
+    end
+  end)
+
+  describe("with a copy running beside launchd", function()
+    local beside = { agentLoaded = { GlobalProtect = false }, appRunning = { GlobalProtect = true } }
+
+    it("replaces it once every connection through it reads down", function()
+      assert.same(
+        { id = "gp", verb = "load", reason = "running beside launchd", key = KEY },
+        autoconnect.plan(clients(), down, {}, 1000, beside)
+      )
+    end)
+
+    it("leaves it alone while a connection through it is up, or cannot be read", function()
+      -- Stopping the copy is a disconnect and costs a login (ADR 0033).
+      for _, state in ipairs({ "connected", "connecting", "unknown" }) do
+        local states = { gp = state, gp2 = "disconnected", aws = "disconnected" }
+        local plan = autoconnect.plan(clients(), states, {}, 1000, beside)
+        assert.is_true(plan == nil or plan.verb ~= "load", state)
+      end
+    end)
+
+    it("counts the other connection through the same client", function()
+      local states = { gp = "disconnected", gp2 = "connected", aws = "disconnected" }
+      local plan = autoconnect.plan(clients(), states, {}, 1000, beside)
+      assert.is_true(plan == nil or plan.verb ~= "load")
+    end)
+
+    it("does not count a tunnel through another client", function()
+      local states = { gp = "disconnected", gp2 = "disconnected", aws = "connected" }
+      assert.equals("load", autoconnect.plan(clients(), states, {}, 1000, beside).verb)
+    end)
+
+    it("loads over a reading that says up when no such process runs", function()
+      -- A probe can lag. With no process of that name there is no tunnel to lose.
+      local states = { gp = "connected", gp2 = "disconnected", aws = "disconnected" }
+      local plan = autoconnect.plan(clients(), states, {}, 1000, gone())
+      assert.equals("load", plan and plan.verb)
+    end)
+  end)
+
+  describe("backing off", function()
+    it("waits out the cooldown before it loads again, and doubles it", function()
+      local memory = {}
+      autoconnect.remember(memory, KEY, 1000)
+      assert.is_nil(autoconnect.plan(clients(), down, memory, 1000 + autoconnect.COOLDOWN - 1, gone()))
+      assert.equals("load", autoconnect.plan(clients(), down, memory, 1000 + autoconnect.COOLDOWN, gone()).verb)
+      autoconnect.remember(memory, KEY, 2000)
+      assert.is_nil(autoconnect.plan(clients(), down, memory, 2000 + autoconnect.COOLDOWN, gone()))
+      assert.equals("load", autoconnect.plan(clients(), down, memory, 2000 + 2 * autoconnect.COOLDOWN, gone()).verb)
+    end)
+
+    it("never loads twice in a row on the timer", function()
+      -- The adapter remembers the attempt it was handed. Ten seconds later the
+      -- plan is the same question and must not be the same answer.
+      local memory = {}
+      local plan = autoconnect.plan(clients(), down, memory, 1000, gone())
+      autoconnect.remember(memory, plan.key, 1000)
+      assert.is_nil(autoconnect.plan(clients(), down, memory, 1010, gone()))
+    end)
+
+    it("keeps its own count, so a failed load does not slow the connect", function()
+      local memory = {}
+      autoconnect.remember(memory, KEY, 1000)
+      local context = { agentLoaded = { GlobalProtect = true }, appRunning = { GlobalProtect = true } }
+      assert.same(
+        { id = "gp", verb = "connect", reason = "wanted" },
+        autoconnect.plan(clients(), down, memory, 1001, context)
+      )
+    end)
+
+    it("starts from nothing the next time, once launchd has it back", function()
+      local memory = {}
+      autoconnect.remember(memory, KEY, 1000)
+      autoconnect.remember(memory, KEY, 1100)
+      local back = { agentLoaded = { GlobalProtect = true }, appRunning = { GlobalProtect = true } }
+      local up = { gp = "connected", gp2 = "disconnected", aws = "disconnected" }
+      autoconnect.plan(clients(), up, memory, 1200, back)
+      assert.equals(0, memory[KEY].attempts)
+      assert.equals("load", autoconnect.plan(clients(), down, memory, 1201, gone()).verb)
+    end)
+  end)
+end)

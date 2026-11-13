@@ -131,6 +131,106 @@ function backends.restartCommand(app)
   }, " ; ")
 end
 
+--- How often launchd is asked, and how many times, while an agent goes or comes.
+---
+--- Every wait below is a count, never a condition alone: the command runs
+--- inside one blocking `exec`, and a loop that waited for launchd without a
+--- bound would hold Hammerspoon for as long as launchd took.
+---
+--- Fifteen seconds for a removal. Measured on 2026-11-13: `bootout` at
+--- 22:20:26.5, the agent gone at 22:20:28.6, because it unloads its network
+--- extension configuration before it exits. Two seconds on a good day, so the
+--- bound is several of those. Five tries for a `bootstrap`, a second apart, and
+--- five seconds for launchd to say the service runs. A copy that launchd does
+--- not own gets five seconds to leave on a TERM and two more after a KILL.
+backends.AGENT_POLL = 0.5
+backends.AGENT_REMOVAL_TRIES = 30
+backends.AGENT_BOOTSTRAP_TRIES = 5
+backends.AGENT_START_TRIES = 10
+backends.STRAY_TERM_TRIES = 10
+backends.STRAY_KILL_TRIES = 4
+
+--- The uid is asked for rather than remembered, because a uid baked in is a
+--- uid that is wrong for anybody else.
+local GUI_DOMAIN = "gui/$(/usr/bin/id -u)"
+
+--- Ask launchd what it knows about an agent.
+---
+--- `launchctl print` fails when the service is not loaded and prints its state
+--- when it is, so one command answers both questions the adapter has: is it
+--- there, and does it run. Its complaint about a missing service goes to
+--- stderr and is dropped, because "not loaded" is an answer here and not a
+--- fault.
+--- @param agent table { label = string, plist = string }
+--- @return string command
+function backends.agentPrintCommand(agent)
+  return ("/bin/launchctl print %s/%s 2>/dev/null"):format(GUI_DOMAIN, agent.label)
+end
+
+--- Shell: does launchd have this service?
+local function agentIsLoaded(agent)
+  return ("/bin/launchctl print %s/%s >/dev/null 2>&1"):format(GUI_DOMAIN, agent.label)
+end
+
+--- Shell: does launchd say this service runs?
+---
+--- Not `pgrep`. A process of that name proves nothing about launchd: on
+--- 2026-11-13 the final `pgrep -x GlobalProtect` of a restart matched the old
+--- agent on its way out, reported success, and left a machine where
+--- `launchctl print` answered `Could not find service`
+--- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+local function agentIsRunning(agent)
+  return backends.agentPrintCommand(agent) .. " | /usr/bin/grep -Eq 'state = running|pid = [0-9]'"
+end
+
+--- Shell: repeat a sleep while something holds, a bounded number of times.
+local function waitWhile(condition, tries)
+  return ('n=0 ; while [ "$n" -lt %d ] && %s ; do /bin/sleep %s ; n=$((n+1)) ; done'):format(
+    tries,
+    condition,
+    tostring(backends.AGENT_POLL)
+  )
+end
+
+--- Stop a copy of the application that launchd does not own.
+---
+--- Every step asks launchd first and does nothing while the service is loaded,
+--- so this never signals the agent itself: that kill is the race against
+--- `KeepAlive` that [ADR 0033](../../docs/adr/0033-stopping-an-agent-that-launchd-restarts.md)
+--- removed. What is left when the service is not loaded is a copy somebody
+--- started with `open`, which nothing restarts, so a signal sticks.
+--- TERM first, because the agent logs out of its gateway on a TERM.
+--- @return table commands
+local function strayCommands(agent, app)
+  local quoted = backends.shellQuote(app)
+  local stray = ("! %s && /usr/bin/pgrep -x %s >/dev/null"):format(agentIsLoaded(agent), quoted)
+  return {
+    stray .. " && /usr/bin/pkill -x " .. quoted,
+    waitWhile(stray, backends.STRAY_TERM_TRIES),
+    stray .. " && /usr/bin/pkill -9 -x " .. quoted,
+    waitWhile(stray, backends.STRAY_KILL_TRIES),
+  }
+end
+
+--- Load the service and wait for launchd to say it runs.
+---
+--- `bootstrap` is tried again while launchd does not have the service: it
+--- answers error 5 or 37 while a removal is still in flight. The last command
+--- is the answer the caller gets, and it is launchd's.
+--- @return table commands
+local function startCommands(agent)
+  local bootstrap = ("/bin/launchctl bootstrap %s %s"):format(GUI_DOMAIN, backends.shellQuote(agent.plist))
+  return {
+    ('n=0 ; while [ "$n" -lt %d ] && ! %s ; do %s || /bin/sleep 1 ; n=$((n+1)) ; done'):format(
+      backends.AGENT_BOOTSTRAP_TRIES,
+      agentIsLoaded(agent),
+      bootstrap
+    ),
+    waitWhile("! " .. agentIsRunning(agent), backends.AGENT_START_TRIES),
+    agentIsRunning(agent),
+  }
+end
+
 --- Stop an application that launchd has been told to keep alive.
 ---
 --- `pkill` against such a service is a race nobody wins. The GlobalProtect
@@ -140,20 +240,36 @@ end
 ---
 --- `launchctl bootout` unloads the service instead, so there is nothing left
 --- to restart it. In the person's own GUI domain it needs no root, which was
---- measured rather than assumed. The command still ends by asking whether the
---- process is gone, for the same reason the `pkill` one does: `bootout` reports
---- "not loaded" as a failure, which is the normal answer when somebody has
---- already stopped it.
+--- measured rather than assumed.
+---
+--- `bootout` returns before the service is gone. Measured on 2026-11-13: it
+--- returned at once, the agent exited two seconds later, and only then did
+--- launchd log `removing service`. So the command waits until `launchctl
+--- print` fails, which is launchd saying the service is removed. One fixed
+--- second was the old wait, and it was half of what the agent needed
+--- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+---
+--- A copy running beside launchd is stopped after that, and the command ends
+--- by asking both questions: launchd has no such service, and no process of
+--- that name is left. `bootout` itself reports "not loaded" as a failure, which
+--- is the normal answer when somebody has already stopped it, so its own exit
+--- status is not the one that counts.
 --- @param agent table { label = string, plist = string }
 --- @param app string
 --- @return string command
 function backends.bootoutCommand(agent, app)
-  local quoted = backends.shellQuote(app)
-  return table.concat({
-    "/bin/launchctl bootout gui/$(/usr/bin/id -u)/" .. agent.label,
-    "/bin/sleep " .. tostring(backends.APP_SETTLE),
-    "! /usr/bin/pgrep -x " .. quoted .. " >/dev/null",
-  }, " ; ")
+  local parts = {
+    ("/bin/launchctl bootout %s/%s"):format(GUI_DOMAIN, agent.label),
+    waitWhile(agentIsLoaded(agent), backends.AGENT_REMOVAL_TRIES),
+  }
+  for _, command in ipairs(strayCommands(agent, app)) do
+    parts[#parts + 1] = command
+  end
+  parts[#parts + 1] = ("! %s && ! /usr/bin/pgrep -x %s >/dev/null"):format(
+    agentIsLoaded(agent),
+    backends.shellQuote(app)
+  )
+  return table.concat(parts, " ; ")
 end
 
 --- Unload a launchd agent and load it again.
@@ -161,17 +277,52 @@ end
 --- `open -a` would start the application beside launchd rather than under it,
 --- which is a second copy with nothing keeping it alive. Loading the plist
 --- back puts the service where it was.
+---
+--- The load only runs once the unload has finished. On 2026-11-13 the
+--- `bootstrap` ran one second after the `bootout`, hit a service launchd was
+--- still tearing down and loaded nothing. The restart reported success and the
+--- agent was gone from launchd
+--- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
 --- @param agent table { label = string, plist = string }
 --- @param app string
 --- @return string command
 function backends.bootstrapCommand(agent, app)
-  local quoted = backends.shellQuote(app)
-  return table.concat({
-    backends.bootoutCommand(agent, app),
-    "/bin/launchctl bootstrap gui/$(/usr/bin/id -u) " .. backends.shellQuote(agent.plist),
-    "/bin/sleep " .. tostring(backends.APP_SETTLE),
-    "/usr/bin/pgrep -x " .. quoted .. " >/dev/null",
-  }, " ; ")
+  return ("%s && { %s ; }"):format(backends.bootoutCommand(agent, app), table.concat(startCommands(agent), " ; "))
+end
+
+--- Make sure a launchd agent is loaded and running, without unloading it.
+---
+--- Does nothing to a service launchd already has. Where launchd has none, a
+--- copy of the application running beside it is stopped first, and then the
+--- plist is loaded. This is what vpnbar runs wherever it would otherwise open
+--- the application ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+--- @param agent table { label = string, plist = string }
+--- @param app string
+--- @return string command
+function backends.loadCommand(agent, app)
+  local parts = strayCommands(agent, app)
+  for _, command in ipairs(startCommands(agent)) do
+    parts[#parts + 1] = command
+  end
+  return table.concat(parts, " ; ")
+end
+
+--- What launchd said about an agent, as one word.
+---
+--- `missing` when the print failed, which is launchd having no such service.
+--- `running` when it names a running state or a pid, `loaded` otherwise.
+--- @param out string|nil output of `agentPrintCommand`
+--- @param ok boolean whether it exited zero
+--- @return string "missing"|"loaded"|"running"
+function backends.agentState(out, ok)
+  if not ok then
+    return "missing"
+  end
+  out = tostring(out or "")
+  if out:find("state = running", 1, true) or out:find("pid = %d") then
+    return "running"
+  end
+  return "loaded"
 end
 
 --- Restart one launchd service, in whichever domain it was registered in.
@@ -227,9 +378,50 @@ end
 --- them may be made about a `protected` connection
 --- ([ADR 0028](../../docs/adr/0028-quit-and-restart-are-per-application.md)).
 --- The launchd agent behind a backend's application, where there is one.
-local function agentOf(profile)
+--- @param profile table
+--- @return table|nil { label = string, plist = string }
+function backends.agentOf(profile)
+  if type(profile) ~= "table" then
+    return nil
+  end
   local backend = backends.byName[profile.backend]
   return backend and backend.AGENT or nil
+end
+local agentOf = backends.agentOf
+
+--- The launchd agent behind an application name, where the config has a
+--- connection through that application whose backend names one.
+--- @param app string
+--- @param cfg table|nil
+--- @return table|nil
+function backends.agentForApp(app, cfg)
+  if type(cfg) ~= "table" or type(cfg.profiles) ~= "table" then
+    return nil
+  end
+  for _, profile in ipairs(cfg.profiles) do
+    if type(profile) == "table" and profile.app == app and agentOf(profile) then
+      return agentOf(profile)
+    end
+  end
+  return nil
+end
+
+--- The command that puts an application on its feet.
+---
+--- `open -a` for a plain application. Never for one that is a launchd agent:
+--- `open` starts it beside launchd, with no `KeepAlive`, as a second kind of
+--- GlobalProtect that the Quit and the Restart in this menu do not reach. For
+--- an agent the service is loaded instead
+--- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+--- @param app string
+--- @param cfg table|nil
+--- @return string command
+function backends.launchCommand(app, cfg)
+  local agent = backends.agentForApp(app, cfg)
+  if agent then
+    return backends.loadCommand(agent, app)
+  end
+  return "/usr/bin/open -a " .. backends.shellQuote(app)
 end
 
 local function quitApp(profile, runtime)
@@ -250,6 +442,13 @@ end
 
 globalprotect.quit = quitApp
 globalprotect.restart = restartApp
+
+--- Load the agent where launchd has lost it. Asked for by the planner, never
+--- by a menu row ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+function globalprotect.load(profile, runtime)
+  local _, ok = runtime.exec(backends.loadCommand(globalprotect.AGENT, profile.app))
+  return outcome(ok, "launchd did not start " .. tostring(profile.app))
+end
 
 --- The launchd agent that is the GlobalProtect application.
 ---
@@ -274,6 +473,11 @@ globalprotect.SERVICE = {
   label = "com.paloaltonetworks.gp.pangps",
   domain = "gui",
 }
+
+--- Every way into this client is its menu-bar item: the panel opens from it,
+--- and the panel is where Connect is. An agent that runs without one cannot be
+--- pressed at all ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+globalprotect.needsMenuBarItem = true
 
 --- Stopping this agent ends the session.
 ---
@@ -422,6 +626,17 @@ function backends.pressesInterface(profile)
   return backend ~= nil and backend.pressesInterface == true
 end
 
+--- Is this connection only reachable through its client's menu-bar item?
+--- @param profile table
+--- @return boolean
+function backends.needsMenuBarItem(profile)
+  if type(profile) ~= "table" then
+    return false
+  end
+  local backend = backends.byName[profile.backend]
+  return backend ~= nil and backend.needsMenuBarItem == true
+end
+
 --- Does the config give this connection a harder way down, whether or not it
 --- is protected? `canForce` answers for the menu row, which protection removes;
 --- this answers for **Disconnect everything**, which protection does not stop
@@ -531,8 +746,19 @@ end
 --- the tunnel up, which is the reason a restart is allowed here too
 --- ([ADR 0034](../../docs/adr/0034-a-protected-connection-keeps-its-repair.md),
 --- [ADR 0047](../../docs/adr/0047-a-tunnel-that-carries-nothing.md)).
-backends.PROTECTED_VERBS =
-  { connect = true, restart = true, supersede = true, renew = true, quit = true, standdown = true }
+---
+--- `load` puts an agent back under launchd. It ends with the client running,
+--- which is the direction protection points in
+--- ([ADR 0048](../../docs/adr/0048-an-agent-that-stays-loaded.md)).
+backends.PROTECTED_VERBS = {
+  connect = true,
+  restart = true,
+  supersede = true,
+  renew = true,
+  quit = true,
+  standdown = true,
+  load = true,
+}
 
 --- The verbs that act on an application rather than on a tunnel. They are only
 --- allowed on a protected connection where the application is not the tunnel.
