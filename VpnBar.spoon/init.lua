@@ -229,7 +229,7 @@ local function findPressable(root, verbs)
     end
     local text = textOf(element)
     for _, verb in ipairs(verbs) do
-      if text:find(verb, 1, true) then
+      if require("vpnbar.parse").namesVerb(text, verb) then
         return element
       end
     end

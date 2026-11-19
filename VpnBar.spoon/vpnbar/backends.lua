@@ -59,9 +59,12 @@ local globalprotect = {}
 -- The words to look for on a control in the panel. They are matched against
 -- every title, description and value in it, so "Disconnect" finds the button
 -- on the panel and the item in the options menu without knowing which one the
--- agent decided to show. Deliberately NOT "Disable": on a GlobalProtect panel
--- that is a different action with a different meaning, and one of them is not
--- reversible from this menu.
+-- agent decided to show. Each is matched as a word of its own
+-- (`parse.namesVerb`): "connect" is also inside "Disconnect" and "Refresh
+-- Connection", and either one pressed for Connect ends the connection.
+-- Deliberately NOT "Disable": on a GlobalProtect panel that is a different
+-- action with a different meaning, and one of them is not reversible from this
+-- menu.
 --- Every way into this agent is a click in its own panel, so there is nothing
 --- to press while the screen is locked. Measured on 2026-10-15: twenty presses
 --- between 18:21 and 22:33, every one of them answered `GlobalProtect offers no

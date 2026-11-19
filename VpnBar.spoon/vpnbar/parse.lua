@@ -295,4 +295,22 @@ function parse.globalprotectNeedsLogin(text)
   return needs
 end
 
+--- Whether a control's text names a verb as a word of its own.
+---
+--- A substring is not enough: "connect" is inside "Disconnect" and "Refresh
+--- Connection", and GlobalProtect shows both. On 18.11.2026 three
+--- presses meant for Connect, at 15:12:27, 16:11:57 and 19:45:35, each landed in
+--- the same second as the agent's own `Received disconnect event during retry
+--- network checking`: the press had found a control that ends the connection.
+--- @param text string|nil the control's title, description and value
+--- @param verb string
+--- @return boolean
+function parse.namesVerb(text, verb)
+  if type(text) ~= "string" or type(verb) ~= "string" then
+    return false
+  end
+  local escaped = verb:lower():gsub("%p", "%%%0")
+  return text:lower():find("%f[%w]" .. escaped .. "%f[%W]") ~= nil
+end
+
 return parse
