@@ -58,7 +58,7 @@ jobs:
           luacheck .
       - name: shellcheck
         # scripts/vpnbar has no extension: it is a command, not a library.
-        run: shellcheck scripts/*.sh scripts/vpnbar
+        run: shellcheck scripts/*.sh scripts/vpnbar scripts/vpnbar-localroute
       - name: addresses
         # Every IPv4 in the tree has to be a documentation or private one. The
         # repository describes how one machine reaches particular networks, and

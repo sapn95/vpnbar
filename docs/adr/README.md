@@ -55,3 +55,4 @@ whether their idea was considered or simply missed.
 | [0047](0047-a-tunnel-that-carries-nothing.md) | A tunnel that carries nothing |
 | [0048](0048-an-agent-that-stays-loaded.md) | An agent that stays loaded |
 | [0049](0049-a-tunnel-you-named-keeps-its-routes.md) | A tunnel you named keeps its routes |
+| [0050](0050-a-network-at-home-stays-at-home.md) | A network at home stays at home |

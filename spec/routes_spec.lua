@@ -410,3 +410,79 @@ describe("routes.carries, what happened instead", function()
     assert.same({ false }, { routes.carries("", "10.0.0.10", { "utun4" }) })
   end)
 end)
+
+describe("routes.signature", function()
+  local TABLE = table.concat({
+    "Routing tables",
+    "",
+    "Internet:",
+    "Destination        Gateway            Flags               Netif Expire",
+    "default            192.168.1.1        UGScg                 en0       ",
+    "10                 10.0.0.1           UGSc                utun4       ",
+    "192.168.0/16       10.0.0.1           UGSc                utun4       ",
+    "192.168.1          link#14            UCS                   en0      !",
+    "192.168.1.1        a8:00:00:00:00:1   UHLWIir               en0   1198",
+    "192.168.1.28       7e:00:00:00:00:2   UHLWI                 en0    921",
+    "",
+    "Internet6:",
+    "Destination        Gateway            Flags               Netif Expire",
+    "default            fe80::1%en0        UGcg                  en0       ",
+  }, "\n")
+
+  it("keeps the rows that say where traffic goes, and only the IPv4 ones", function()
+    local signature = routes.signature(TABLE)
+    assert.truthy(signature:find("default 192.168.1.1 UGScg en0", 1, true))
+    assert.truthy(signature:find("192.168.0/16 10.0.0.1 UGSc utun4", 1, true))
+    assert.truthy(signature:find("192.168.1 link#14 UCS en0", 1, true))
+    assert.falsy(signature:find("fe80::1", 1, true))
+    assert.falsy(signature:find("Destination", 1, true))
+  end)
+
+  -- ARP entries come and go with every host the machine talks to, and their
+  -- expiry counts down between two reads. Neither is a reason to run the helper.
+  it("does not change with the ARP entries or their expiry", function()
+    local churned = TABLE:gsub("UHLWIir               en0   1198", "UHLWIir               en0   1150")
+      :gsub("192.168.1.28       7e:00:00:00:00:2   UHLWI                 en0    921\n", "")
+    assert.equals(routes.signature(TABLE), routes.signature(churned))
+  end)
+
+  it("changes when a tunnel takes or gives back a route", function()
+    local gone = TABLE:gsub("192.168.0/16       10.0.0.1           UGSc                utun4       \n", "")
+    assert.not_equals(routes.signature(TABLE), routes.signature(gone))
+  end)
+
+  it("does not depend on the order of the rows", function()
+    local a = "Internet:\n10 10.0.0.1 UGSc utun4\ndefault 192.168.1.1 UGScg en0\n"
+    local b = "Internet:\ndefault 192.168.1.1 UGScg en0\n10 10.0.0.1 UGSc utun4\n"
+    assert.equals(routes.signature(a), routes.signature(b))
+  end)
+
+  it("is empty for nothing", function()
+    assert.equals("", routes.signature(nil))
+    assert.equals("", routes.signature(""))
+  end)
+end)
+
+describe("routes.localDue", function()
+  it("runs the first time", function()
+    assert.is_true(routes.localDue(nil, "a", 1000))
+    assert.is_true(routes.localDue({}, "a", 1000))
+  end)
+
+  it("runs when the table changed, once the gap is over", function()
+    local memory = { signature = "a", at = 1000 }
+    assert.is_false(routes.localDue(memory, "b", 1000 + routes.LOCAL_GAP - 1))
+    assert.is_true(routes.localDue(memory, "b", 1000 + routes.LOCAL_GAP))
+  end)
+
+  it("waits while the table is the same, up to the interval", function()
+    local memory = { signature = "a", at = 1000 }
+    assert.is_false(routes.localDue(memory, "a", 1000 + routes.LOCAL_GAP))
+    assert.is_false(routes.localDue(memory, "a", 1000 + routes.LOCAL_EVERY - 1))
+    assert.is_true(routes.localDue(memory, "a", 1000 + routes.LOCAL_EVERY))
+  end)
+
+  it("runs after a clock that went backwards", function()
+    assert.is_true(routes.localDue({ signature = "a", at = 1000 }, "a", 990))
+  end)
+end)

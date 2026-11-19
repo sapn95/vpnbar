@@ -1267,6 +1267,7 @@ function obj:refresh(options)
   -- families, against a refresh that already runs several commands.
   local interfaces = require("vpnbar.parse").ifconfigInterfaces(runtime.ifconfig())
   local stranded, names = routes.stranded(routes.parse(runtime.routeTable()), interfaces)
+  self:keepLocal(runtime)
   local offer = routes.offer(stranded, names, self.routeMemory, os.time())
 
   -- At most one connection is started per refresh, and only from this one
@@ -1741,6 +1742,88 @@ function obj:disconnectAll()
     self:refreshSoon(nil, 2)
     work.finish(self.work)
   end)
+end
+
+--- Keep the networks named with `vpnbar local` out of every tunnel.
+---
+--- Runs the root helper through the one sudoers line `vpnbar local` installed,
+--- whenever the route table has changed and every few minutes besides
+--- (`routes.localDue`). The helper decides what to add and remove; this only
+--- decides when to ask, so the rule lives in one place
+--- ([ADR 0050](../docs/adr/0050-a-network-at-home-stays-at-home.md)). Nothing
+--- happens on a machine where `vpnbar local` was never used.
+--- @param runtime table
+function obj:keepLocal(runtime)
+  if self.localRunning then
+    -- A run that never reports back would otherwise stop this for good, with
+    -- nothing anywhere saying so. The helper pings once with a one-second
+    -- timeout per network, so a minute is far past any run that is working.
+    if os.time() - (self.localStarted or 0) < routes.LOCAL_STALE then
+      return
+    end
+    self.logger.w("local networks: the helper has not finished in a minute; stopping it")
+    if self.localTask then
+      pcall(function()
+        self.localTask:terminate()
+      end)
+    end
+    self.localRunning = false
+  end
+  if not hs.fs.attributes(routes.LOCAL_FILE) or not hs.fs.attributes(routes.LOCAL_HELPER) then
+    return
+  end
+  local now = os.time()
+  local signature = routes.signature(runtime.routeTable())
+  if not routes.localDue(self.localMemory, signature, now) then
+    return
+  end
+  self.localMemory = { signature = signature, at = now }
+  self.localRunning = true
+  self.localStarted = now
+  -- Which run this is. A run given up on above still calls back when it is
+  -- killed, and must not clear the flag of the run that replaced it.
+  self.localRun = (self.localRun or 0) + 1
+  local run = self.localRun
+  -- `-n`: a sudo that wants a password fails at once instead of waiting for
+  -- one nobody can type. As a task, because the helper may ping a router that
+  -- is not there, and the run loop must not wait for that.
+  local task = hs.task.new("/usr/bin/sudo", function(code, out, err)
+    if run ~= self.localRun then
+      return
+    end
+    self.localRunning = false
+    for line in (out or ""):gmatch("[^\n]+") do
+      self.logger.i("local networks: " .. line)
+    end
+    if code == 0 then
+      self.localSaid = nil
+      self.localRetried = false
+      return
+    end
+    -- 75: `vpnbar local` was changing the list. Not a fault; the next gap.
+    if code == 75 then
+      self.localMemory = { signature = nil, at = now }
+      return
+    end
+    -- One more try after the gap rather than after the interval: a table that
+    -- is still settling after a tunnel came up is the likely cause. Only one,
+    -- so a sudo that wants a password is not asked every fifteen seconds.
+    if not self.localRetried then
+      self.localRetried = true
+      self.localMemory = { signature = nil, at = now }
+    end
+    local message = (err or ""):match("[^\n]+") or ("exit " .. tostring(code))
+    -- Once per kind of failure: the next run will most likely say the same.
+    if self.localSaid ~= message then
+      self.localSaid = message
+      self:complain("Local networks: " .. message .. ". vpnbar doctor says what to do.")
+    end
+  end, { "-n", routes.LOCAL_HELPER, "apply" })
+  self.localTask = task
+  if not task or not task:start() then
+    self.localRunning = false
+    self.logger.w("local networks: could not start the helper")
+  end
 end
 
 --- Hand every connection back to autoconnect after **Disconnect everything**.
