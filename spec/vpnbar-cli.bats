@@ -130,6 +130,32 @@ for argument in "$@"; do
 done
 printf '%s\n' "$*" >>"${NET_ROUTE_CALLS}"
 [ "${STUB_ROUTE_EXIT:-0}" = "0" ] || exit "${STUB_ROUTE_EXIT}"
+# A `-net a.b.c.d/len gateway` change shows up in what `get` answers next, the
+# way the kernel's table would, unless STUB_ROUTE_NOOP pretends the call did
+# nothing while exiting 0.
+if [ "${STUB_ROUTE_NOOP:-0}" = "0" ]; then
+  verb="" net="" last=""
+  previous=""
+  for argument in "$@"; do
+    case "${argument}" in add | change | delete) verb="${argument}" ;; esac
+    case "${previous}" in -net) net="${argument}" ;; esac
+    previous="${argument}"
+    last="${argument}"
+  done
+  case "${net}" in
+    */*.* | *.*/*)
+      length="${net#*/}"
+      bits=$(((4294967295 << (32 - length)) & 4294967295))
+      mask="$((bits >> 24 & 255)).$((bits >> 16 & 255)).$((bits >> 8 & 255)).$((bits & 255))"
+      grep -v -F "${net}|" "${NET_ROUTE_GET}" >"${NET_ROUTE_GET}.next" || true
+      if [ "${verb}" != delete ]; then
+        printf '%s|%s|%s|%s|en0\n' "${net}" "${net%/*}" "${mask}" "${last}" | cat - "${NET_ROUTE_GET}.next" >"${NET_ROUTE_GET}.tmp"
+        mv "${NET_ROUTE_GET}.tmp" "${NET_ROUTE_GET}.next"
+      fi
+      mv "${NET_ROUTE_GET}.next" "${NET_ROUTE_GET}"
+      ;;
+  esac
+fi
 # The destination is the argument after -host or -net.
 destination=""
 previous=""
@@ -141,11 +167,75 @@ done
 grep -v -E "^[a-z6]+ ${destination} " "${NET_ROUTES}" >"${NET_ROUTES}.next" || true
 mv "${NET_ROUTES}.next" "${NET_ROUTES}"
 EOF
+  # `sudo` runs the command as the test user. `sudo -n -k <helper> status` is
+  # the question whether the sudoers line for the local-network helper is in
+  # place, answered from STUB_SUDO_ALLOWED.
   cat >"${STUB}/sudo" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" != "-v" ] || exit 0
+asking=0
+while :; do
+  case "$1" in
+    -n) asking=1; shift ;;
+    -k) shift ;;
+    *) break ;;
+  esac
+done
+case "$1 ${2:-}" in
+  *vpnbar-localroute\ status)
+    if [ "${asking}" = 1 ]; then
+      [ "${STUB_SUDO_ALLOWED:-0}" = "1" ]
+      exit
+    fi
+    ;;
+esac
 exec "$@"
 EOF
+  # The root-owned places `vpnbar local` writes, moved under the test's own
+  # folder. Set for every test: a doctor that read this machine's real list
+  # would report its own networks.
+  export VPNBAR_LOCAL_FILE="${TMP}/etc/vpnbar/local-networks"
+  export VPNBAR_LOCAL_HELPER="${TMP}/libexec/vpnbar-localroute"
+  export VPNBAR_LOCAL_SUDOERS="${TMP}/sudoers.d/vpnbar"
+  mkdir -p "${TMP}/sudoers.d"
+  # `install` without the owner and group nobody but root may set.
+  cat >"${STUB}/install" <<'EOF'
+#!/usr/bin/env bash
+directory=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d) directory=1 ;;
+    -o | -g | -m) shift ;;
+    *) break ;;
+  esac
+  shift
+done
+if [ "${directory}" = 1 ]; then
+  mkdir -p "$@"
+else
+  cp "$1" "$2"
+fi
+EOF
+  cat >"${STUB}/visudo" <<'EOF'
+#!/usr/bin/env bash
+exit "${STUB_VISUDO_EXIT:-0}"
+EOF
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/chown"
+  chmod +x "${STUB}/chown"
+  # `arp -n <address>` from NET_ARP, whose lines are `address mac`.
+  export NET_ARP="${TMP}/arp"
+  : >"${NET_ARP}"
+  cat >"${STUB}/arp" <<'EOF'
+#!/usr/bin/env bash
+for argument in "$@"; do want="${argument}"; done
+mac="$(awk -v want="${want}" '$1 == want { print $2; exit }' "${NET_ARP}")"
+if [ -n "${mac}" ]; then
+  printf '? (%s) at %s on en0 ifscope [ethernet]\n' "${want}" "${mac}"
+else
+  printf '%s (%s) -- no entry\n' "${want}" "${want}"
+fi
+EOF
+  chmod +x "${STUB}/install" "${STUB}/visudo" "${STUB}/arp"
   cat >"${STUB}/systemextensionsctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "${STUB_EXTENSIONS:-}"
@@ -1049,7 +1139,11 @@ give_utun6_the_probe_address() {
   [[ "$output" == *"No live tunnel has claimed the private address space."* ]]
   [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 0 ]
   run "${SCRIPT}" doctor
-  [[ "$output" == *"no live tunnel has claimed the private address space"* ]]
+  # Not "nothing claimed it": the claim is there and kept, and the doctor
+  # points at the way to keep a network at home out of it.
+  [[ "$output" == *"the private address space goes into utun6, which carries a reach, so it stays"* ]]
+  [[ "$output" == *"vpnbar local add"* ]]
+  [[ "$output" != *"no live tunnel has claimed"* ]]
 }
 
 @test "another tunnel holding 10 is not spared by a reach it happens to carry" {
@@ -1569,4 +1663,392 @@ stub_stale_dns() {
   NET_DNS_ALIVE="198.51.100.30" run "${SCRIPT}" clean --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"No resolvers are left over"* ]]
+}
+
+# ------------------------------------------------------------ local networks
+#
+# A tunnel that holds 192.168/16 and a second network at home behind the router
+# at 192.168.1.1. The helper is run as the test user against stubs; as root it
+# ignores the environment, which no test can reach.
+
+HELPER="${BATS_TEST_DIRNAME}/../scripts/vpnbar-localroute"
+
+stub_home_behind_a_tunnel() {
+  printf '%s\n' 'utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380' >>"${NET_IFCONFIG}"
+  printf '%s\n' 'inet 192.168.0/16       10.0.0.1           UGSc                utun4' >>"${NET_ROUTES}"
+  {
+    # The router, on the link: no gateway of its own.
+    printf '%s\n' '192.168.1.1|192.168.1.1|||en0'
+    # No route with exactly that prefix, so the masked lookup says default.
+    printf '%s\n' '192.168.0.0/24|default|default|192.168.1.1|en0'
+    # The network's own address leaves by the tunnel's aggregate.
+    printf '%s\n' '192.168.0.0|192.168.0.0|255.255.0.0|10.0.0.1|utun4'
+  } >"${NET_ROUTE_GET}"
+  printf '%s\n' '192.168.1.1 a8:0:0:0:0:1' >"${NET_ARP}"
+}
+
+# The route the helper adds, as `route get` then shows it.
+stub_our_route_in_place() {
+  {
+    printf '%s\n' '192.168.0.0/24|192.168.0.0|255.255.255.0|192.168.1.1|en0'
+    printf '%s\n' '192.168.0.0|192.168.0.0|255.255.255.0|192.168.1.1|en0'
+    grep -v -e '^192.168.0.0/24|' -e '^192.168.0.0|' "${NET_ROUTE_GET}"
+  } >"${NET_ROUTE_GET}.new"
+  mv "${NET_ROUTE_GET}.new" "${NET_ROUTE_GET}"
+}
+
+list_home() {
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_FILE}")"
+  printf '%s\n' "$@" >"${VPNBAR_LOCAL_FILE}"
+}
+
+@test "the helper accepts a private network and refuses everything else" {
+  run "${HELPER}" validate <<'EOF'
+192.168.0.0/24 192.168.1.1
+10.0.0.0/8 192.168.1.1 a8:00:00:00:00:01
+172.16.0.0/12 192.168.1.1 a8:0:0:0:0:1
+# a comment, and a blank line
+
+EOF
+  [ "$status" -eq 0 ]
+  run "${HELPER}" validate <<'EOF'
+198.51.100.0/24 192.168.1.1
+192.168.0.1/24 192.168.1.1
+10.0.0.0/7 192.168.1.1
+192.168.0.0/15 192.168.1.1
+172.16.0.0/11 192.168.1.1
+192.168.0.0/24 192.168.1.256
+192.168.0.0/24 192.168.1.1 zz:00:00:00:00:00
+192.168.0.0/24 192.168.1.1 a8:00:00:00:00:01 more
+192.168.0.0/24
+10.0.0.0/24 192.168.1.01
+10.0.0.0/08 192.168.1.1
+EOF
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^line ')" -eq 11 ]
+  [[ "$output" != *"base"* ]]
+}
+
+@test "the helper puts a listed network back through the router while a tunnel holds it" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1 a8:00:00:00:00:01'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1, out of utun4"* ]]
+  grep -qx -- '-n add -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
+}
+
+@test "the helper leaves a route that is already there" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "the helper adds nothing where no tunnel claims the network" {
+  stub_home_behind_a_tunnel
+  sed -i.bak 's/^192.168.0.0|.*/192.168.0.0|default|default|192.168.1.1|en0/' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "another network with the same router address is not this one" {
+  # Half the home routers there are sit at 192.168.1.1. The one recorded for the
+  # list answers with its own MAC; any other is somebody else's network.
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.1.1 b2:0:0:0:0:2' >"${NET_ARP}"
+  list_home '192.168.0.0/24 192.168.1.1 a8:00:00:00:00:01'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "the helper takes its route away on a network the router is not on" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  # Reached through some other router now: not on the link.
+  sed -i.bak 's/^192.168.1.1|.*/192.168.1.1|default|default|203.0.113.1|en0/' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"removed 192.168.0.0/24 via 192.168.1.1, not on that network"* ]]
+  grep -qx -- '-n delete -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
+}
+
+@test "a router reached through a tunnel is not on the link" {
+  stub_home_behind_a_tunnel
+  sed -i.bak 's/^192.168.1.1|.*/192.168.1.1|192.168.0.0|255.255.0.0|10.0.0.1|utun4/' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "the helper says so when route refuses, and skips a bad line" {
+  stub_home_behind_a_tunnel
+  list_home '198.51.100.0/24 192.168.1.1' '192.168.0.0/24 192.168.1.1'
+  STUB_ROUTE_EXIT=1 run "${HELPER}" apply
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"local-networks:1: ignored"* ]]
+  [[ "$output" == *"could not add 192.168.0.0/24 via 192.168.1.1"* ]]
+}
+
+@test "local add ties the network to this router, installs the helper and applies" {
+  stub_home_behind_a_tunnel
+  run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -eq 0 ]
+  grep -qx '192.168.0.0/24 192.168.1.1 a8:0:0:0:0:1' "${VPNBAR_LOCAL_FILE}"
+  cmp -s "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  grep -qxF "$(id -un) ALL=(root) NOPASSWD: ${VPNBAR_LOCAL_HELPER} apply, ${VPNBAR_LOCAL_HELPER} status" "${VPNBAR_LOCAL_SUDOERS}"
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1"* ]]
+}
+
+@test "local add replaces the line for the same network rather than adding a second" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.254'
+  run "${SCRIPT}" local add 192.168.0.0/24 192.168.1.1
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^192.168.0.0/24 ' "${VPNBAR_LOCAL_FILE}")" -eq 1 ]
+  grep -q '^192.168.0.0/24 192.168.1.1' "${VPNBAR_LOCAL_FILE}"
+}
+
+@test "local add refuses a network that is not private, and writes nothing" {
+  stub_home_behind_a_tunnel
+  run "${SCRIPT}" local add 198.51.100.0/24
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a private network"* ]]
+  [ ! -f "${VPNBAR_LOCAL_FILE}" ]
+  [ ! -f "${VPNBAR_LOCAL_SUDOERS}" ]
+  [ ! -f "${VPNBAR_LOCAL_HELPER}" ]
+}
+
+@test "local add installs no sudoers line that visudo rejects" {
+  stub_home_behind_a_tunnel
+  STUB_VISUDO_EXIT=1 run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -ne 0 ]
+  [ ! -f "${VPNBAR_LOCAL_SUDOERS}" ]
+  [ ! -f "${VPNBAR_LOCAL_FILE}" ]
+}
+
+@test "local remove drops the line and the route it had added" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1' '10.0.0.0/24 192.168.1.1'
+  run "${SCRIPT}" local remove 192.168.0.0/24
+  [ "$status" -eq 0 ]
+  ! grep -q '^192.168.0.0/24' "${VPNBAR_LOCAL_FILE}"
+  grep -q '^10.0.0.0/24' "${VPNBAR_LOCAL_FILE}"
+  grep -qx -- '-n delete -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
+}
+
+@test "local remove of a network that is not listed says so" {
+  list_home '10.0.0.0/24 192.168.1.1'
+  run "${SCRIPT}" local remove 192.168.0.0/24
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"is not in"* ]]
+}
+
+@test "doctor fails on a listed network that goes into a tunnel" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1 a8:00:00:00:00:01'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  cp "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  STUB_SUDO_ALLOWED=1 run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"192.168.0.0/24 goes into utun4 — run: vpnbar local apply"* ]]
+  [[ "$output" != *"not set up"* ]]
+}
+
+@test "doctor says a listed network stays local once its route is in" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  cp "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  STUB_SUDO_ALLOWED=1 run "${SCRIPT}" local
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ok    192.168.0.0/24 stays local, through 192.168.1.1"* ]]
+}
+
+@test "doctor says the list is not set up when sudo would ask for a password" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not set up, so vpnbar cannot keep them local — run: vpnbar local apply"* ]]
+}
+
+@test "doctor leaves local networks out when none were ever listed" {
+  run "${SCRIPT}" doctor
+  [[ "$output" != *"Local networks"* ]]
+}
+
+@test "local with an unknown verb is a usage error" {
+  run "${SCRIPT}" local frobnicate
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"usage:"* ]]
+}
+
+@test "the helper moves a route a tunnel pushed for exactly that network" {
+  # `add` would fail with "File exists" on every run and leave it in the tunnel.
+  stub_home_behind_a_tunnel
+  sed -i.bak 's#^192.168.0.0/24|.*#192.168.0.0/24|192.168.0.0|255.255.255.0|10.0.0.1|utun4#' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"moved 192.168.0.0/24 to 192.168.1.1, away from utun4"* ]]
+  grep -qx -- '-n change -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
+  ! grep -q -- ' add ' "${NET_ROUTE_CALLS}"
+}
+
+@test "the helper leaves the interface route of a network the machine is on" {
+  # No gateway: the route macOS keeps for its own subnet. Moving it to the
+  # router would take the machine off its own network.
+  stub_home_behind_a_tunnel
+  sed -i.bak 's#^192.168.0.0/24|.*#192.168.0.0/24|192.168.0.0|255.255.255.0||en0#' "${NET_ROUTE_GET}"
+  sed -i.bak 's#^192.168.0.0|.*#192.168.0.0|192.168.0.0|255.255.255.0||en0#' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "local apply asks before it replaces a helper that differs, and keeps it on no" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  printf '#!/bin/sh\nexit 0\n' >"${VPNBAR_LOCAL_HELPER}"
+  run "${SCRIPT}" local apply <<<'n'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"The installed helper differs"* ]]
+  [[ "$output" == *"kept the installed helper"* ]]
+  ! cmp -s "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  [ ! -e "${VPNBAR_LOCAL_HELPER}.vpnbar-new" ]
+}
+
+@test "local apply replaces a helper that differs once told yes" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  printf '#!/bin/sh\nexit 0\n' >"${VPNBAR_LOCAL_HELPER}"
+  run "${SCRIPT}" local apply <<<'y'
+  [ "$status" -eq 0 ]
+  cmp -s "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1"* ]]
+}
+
+@test "a sudoers line visudo rejects leaves nothing staged behind" {
+  stub_home_behind_a_tunnel
+  STUB_VISUDO_EXIT=1 run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -ne 0 ]
+  [ ! -e "${VPNBAR_LOCAL_SUDOERS}" ]
+  [ ! -e "${VPNBAR_LOCAL_SUDOERS}.vpnbar-new" ]
+}
+
+@test "local add refuses a router whose MAC cannot be learned" {
+  # Without it, a strange network whose router has the same address would get
+  # the route, and traffic meant for the tunnel would go to that router.
+  stub_home_behind_a_tunnel
+  : >"${NET_ARP}"
+  run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no MAC address for 192.168.1.1"* ]]
+  [ ! -f "${VPNBAR_LOCAL_FILE}" ]
+  [ ! -f "${VPNBAR_LOCAL_SUDOERS}" ]
+}
+
+@test "the helper does not claim a change the table does not show" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  STUB_ROUTE_NOOP=1 run "${HELPER}" apply
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not add 192.168.0.0/24 via 192.168.1.1"* ]]
+  [[ "$output" != *"added"* ]]
+}
+
+@test "the helper waits for a run in progress, and leaves the list alone if it lasts" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir "$(dirname "${VPNBAR_LOCAL_FILE}")/.apply.lock"
+  run "${HELPER}" apply
+  [ "$status" -eq 75 ]
+  [[ "$output" == *"another run holds"* ]]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "a lock left by a run that was killed is taken over after a minute" {
+  stub_home_behind_a_tunnel
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir "$(dirname "${VPNBAR_LOCAL_FILE}")/.apply.lock"
+  touch -t 202001010000 "$(dirname "${VPNBAR_LOCAL_FILE}")/.apply.lock"
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"added 192.168.0.0/24"* ]]
+  [ ! -d "$(dirname "${VPNBAR_LOCAL_FILE}")/.apply.lock" ]
+}
+
+@test "local remove keeps the network listed when its route cannot go" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" local remove 192.168.0.0/24
+  [ "$status" -eq 1 ]
+  grep -q '^192.168.0.0/24' "${VPNBAR_LOCAL_FILE}"
+  [ ! -d "$(dirname "${VPNBAR_LOCAL_FILE}")/.apply.lock" ]
+}
+
+@test "local uninstall removes nothing when a route cannot go" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  cp "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  : >"${VPNBAR_LOCAL_SUDOERS}"
+  STUB_ROUTE_EXIT=1 run "${SCRIPT}" local uninstall
+  [ "$status" -eq 1 ]
+  [ -f "${VPNBAR_LOCAL_FILE}" ]
+  [ -f "${VPNBAR_LOCAL_HELPER}" ]
+  [ -f "${VPNBAR_LOCAL_SUDOERS}" ]
+}
+
+@test "local uninstall takes the routes, the helper, the line and the list away" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  cp "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  : >"${VPNBAR_LOCAL_SUDOERS}"
+  run "${SCRIPT}" local uninstall
+  [ "$status" -eq 0 ]
+  grep -qx -- '-n delete -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
+  [ ! -e "${VPNBAR_LOCAL_FILE}" ]
+  [ ! -e "${VPNBAR_LOCAL_HELPER}" ]
+  [ ! -e "${VPNBAR_LOCAL_SUDOERS}" ]
+}
+
+@test "doctor fails on a listed network that has a route of its own elsewhere" {
+  stub_home_behind_a_tunnel
+  sed -i.bak 's#^192.168.0.0/24|.*#192.168.0.0/24|192.168.0.0|255.255.255.0|10.0.0.1|utun4#' "${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  mkdir -p "$(dirname "${VPNBAR_LOCAL_HELPER}")"
+  cp "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  STUB_SUDO_ALLOWED=1 run "${SCRIPT}" doctor
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"192.168.0.0/24 has a route of its own that is not through 192.168.1.1"* ]]
+}
+
+@test "the helper runs without a lock where the list has no folder" {
+  # Nothing can be listed there, and a lock that cannot be made must not spin.
+  run env VPNBAR_LOCAL_FILE="${TMP}/nowhere/local-networks" "${HELPER}" apply
+  [ "$status" -eq 0 ]
+}
+
+@test "local uninstall finishes where the list has no folder" {
+  run "${SCRIPT}" local uninstall
+  [ "$status" -eq 0 ]
 }

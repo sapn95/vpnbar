@@ -400,6 +400,22 @@ probe's range keeps its aggregates. Those are the routes that address leaves by,
 once, so deleting them would leave it connected and carrying nothing
 ([ADR 0049](docs/adr/0049-a-tunnel-you-named-keeps-its-routes.md)).
 
+A network at home that such a tunnel covers, say a second VLAN behind the same
+router, can be kept out of it:
+
+```bash
+vpnbar local add 192.168.0.0/24   # tied to the router you are on now
+vpnbar local                      # where each one goes right now
+```
+
+While the machine is on that network and a tunnel holds the prefix, vpnbar adds
+a narrower route through the router. On any other network it takes the route
+away again. The router is recognised by its MAC address, not only by its IP.
+Adding a route needs root, so the first `add` installs a root-owned helper and
+one sudoers line that lets you run exactly that helper without a password; that
+is the one time it asks. `vpnbar local uninstall` removes both
+([ADR 0050](docs/adr/0050-a-network-at-home-stays-at-home.md)).
+
 `10.0.0.0/8` is in that list on purpose, and it has a price: an internal prefix
 inside it that the tunnel does not also cover with a narrower route goes with the
 aggregate. The alternative was a rule that fixed two thirds of the fault and left
@@ -539,6 +555,7 @@ vpnbar restart    # after brew upgrade: loads the installed code, not the cached
 vpnbar app        # an icon in Launchpad and Spotlight that runs start
 vpnbar doctor     # what is wrong, including the route table and the extensions
 vpnbar clean      # remove the routes a dead tunnel left behind
+vpnbar local      # networks at home that stay out of every tunnel
 ```
 
 **Quit** in the menu stops the Spoon and leaves Hammerspoon running, which is

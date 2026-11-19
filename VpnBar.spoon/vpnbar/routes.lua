@@ -361,4 +361,77 @@ function routes.explain(offer)
   return counted .. why .. scope
 end
 
+-- ------------------------------------------------------------ local networks
+
+--- Where `vpnbar local` keeps its list and the helper sudo may run without a
+--- password ([ADR 0050](../../docs/adr/0050-a-network-at-home-stays-at-home.md)).
+--- Fixed paths, because the sudoers line names the helper by its path.
+routes.LOCAL_FILE = "/usr/local/etc/vpnbar/local-networks"
+routes.LOCAL_HELPER = "/usr/local/libexec/vpnbar-localroute"
+
+--- Seconds between two runs of the helper, at the least. A run changes the
+--- table it was started for, and the next read sees that change.
+routes.LOCAL_GAP = 15
+
+--- Seconds after which the helper runs although the table looks the same. Its
+--- answer also depends on which router answers on the link, which the table
+--- does not show.
+routes.LOCAL_EVERY = 300
+
+--- Seconds after which a run that has not reported back is given up on.
+routes.LOCAL_STALE = 60
+
+--- The IPv4 rows that say where traffic goes, as one string.
+---
+--- Rows with `W` are left out: those are the ARP and cloned host entries, which
+--- come and go with every host the machine talks to, and the `Expire` column
+--- counts down between two reads. What is left changes when a tunnel comes or
+--- goes, when the machine joins another network, and when a route is added by
+--- hand, which are the moments the local networks have to be looked at.
+--- @param output string|nil `netstat -rn`, IPv6 part ignored
+--- @return string
+function routes.signature(output)
+  local rows = {}
+  if type(output) ~= "string" then
+    return ""
+  end
+  local inet = false
+  for line in output:gmatch("[^\n]+") do
+    if line:match("^Internet6:") then
+      inet = false
+    elseif line:match("^Internet:") then
+      inet = true
+    elseif inet then
+      local destination, gateway, flags, netif = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+(%S+)")
+      if destination and destination ~= "Destination" and not flags:find("W", 1, true) then
+        rows[#rows + 1] = table.concat({ destination, gateway, flags, netif }, " ")
+      end
+    end
+  end
+  table.sort(rows)
+  return table.concat(rows, "\n")
+end
+
+--- Is it time to run the helper?
+---
+--- When the table has changed since the last run, or when it has not been run
+--- for `LOCAL_EVERY` seconds, and never twice inside `LOCAL_GAP`.
+--- @param memory table|nil { signature, at } of the last run
+--- @param signature string
+--- @param now number
+--- @return boolean
+function routes.localDue(memory, signature, now)
+  if type(memory) ~= "table" or type(memory.at) ~= "number" then
+    return true
+  end
+  local since = now - memory.at
+  if since < 0 then
+    return true
+  end
+  if since < routes.LOCAL_GAP then
+    return false
+  end
+  return memory.signature ~= signature or since >= routes.LOCAL_EVERY
+end
+
 return routes

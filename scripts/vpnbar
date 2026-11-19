@@ -778,6 +778,17 @@ claimed_routes() {
   '
 }
 
+# Every live tunnel that holds one of the aggregates, spared or not.
+aggregate_tunnels() {
+  command -v netstat >/dev/null 2>&1 || return 0
+  local up
+  up="$(tunnel_interfaces_up | tr '\n' ' ')"
+  [ -n "${up# }" ] || return 0
+  netstat -rn -f inet 2>/dev/null | awk -v up=" ${up} " -v wanted=" ${CLAIMED_AGGREGATES} " '
+    NF >= 4 && $4 ~ /^utun[0-9]+$/ && index(up, " " $4 " ") > 0 && index(wanted, " " $1 " ") > 0 && !seen[$4]++ { print $4 }
+  '
+}
+
 # The `route` call that removes one of them.
 #
 # A gateway that is a link address belongs to no address family anybody can
@@ -1536,7 +1547,17 @@ cmd_doctor() {
   local claimed claimedCount
   claimed="$(claimed_routes)"
   if [ -z "${claimed}" ]; then
-    ok "no live tunnel has claimed the private address space"
+    local held
+    held="$(aggregate_tunnels | tr '\n' ' ')"
+    if [ -n "${held// /}" ]; then
+      # Not "nothing claimed it": the claim is there and is kept on purpose
+      # (ADR 0049). Saying so is what points at the way out for a network at
+      # home that it hides.
+      ok "the private address space goes into ${held% }, which carries a reach, so it stays"
+      note "A network of yours it covers can be kept out of it: vpnbar local add <cidr>"
+    else
+      ok "no live tunnel has claimed the private address space"
+    fi
   else
     claimedCount="$(printf '%s\n' "${claimed}" | wc -l | tr -d ' ')"
     bad "${claimedCount} route(s) send the private address space into a live tunnel — run: vpnbar clean"
@@ -1584,6 +1605,12 @@ EOF
     note "again, and its routes stay pointed at a dead tunnel until then."
   fi
 
+  if [ -f "${LOCAL_FILE}" ]; then
+    echo "Local networks"
+    local_report
+    failures=$((failures + LOCAL_PROBLEMS))
+  fi
+
   echo "Connections"
   local config="${HOME}/.config/vpnbar/profiles.json"
   if [ -f "${config}" ]; then
@@ -1601,6 +1628,393 @@ EOF
   fi
 }
 
+# ---------------------------------------------------------- local networks
+#
+# A tunnel that claims all of 192.168.0.0/16 takes every network behind the
+# router with it, and ADR 0049 keeps exactly that claim when the tunnel is the
+# one a connection's `reach` needs. The networks somebody names here are put
+# back through the router of the network the machine is on, by a root helper
+# the Spoon may run without a password (ADR 0050).
+#
+# Root-owned, all three: the helper is what sudo runs, the list is what it acts
+# on, and a list the user could write would let anything running as the user
+# add routes without a password.
+readonly LOCAL_FILE="${VPNBAR_LOCAL_FILE:-/usr/local/etc/vpnbar/local-networks}"
+readonly LOCAL_HELPER="${VPNBAR_LOCAL_HELPER:-/usr/local/libexec/vpnbar-localroute}"
+readonly LOCAL_SUDOERS="${VPNBAR_LOCAL_SUDOERS:-/etc/sudoers.d/vpnbar}"
+
+# The helper this copy of vpnbar ships: next to this script in a checkout, in
+# libexec under Homebrew.
+local_helper_source() {
+  local here candidate
+  here="$(cd "$(dirname "$(resolve_symlinks "${BASH_SOURCE[0]}")")" && pwd)"
+  for candidate in "${here}/vpnbar-localroute" "${here}/../libexec/vpnbar-localroute"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  echo "vpnbar-localroute is missing from this installation" >&2
+  return 1
+}
+
+# What the sudoers line allows: this helper, to apply the list or to read it.
+# `status` is there so that whether the line is in place can be asked without
+# changing anything (see local_sudo_allowed).
+local_sudoers_line() {
+  printf '%s ALL=(root) NOPASSWD: %s apply, %s status\n' "$(id -un)" "${LOCAL_HELPER}" "${LOCAL_HELPER}"
+}
+
+local_helper_current() {
+  local source
+  source="$(local_helper_source 2>/dev/null)" || return 1
+  cmp -s "${source}" "${LOCAL_HELPER}"
+}
+
+# Can the helper run without a password? Asked by running it, read-only, with
+# the cached credentials ignored (`-k`). `sudo -l` is the wrong question here:
+# it says yes for an administrator, who may run anything with a password, and
+# yes again for anybody who typed one in the last five minutes.
+local_sudo_allowed() {
+  sudo -n -k "${LOCAL_HELPER}" status >/dev/null 2>&1
+}
+
+# The defaults, which are what sudo and the Spoon use. The VPNBAR_LOCAL_*
+# overrides above exist for the tests; somebody who can set this script's
+# environment can as well put their own `sudo` first on PATH, so they open no
+# door that is not already open (ADR 0050).
+readonly LOCAL_DEFAULTS="/usr/local/etc/vpnbar/local-networks /usr/local/libexec/vpnbar-localroute /etc/sudoers.d/vpnbar"
+
+# Every existing folder from this one up to / is root's and nobody else can
+# write it. Otherwise the user could move a folder aside and put their own in
+# its place, under a path root runs from or reads. On a Mac where Homebrew owns
+# /usr/local that is the case, and nothing is installed there.
+local_root_only() {
+  local path="$1" owner mode
+  while :; do
+    if [ -e "${path}" ]; then
+      read -r owner mode < <(stat -f '%u %Lp' "${path}" 2>/dev/null) || return 1
+      [ "${owner}" = 0 ] || return 1
+      case "${mode}" in *[2367]? | *[2367]) return 1 ;; esac
+    fi
+    [ "${path}" != / ] || return 0
+    path="$(dirname "${path}")"
+  done
+}
+
+local_paths_safe() {
+  # Only the real paths are checked; the test ones live in a temp folder.
+  [ "${LOCAL_FILE} ${LOCAL_HELPER} ${LOCAL_SUDOERS}" = "${LOCAL_DEFAULTS}" ] || return 0
+  local path
+  for path in "$(dirname "${LOCAL_FILE}")" "$(dirname "${LOCAL_HELPER}")" "$(dirname "${LOCAL_SUDOERS}")"; do
+    if ! local_root_only "${path}"; then
+      echo "${path} or a folder above it can be written by somebody other than root; nothing installed" >&2
+      return 1
+    fi
+  done
+}
+
+# Write stdin to a root-owned file next to `target`, and print its path. The
+# content goes through a pipe into `sudo tee`, so there is no moment in which a
+# file the user owns stands between what was checked and what root installs.
+# The name has a dot in it, which sudo's includedir skips while it is staged.
+local_stage() {
+  local target="$1" mode="$2" staged="$1.vpnbar-new"
+  sudo install -d -o root -g wheel -m 0755 "$(dirname "${target}")" || return 1
+  sudo tee "${staged}" >/dev/null || return 1
+  sudo chown root:wheel "${staged}" || return 1
+  sudo chmod "${mode}" "${staged}" || return 1
+  printf '%s\n' "${staged}"
+}
+
+local_sha() {
+  shasum -a 256 "$1" 2>/dev/null | awk '{ print $1 }'
+}
+
+# Install the helper and the sudoers line, or bring them up to date. Asks for
+# the password once, through sudo, and only when something has to change.
+#
+# A helper that is already installed and differs is not replaced without
+# asking: the Spoon runs it as root without a password, and the copy it would
+# be replaced with lives where the user can write.
+local_setup() {
+  local source staged answer
+  source="$(local_helper_source)" || return 1
+  local_paths_safe || return 1
+  if ! local_helper_current; then
+    staged="$(local_stage "${LOCAL_HELPER}" 0755 <"${source}")" || return 1
+    if [ -f "${LOCAL_HELPER}" ]; then
+      echo "The installed helper differs from this vpnbar's:"
+      echo "  installed  $(local_sha "${LOCAL_HELPER}")  ${LOCAL_HELPER}"
+      echo "  new        $(local_sha "${staged}")  ${source}"
+      printf 'Replace it? [y/N] '
+      read -r answer || answer=""
+      case "${answer}" in
+        y | Y | yes) ;;
+        *)
+          sudo rm -f "${staged}"
+          echo "kept the installed helper" >&2
+          return 1
+          ;;
+      esac
+    fi
+    sudo mv -f "${staged}" "${LOCAL_HELPER}" || return 1
+    echo "installed ${LOCAL_HELPER}"
+  fi
+  if ! local_sudo_allowed; then
+    staged="$(local_sudoers_line | local_stage "${LOCAL_SUDOERS}" 0440)" || return 1
+    if ! sudo visudo -c -q -f "${staged}" >/dev/null 2>&1; then
+      sudo rm -f "${staged}"
+      echo "the sudoers line did not pass visudo; nothing installed" >&2
+      return 1
+    fi
+    sudo mv -f "${staged}" "${LOCAL_SUDOERS}" || return 1
+    echo "installed ${LOCAL_SUDOERS}: $(local_sudoers_line)"
+  fi
+}
+
+# Replace the list with what is on stdin, checked first.
+local_write() {
+  local source content staged
+  source="$(local_helper_source)" || return 1
+  content="$(cat)"
+  printf '%s\n' "${content}" | "${source}" validate || return 1
+  local_paths_safe || return 1
+  staged="$(printf '%s\n' "${content}" | local_stage "${LOCAL_FILE}" 0644)" || return 1
+  sudo mv -f "${staged}" "${LOCAL_FILE}"
+}
+
+# What the helper sees, read without privileges:
+# `cidr|gateway|on|interface|ours|other`.
+local_status() {
+  local source
+  source="$(local_helper_source)" || return 1
+  [ -f "${LOCAL_FILE}" ] || return 0
+  VPNBAR_LOCAL_FILE="${LOCAL_FILE}" "${source}" status
+}
+
+# The router of the network this machine is on: the first default route that
+# is not a tunnel's.
+local_router() {
+  command -v netstat >/dev/null 2>&1 || return 0
+  netstat -rn -f inet 2>/dev/null | awk '$1 == "default" && $4 !~ /^utun/ && $2 ~ /^[0-9.]+$/ { print $2; exit }'
+}
+
+local_router_mac() {
+  arp -n "$1" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit } }'
+}
+
+# One `ok` or `FAIL` line per network, and LOCAL_PROBLEMS counting the fails.
+LOCAL_PROBLEMS=0
+local_report() {
+  LOCAL_PROBLEMS=0
+  local status cidr gateway on netif ours other
+  status="$(local_status)" || {
+    bad "the helper is missing from this installation"
+    LOCAL_PROBLEMS=$((LOCAL_PROBLEMS + 1))
+    return 0
+  }
+  if [ -z "${status}" ]; then
+    note "none named — vpnbar local add <cidr> keeps one out of every tunnel"
+    return 0
+  fi
+  if ! local_helper_current || ! local_sudo_allowed; then
+    bad "not set up, so vpnbar cannot keep them local — run: vpnbar local apply"
+    LOCAL_PROBLEMS=$((LOCAL_PROBLEMS + 1))
+  fi
+  while IFS='|' read -r cidr gateway on netif ours other; do
+    [ -n "${cidr}" ] || continue
+    if [ "${on}" = yes ] && [ "${other}" = yes ]; then
+      bad "${cidr} has a route of its own that is not through ${gateway} — run: vpnbar local apply"
+      LOCAL_PROBLEMS=$((LOCAL_PROBLEMS + 1))
+    elif [ "${on}" = yes ]; then
+      if [ "${ours}" = yes ]; then
+        ok "${cidr} stays local, through ${gateway}"
+      else
+        case "${netif}" in
+          utun*)
+            bad "${cidr} goes into ${netif} — run: vpnbar local apply"
+            LOCAL_PROBLEMS=$((LOCAL_PROBLEMS + 1))
+            ;;
+          *) ok "${cidr} is local (${netif}), and no tunnel claims it" ;;
+        esac
+      fi
+    elif [ "${ours}" = yes ]; then
+      bad "${cidr} still goes to ${gateway}, which is not this network's router — run: vpnbar local apply"
+      LOCAL_PROBLEMS=$((LOCAL_PROBLEMS + 1))
+    else
+      ok "${cidr} belongs to the network behind ${gateway}, which this is not"
+    fi
+  done <<EOF
+${status}
+EOF
+}
+
+local_apply() {
+  local_setup || return 1
+  [ -f "${LOCAL_FILE}" ] || return 0
+  sudo "${LOCAL_HELPER}" apply
+}
+
+local_add() {
+  local cidr="${1:-}" gateway="${2:-}" mac="" line
+  if [ -z "${cidr}" ] || [ $# -gt 2 ]; then
+    echo "usage: ${0##*/} local add <cidr> [<router>]" >&2
+    return 2
+  fi
+  if [ -z "${gateway}" ]; then
+    gateway="$(local_router)"
+    if [ -z "${gateway}" ]; then
+      echo "no router to tie ${cidr} to; name it: ${0##*/} local add ${cidr} <router>" >&2
+      return 1
+    fi
+  fi
+  # The router's own address, so another network that happens to use the same
+  # router address does not count as this one. Only when it is on the link
+  # right now; one named for a network the machine is not on is kept without.
+  mac="$(local_router_mac "${gateway}")"
+  if [ -z "${mac}" ]; then
+    # A router that has been quiet, with a tunnel carrying the traffic, can
+    # have dropped out of the ARP cache. Asked once before going without.
+    ping -c 1 -t 1 "${gateway}" >/dev/null 2>&1 || true
+    mac="$(local_router_mac "${gateway}")"
+  fi
+  if [ -z "${mac}" ]; then
+    # Without it, any network whose router has the same address would count
+    # as this one, and traffic meant for the tunnel would go to that router.
+    echo "no MAC address for ${gateway}; add the network while you are on it" >&2
+    return 1
+  fi
+  line="${cidr} ${gateway}${mac:+ ${mac}}"
+  # Checked before anything is installed: a typo is no reason to put a sudoers
+  # line on the machine.
+  printf '%s\n' "${line}" | "$(local_helper_source)" validate || return 1
+  local_setup || return 1
+  {
+    if [ -f "${LOCAL_FILE}" ]; then
+      awk -v cidr="${cidr}" '$1 != cidr' "${LOCAL_FILE}"
+    fi
+    printf '%s\n' "${line}"
+  } | local_write || return 1
+  echo "${cidr} stays out of every tunnel while ${gateway}${mac:+ (${mac})} is the router here"
+  local code=0
+  sudo "${LOCAL_HELPER}" apply || code=$?
+  if [ "${code}" -eq 75 ]; then
+    echo "a run of the helper was busy; vpnbar applies it within five minutes, or now: vpnbar local apply" >&2
+    return 0
+  fi
+  return "${code}"
+}
+
+# The lock the helper takes for a run, taken here around a removal: a run that
+# read the list before the line went would otherwise put the route back.
+local_lock() {
+  local lock tries=0
+  lock="$(dirname "${LOCAL_FILE}")/.apply.lock"
+  [ -d "$(dirname "${lock}")" ] || return 0
+  while ! sudo mkdir "${lock}" 2>/dev/null; do
+    if [ -n "$(find "${lock}" -maxdepth 0 -mmin +1 2>/dev/null)" ] &&
+      sudo mv "${lock}" "${lock}.stale.$$" 2>/dev/null; then
+      sudo rmdir "${lock}.stale.$$" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    if [ "${tries}" -ge 10 ]; then
+      echo "a run of the helper holds ${lock}; try again in a moment" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  # Given back on Ctrl-C too, or every run of the helper waits out a minute.
+  trap 'local_unlock; exit 130' INT TERM
+}
+
+local_unlock() {
+  trap - INT TERM
+  sudo rmdir "$(dirname "${LOCAL_FILE}")/.apply.lock" 2>/dev/null || true
+}
+
+local_remove() {
+  local cidr="${1:-}" status gateway ours
+  if [ -z "${cidr}" ] || [ $# -gt 1 ]; then
+    echo "usage: ${0##*/} local remove <cidr>" >&2
+    return 2
+  fi
+  if [ ! -f "${LOCAL_FILE}" ] || ! awk -v cidr="${cidr}" '$1 == cidr { found = 1 } END { exit !found }' "${LOCAL_FILE}"; then
+    echo "${cidr} is not in ${LOCAL_FILE}" >&2
+    return 1
+  fi
+  local_lock || return 1
+  # The route first, while the list still says it is ours: a line removed
+  # ahead of a delete that then fails leaves a route nothing knows about.
+  status="$(local_status | awk -F'|' -v cidr="${cidr}" '$1 == cidr')"
+  gateway="$(printf '%s' "${status}" | cut -d'|' -f2)"
+  ours="$(printf '%s' "${status}" | cut -d'|' -f5)"
+  if [ "${ours}" = yes ]; then
+    if ! sudo route -n delete -net "${cidr}" "${gateway}" >/dev/null; then
+      local_unlock
+      echo "could not remove the route to ${cidr} via ${gateway}; ${cidr} stays in the list" >&2
+      return 1
+    fi
+    echo "removed the route to ${cidr} via ${gateway}"
+  fi
+  if ! awk -v cidr="${cidr}" '$1 != cidr' "${LOCAL_FILE}" | local_write; then
+    local_unlock
+    return 1
+  fi
+  local_unlock
+  echo "${cidr} is a tunnel's again whenever one claims it"
+}
+
+local_uninstall() {
+  local status cidr gateway on netif ours other failed=0
+  local_lock || return 1
+  status="$(local_status 2>/dev/null || true)"
+  while IFS='|' read -r cidr gateway on netif ours other; do
+    [ "${ours:-}" = yes ] || continue
+    if sudo route -n delete -net "${cidr}" "${gateway}" >/dev/null; then
+      echo "removed the route to ${cidr} via ${gateway}"
+    else
+      echo "could not remove the route to ${cidr} via ${gateway}" >&2
+      failed=1
+    fi
+  done <<EOF
+${status}
+EOF
+  if [ "${failed}" -ne 0 ]; then
+    # Everything stays, so a second try still knows which routes are its own.
+    local_unlock
+    echo "nothing else removed; run it again once the route can go" >&2
+    return 1
+  fi
+  sudo rm -f "${LOCAL_SUDOERS}" "${LOCAL_HELPER}" "${LOCAL_FILE}"
+  local_unlock
+  sudo rmdir "$(dirname "${LOCAL_FILE}")" 2>/dev/null || true
+  echo "removed the helper, its sudoers line and the list"
+}
+
+local_list() {
+  echo "Local networks"
+  local_report
+  [ "${LOCAL_PROBLEMS}" -eq 0 ]
+}
+
+cmd_local() {
+  local verb="${1:-list}"
+  [ $# -eq 0 ] || shift
+  case "${verb}" in
+    list) local_list ;;
+    add) local_add "$@" ;;
+    remove) local_remove "$@" ;;
+    apply) local_apply ;;
+    uninstall) local_uninstall ;;
+    *)
+      echo "usage: ${0##*/} local [list|add <cidr> [<router>]|remove <cidr>|apply|uninstall]" >&2
+      return 2
+      ;;
+  esac
+}
+
 case "${1:-}" in
   link) cmd_link ;;
   unlink) cmd_unlink ;;
@@ -1613,8 +2027,12 @@ case "${1:-}" in
     shift
     cmd_clean "$@"
     ;;
+  local)
+    shift
+    cmd_local "$@"
+    ;;
   *)
-    echo "usage: ${0##*/} start|stop|restart|link|unlink|app|doctor|clean" >&2
+    echo "usage: ${0##*/} start|stop|restart|link|unlink|app|doctor|clean|local" >&2
     exit 2
     ;;
 esac

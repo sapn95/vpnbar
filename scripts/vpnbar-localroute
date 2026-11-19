@@ -1,0 +1,376 @@
+#!/bin/sh
+# Keeps the local networks named in one root-owned file out of a VPN tunnel.
+#
+# A tunnel that asks for all of 192.168.0.0/16 takes every LAN behind the router
+# with it: a Pi on a second VLAN at home answers nothing for as long as the VPN
+# is up (ADR 0050). macOS keeps the interface's own /24 local and nothing else.
+# This adds the narrower route back through the router of the network the
+# machine is on, and takes it away again on any other network, where the same
+# prefix is somebody else's and the router may not even be there.
+#
+# Run as root through one sudoers line that allows exactly
+# `/usr/local/libexec/vpnbar-localroute apply`, so the Spoon can call it without
+# a password. That is why nothing here trusts its caller: the networks come from
+# a file only root can write, every field is checked before `route` sees it, and
+# only RFC 1918 prefixes are accepted. Whoever can run this can only put the
+# routes back that root already agreed to.
+#
+#   apply     add or remove routes so the table matches the file
+#   status    what apply would see, one line per network, changing nothing:
+#             cidr|gateway|on|interface|ours|other
+#   validate  read lines on stdin, say what is wrong with each, exit 1 if any
+#
+# A line of the file is `cidr gateway [mac]`. The mac is the router's, recorded
+# when the network was added; with it, "on this network" means that router
+# answers on the LAN with that address, not merely that something does at
+# 192.168.1.1, which is half the home routers there are.
+set -uf
+IFS='
+	 '
+
+DEFAULT_FILE=/usr/local/etc/vpnbar/local-networks
+# By its full path, before anything else runs: sudo on macOS keeps the caller's
+# PATH (there is no secure_path in its default sudoers), so a bare `id` would
+# be whatever the caller put first on it, run as root.
+EUID_NOW="$(/usr/bin/id -u)"
+if [ "${EUID_NOW}" = 0 ]; then
+  # Nothing from the caller's environment reaches a command run as root.
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+  FILE="${DEFAULT_FILE}"
+else
+  # Unprivileged, for `status`, `validate` and the tests, which stub the commands.
+  FILE="${VPNBAR_LOCAL_FILE:-${DEFAULT_FILE}}"
+fi
+
+warn() { printf '%s\n' "$*" >&2; }
+
+# No leading zeros: `route get` prints an octet written `000` as `0`, and a
+# route the list spells differently is one it would never recognise as its own.
+octet_ok() {
+  case "$1" in '' | *[!0-9]* | 0?*) return 1 ;; esac
+  [ "${#1}" -le 3 ] && [ "$1" -le 255 ]
+}
+
+# Dotted quad, four octets, nothing else.
+ipv4_ok() {
+  case "$1" in '' | *[!0-9.]* | .* | *. | *..*) return 1 ;; esac
+  # shellcheck disable=SC2086 # split on the dots, which is the point
+  (
+    IFS=.
+    set -- $1
+    [ $# -eq 4 ] && octet_ok "$1" && octet_ok "$2" && octet_ok "$3" && octet_ok "$4"
+  )
+}
+
+ip_int() {
+  # shellcheck disable=SC2086
+  (
+    IFS=.
+    set -- $1
+    echo $(((($1 * 256 + $2) * 256 + $3) * 256 + $4))
+  )
+}
+
+int_ip() {
+  echo "$((($1 >> 24) & 255)).$((($1 >> 16) & 255)).$((($1 >> 8) & 255)).$(($1 & 255))"
+}
+
+mask_int() {
+  echo $(((4294967295 << (32 - $1)) & 4294967295))
+}
+
+# A network in RFC 1918, written with its prefix length and nothing in the host
+# bits. Anything wider than the private block it sits in is refused: a /8 that
+# starts at 192.168.0.0 is most of the internet.
+cidr_ok() {
+  case "$1" in */*) ;; *) return 1 ;; esac
+  network="${1%/*}"
+  length="${1#*/}"
+  case "${length}" in '' | *[!0-9]* | 0?*) return 1 ;; esac
+  [ "${#length}" -le 2 ] && [ "${length}" -ge 8 ] && [ "${length}" -le 32 ] || return 1
+  ipv4_ok "${network}" || return 1
+  n="$(ip_int "${network}")"
+  m="$(mask_int "${length}")"
+  [ $((n & m)) -eq "${n}" ] || return 1
+  if [ $((n >> 24)) -eq 10 ] && [ "${length}" -ge 8 ]; then return 0; fi
+  if [ $((n >> 20)) -eq 2753 ] && [ "${length}" -ge 12 ]; then return 0; fi
+  if [ $((n >> 16)) -eq 49320 ] && [ "${length}" -ge 16 ]; then return 0; fi
+  return 1
+}
+
+# Six octets of one or two hex digits. `arp` drops leading zeros, so both
+# spellings of the same address are accepted and compared normalised.
+mac_ok() {
+  printf '%s\n' "$1" | grep -Eqi '^[0-9a-f]{1,2}(:[0-9a-f]{1,2}){5}$'
+}
+
+mac_norm() {
+  printf '%s\n' "$1" | awk -F: '{
+    out = ""
+    for (i = 1; i <= NF; i++) {
+      part = tolower($i)
+      if (length(part) == 1) { part = "0" part }
+      out = out (i > 1 ? ":" : "") part
+    }
+    print out
+  }'
+}
+
+# Why a line is refused, or nothing when it is fine.
+line_problem() {
+  # shellcheck disable=SC2086 # the fields of one line
+  set -- $1
+  [ $# -ge 2 ] && [ $# -le 3 ] || {
+    echo "expected: cidr gateway [mac]"
+    return
+  }
+  cidr_ok "$1" || {
+    echo "$1 is not a private network such as 192.168.0.0/24"
+    return
+  }
+  ipv4_ok "$2" || {
+    echo "$2 is not an IPv4 address"
+    return
+  }
+  if [ $# -eq 3 ] && ! mac_ok "$3"; then
+    echo "$3 is not a MAC address"
+  fi
+}
+
+# The file's entries, comments and blank lines left out, bad lines reported.
+entries() {
+  [ -f "${FILE}" ] || return 0
+  number=0
+  while IFS= read -r raw || [ -n "${raw}" ]; do
+    number=$((number + 1))
+    line="${raw%%#*}"
+    # shellcheck disable=SC2086
+    set -- ${line}
+    [ $# -gt 0 ] || continue
+    problem="$(line_problem "$*")"
+    if [ -n "${problem}" ]; then
+      warn "${FILE}:${number}: ignored, ${problem}"
+      continue
+    fi
+    printf '%s %s %s\n' "$1" "$2" "${3:-}"
+  done <"${FILE}"
+}
+
+# Root may only act on a file nobody else could have written, which takes
+# every folder above it as well: on a Mac where Homebrew owns /usr/local, the
+# user could move /usr/local/etc aside and put a list of their own in its place.
+file_is_roots() {
+  path="${FILE}"
+  while :; do
+    # shellcheck disable=SC2046 # owner and mode, two words
+    set -- $(stat -f '%u %Lp' "${path}" 2>/dev/null)
+    [ "${1:-}" = 0 ] || return 1
+    case "${2:-}" in *[2367]?) return 1 ;; *[2367]) return 1 ;; esac
+    [ "${path}" != / ] || return 0
+    path="$(dirname "${path}")"
+  done
+}
+
+# `key value` lines of `route -n get`, reduced to `destination|mask|gateway|interface`.
+route_get() {
+  route -n get "$@" 2>/dev/null | awk '
+    $1 == "destination:" { d = $2 }
+    $1 == "mask:" { m = $2 }
+    $1 == "gateway:" { g = $2 }
+    $1 == "interface:" { i = $2 }
+    END { printf "%s|%s|%s|%s\n", d, m, g, i }
+  '
+}
+
+router_mac() {
+  arp -n "$1" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit } }'
+}
+
+# Is the machine on the network this entry belongs to? Its router has to be on
+# the link, reached without a gateway of its own and not through a tunnel, and
+# answer with the recorded address when one was recorded. An ARP entry that has
+# lapsed is asked for once, because with a full tunnel up the router can be
+# quiet long enough for it to go.
+on_network() {
+  gateway="$1"
+  mac="$2"
+  route="$(route_get "${gateway}")"
+  via="${route#*|*|}"
+  via_gateway="${via%%|*}"
+  netif="${via#*|}"
+  [ -n "${netif}" ] && [ -z "${via_gateway}" ] || return 1
+  case "${netif}" in utun*) return 1 ;; esac
+  [ -n "${mac}" ] || return 0
+  seen="$(router_mac "${gateway}")"
+  if [ -z "${seen}" ]; then
+    ping -c 1 -t 1 "${gateway}" >/dev/null 2>&1 || true
+    seen="$(router_mac "${gateway}")"
+  fi
+  [ -n "${seen}" ] && [ "$(mac_norm "${seen}")" = "$(mac_norm "${mac}")" ]
+}
+
+# `on|interface|ours|other` for one entry. `other` is a gateway route for exactly
+# this prefix that is not ours: one a tunnel pushed for it, or one left behind
+# when the network was tied to another router. An interface route, the one
+# macOS keeps for a network the machine is on, has no gateway and is never one.
+look() {
+  cidr="$1"
+  gateway="$2"
+  mac="$3"
+  on=no
+  on_network "${gateway}" "${mac}" && on=yes
+  # Two questions, two lookups. With a mask, `route get` finds the route with
+  # exactly that prefix and falls back to `default` when there is none, not to
+  # the aggregate that covers it, so it can only say whether ours is there.
+  # Where the network's traffic goes is the plain lookup of its address.
+  exact="$(look_exact "${cidr}" "${gateway}")"
+  ours=no
+  other=no
+  [ "${exact}" != ours ] || ours=yes
+  [ "${exact}" != other ] || other=yes
+  where="$(route_get "${cidr%/*}")"
+  echo "${on}|${where##*|}|${ours}|${other}"
+}
+
+# Is the route for exactly this prefix through this router in the table now?
+# Asked again after every change, because `route` has been seen to exit 0 on
+# some refusals of the routing socket.
+is_ours() {
+  [ "$(look_exact "$1" "$2")" = ours ]
+}
+
+# `ours`, `other` or nothing, for the route with exactly this prefix.
+look_exact() {
+  network="${1%/*}"
+  mask="$(int_ip "$(mask_int "${1#*/}")")"
+  found="$(route_get -net "$1")"
+  destination="${found%%|*}"
+  rest="${found#*|}"
+  found_mask="${rest%%|*}"
+  rest="${rest#*|}"
+  found_gateway="${rest%%|*}"
+  if [ "${destination}" = "${network}" ] && [ "${found_mask}" = "${mask}" ]; then
+    if [ "${found_gateway}" = "$2" ]; then
+      echo ours
+    elif [ -n "${found_gateway}" ]; then
+      echo other
+    fi
+  fi
+}
+
+# One run at a time, shared with `vpnbar local remove` and `uninstall`: a run
+# that read the list before a network was removed would otherwise put its
+# route back after the removal took it away, and nothing would know of it.
+# A lock older than a minute is from a run that was killed.
+LOCK="$(dirname "${FILE}")/.apply.lock"
+take_lock() {
+  # No folder, no list: there is nothing to keep apart.
+  [ -d "$(dirname "${LOCK}")" ] || return 0
+  tries=0
+  while ! mkdir "${LOCK}" 2>/dev/null; do
+    # `find -mmin`, which BSD and GNU read alike; `stat -f` does not. Taken
+    # over by `mv`, which only one of two waiters can win.
+    if [ -n "$(find "${LOCK}" -maxdepth 0 -mmin +1 2>/dev/null)" ] &&
+      mv "${LOCK}" "${LOCK}.stale.$$" 2>/dev/null; then
+      rmdir "${LOCK}.stale.$$" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    [ "${tries}" -lt 10 ] || return 1
+    sleep 1
+  done
+  # A run that is stopped stops: it must not go on changing routes after it
+  # gave the lock back.
+  trap 'rmdir "${LOCK}" 2>/dev/null' EXIT
+  trap 'exit 1' INT TERM
+}
+
+cmd_status() {
+  entries | while read -r cidr gateway mac; do
+    echo "${cidr}|${gateway}|$(look "${cidr}" "${gateway}" "${mac}")"
+  done
+}
+
+cmd_apply() {
+  if [ "${EUID_NOW}" = 0 ] && [ -e "${FILE}" ] && ! file_is_roots; then
+    warn "${FILE} or its folder can be written by somebody other than root; nothing done"
+    exit 1
+  fi
+  if ! take_lock; then
+    # Somebody is changing the list. 75 (EX_TEMPFAIL) tells the caller to
+    # try again rather than that something is wrong.
+    warn "another run holds ${LOCK}; nothing done"
+    exit 75
+  fi
+  failed=0
+  list="$(entries)"
+  while read -r cidr gateway mac; do
+    [ -n "${cidr}" ] || continue
+    state="$(look "${cidr}" "${gateway}" "${mac}")"
+    on="${state%%|*}"
+    rest="${state#*|}"
+    netif="${rest%%|*}"
+    rest="${rest#*|}"
+    ours="${rest%%|*}"
+    other="${rest#*|}"
+    if [ "${on}" = yes ] && [ "${other}" = yes ]; then
+      # `add` would fail with "File exists" on every run and leave it there.
+      if route -n change -net "${cidr}" "${gateway}" >/dev/null 2>&1 && is_ours "${cidr}" "${gateway}"; then
+        echo "moved ${cidr} to ${gateway}, away from ${netif}"
+      else
+        warn "could not move ${cidr} to ${gateway}"
+        failed=1
+      fi
+    elif [ "${on}" = yes ] && [ "${ours}" = no ]; then
+      case "${netif}" in
+        utun*)
+          if route -n add -net "${cidr}" "${gateway}" >/dev/null 2>&1 && is_ours "${cidr}" "${gateway}"; then
+            echo "added ${cidr} via ${gateway}, out of ${netif}"
+          else
+            warn "could not add ${cidr} via ${gateway}"
+            failed=1
+          fi
+          ;;
+      esac
+    elif [ "${on}" = no ] && [ "${ours}" = yes ]; then
+      if route -n delete -net "${cidr}" "${gateway}" >/dev/null 2>&1 && ! is_ours "${cidr}" "${gateway}"; then
+        echo "removed ${cidr} via ${gateway}, not on that network"
+      else
+        warn "could not remove ${cidr} via ${gateway}"
+        failed=1
+      fi
+    fi
+  done <<EOF
+${list}
+EOF
+  exit "${failed}"
+}
+
+cmd_validate() {
+  bad=0
+  number=0
+  while IFS= read -r raw || [ -n "${raw}" ]; do
+    number=$((number + 1))
+    line="${raw%%#*}"
+    # shellcheck disable=SC2086
+    set -- ${line}
+    [ $# -gt 0 ] || continue
+    problem="$(line_problem "$*")"
+    if [ -n "${problem}" ]; then
+      echo "line ${number}: ${problem}"
+      bad=1
+    fi
+  done
+  exit "${bad}"
+}
+
+case "${1:-}" in
+  apply) cmd_apply ;;
+  status) cmd_status ;;
+  validate) cmd_validate ;;
+  *)
+    echo "usage: ${0##*/} apply|status|validate" >&2
+    exit 2
+    ;;
+esac

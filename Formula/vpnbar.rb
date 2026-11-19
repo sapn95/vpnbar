@@ -20,6 +20,8 @@ class Vpnbar < Formula
     # The Spoon cannot be linked into ~/.hammerspoon from here: a formula must
     # not write to a home directory. `vpnbar link` is the step that does.
     libexec.install "VpnBar.spoon"
+    # Copied to /usr/local/libexec by `vpnbar local`, which is what sudo runs.
+    libexec.install "scripts/vpnbar-localroute"
     bin.install "scripts/vpnbar"
     bin.install "scripts/aws-vpn-client.sh" => "aws-vpn-client"
   end
