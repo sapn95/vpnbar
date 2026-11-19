@@ -1291,7 +1291,10 @@ function obj:refresh(options)
     local measured, seconds = pcall(hs.host.idleTime)
     context = {
       idle = measured and seconds or nil,
-      fresh = work.withinFreshStart(self.lastFreshStart, os.time()) and not self.freshSpent,
+      fresh = (
+        work.withinFreshStart(self.lastFreshStart, os.time())
+        or work.withinFreshStart(self.resumedAt, os.time(), autoconnect.SWITCH_PATIENCE)
+      ) and not self.freshSpent,
       locked = self:screenLocked(),
       preferred = self.preferred,
       -- The two reasons a client is off limits: it is not running, so there is
@@ -1331,6 +1334,7 @@ function obj:refresh(options)
       autoconnect.remember(self.attempts, plan.id, os.time())
       if context.fresh and states[plan.id] == "login" then
         self.freshSpent = true
+        self.resumedAt = nil
       end
     elseif plan.verb == "renew" then
       -- One record per incident, kept across the tries the planner allows
@@ -1706,6 +1710,9 @@ function obj:disconnectAll()
   -- ends here too: "everything off" outranks "this one now".
   self.paused = true
   self.switching = nil
+  -- An exemption from the last resume is not this pause's to keep: a switch
+  -- that ends the pause would otherwise find it still open.
+  self.resumedAt = nil
   self.logger.i("disconnect everything: autoconnect paused")
   -- One mark for the whole run rather than one per connection: a `force` waits
   -- on a client quitting, so this is seconds of work, and it is all the same
@@ -1745,6 +1752,16 @@ function obj:resumeAll()
   self.paused = false
   self.quitByHand = {}
   autoconnect.forget(self.attempts)
+  -- The exemption a wake or an unlock grants, in which one login window may
+  -- come up. The disconnect logged GlobalProtect out, so it now reads as
+  -- `login`, and without it the click on this row counted as somebody typing
+  -- and held the connect it asked for (ADR 0041). Open until a login-needing
+  -- connect uses it, for at most ten minutes after the resume, the time a
+  -- switch is pressed for: with one at a time off, a connection that comes back
+  -- silently can take the first passes, and the twenty seconds of a wake would
+  -- be gone before the login's turn.
+  self.resumedAt = os.time()
+  self.freshSpent = false
   self.logger.i("disconnect everything: autoconnect resumed")
   self:refreshSoon({ autoconnect = true }, 0)
 end

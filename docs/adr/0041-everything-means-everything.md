@@ -41,6 +41,20 @@ connections up in the order of the menu; or with a **Switch to**, because "this
 one, now" outranks "everything off"; or with a restart of vpnbar, like every
 other decision made for this session.
 
+**Turn them back on** also grants what a wake or an unlock grants: the first
+connection that needs a login may put its login window on screen
+([ADR 0029](0029-an-attempt-that-needs-a-person-waits-for-one.md)). It lasts
+until that connection has been asked, for at most ten minutes after the resume
+(the time a switch is pressed for) rather than the twenty seconds of a wake: with
+one at a time off, a connection that comes back silently can take the first
+passes. Disconnect everything closes it. Without it,
+nothing came back. The disconnect logs GlobalProtect out of its gateway, so it
+reads as `login` afterwards, and a `login` connect is held while somebody is
+typing. The click on the row counted as typing. On 19.11.2026 the pause ended at
+22:39:27, nothing was started, and GlobalProtect was connected by hand twenty
+seconds later. Somebody who has just asked for the VPNs back is the person that
+login window is for.
+
 ## How a protected connection is let through
 
 A verb of its own, `standdown`, which only this row produces, the same way

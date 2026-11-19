@@ -146,6 +146,14 @@ describe("work.withinFreshStart", function()
     assert.is_false(work.withinFreshStart("nonsense", 1000))
   end)
 
+  it("lasts as long as it is told to, and still not across a clock that went backwards", function()
+    assert.is_true(work.withinFreshStart(1000, 1000 + work.FRESH_START_DEBOUNCE, 600))
+    assert.is_true(work.withinFreshStart(1000, 1599, 600))
+    assert.is_false(work.withinFreshStart(1000, 1600, 600))
+    assert.is_false(work.withinFreshStart(1000, 990, 600))
+    assert.is_false(work.withinFreshStart(nil, 1000, 600))
+  end)
+
   it("is the other side of freshStart", function()
     for _, since in ipairs({ 0, 5, 19, 20, 21, 500 }) do
       assert.not_equals(

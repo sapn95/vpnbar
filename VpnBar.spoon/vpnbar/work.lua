@@ -60,15 +60,18 @@ work.FRESH_START_DEBOUNCE = 20
 --- one read is too narrow a door for that: if the single read that could act
 --- cannot — still connecting, outranked, a probe not settled — the person who
 --- just sat down would then wait for a minute of idle they are typing through.
+--- A resume after **Disconnect everything** asks the same question over a
+--- longer window, which `length` gives (ADR 0041).
 --- @param lastAt number|nil when the last fresh start was handled
 --- @param now number seconds
+--- @param length number|nil seconds the window lasts, FRESH_START_DEBOUNCE if nil
 --- @return boolean
-function work.withinFreshStart(lastAt, now)
+function work.withinFreshStart(lastAt, now, length)
   if type(lastAt) ~= "number" or type(now) ~= "number" then
     return false
   end
   local since = now - lastAt
-  return since >= 0 and since < work.FRESH_START_DEBOUNCE
+  return since >= 0 and since < (length or work.FRESH_START_DEBOUNCE)
 end
 
 function work.freshStart(lastAt, now)
