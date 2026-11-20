@@ -112,10 +112,14 @@ EOF
 # route,
 # and is deliberately not logged: NET_ROUTE_CALLS is the record of what was
 # changed, and a dry run that asked a question has still changed nothing.
+# A lookup made with `-host` is keyed `host:<address>`, because the real
+# command answers it differently from the same address without it.
 for argument in "$@"; do
   if [ "${argument}" = "get" ]; then
+    host=""
+    case " $* " in *" -host "*) host="host:" ;; esac
     shift $(($# - 1))
-    want="$1"
+    want="${host}$1"
     line="$(grep -E "^${want}\|" "${NET_ROUTE_GET:-/dev/null}" 2>/dev/null | head -1)"
     [ -n "${line}" ] || exit 1
     printf '   route to: %s\n' "${want}"
@@ -1681,8 +1685,8 @@ stub_home_behind_a_tunnel() {
     printf '%s\n' '192.168.1.1|192.168.1.1|||en0'
     # No route with exactly that prefix, so the masked lookup says default.
     printf '%s\n' '192.168.0.0/24|default|default|192.168.1.1|en0'
-    # The network's own address leaves by the tunnel's aggregate.
-    printf '%s\n' '192.168.0.0|192.168.0.0|255.255.0.0|10.0.0.1|utun4'
+    # An address inside the network leaves by the tunnel's aggregate.
+    printf '%s\n' 'host:192.168.0.0|192.168.0.0|255.255.0.0|10.0.0.1|utun4'
   } >"${NET_ROUTE_GET}"
   printf '%s\n' '192.168.1.1 a8:0:0:0:0:1' >"${NET_ARP}"
 }
@@ -1691,8 +1695,8 @@ stub_home_behind_a_tunnel() {
 stub_our_route_in_place() {
   {
     printf '%s\n' '192.168.0.0/24|192.168.0.0|255.255.255.0|192.168.1.1|en0'
-    printf '%s\n' '192.168.0.0|192.168.0.0|255.255.255.0|192.168.1.1|en0'
-    grep -v -e '^192.168.0.0/24|' -e '^192.168.0.0|' "${NET_ROUTE_GET}"
+    printf '%s\n' 'host:192.168.0.0|192.168.0.0|255.255.255.0|192.168.1.1|en0'
+    grep -v -e '^192.168.0.0/24|' -e '^host:192.168.0.0|' "${NET_ROUTE_GET}"
   } >"${NET_ROUTE_GET}.new"
   mv "${NET_ROUTE_GET}.new" "${NET_ROUTE_GET}"
 }
@@ -1750,7 +1754,7 @@ EOF
 
 @test "the helper adds nothing where no tunnel claims the network" {
   stub_home_behind_a_tunnel
-  sed -i.bak 's/^192.168.0.0|.*/192.168.0.0|default|default|192.168.1.1|en0/' "${NET_ROUTE_GET}"
+  sed -i.bak 's/^host:192.168.0.0|.*/host:192.168.0.0|default|default|192.168.1.1|en0/' "${NET_ROUTE_GET}"
   list_home '192.168.0.0/24 192.168.1.1'
   run "${HELPER}" apply
   [ "$status" -eq 0 ]
@@ -1913,7 +1917,7 @@ EOF
   # router would take the machine off its own network.
   stub_home_behind_a_tunnel
   sed -i.bak 's#^192.168.0.0/24|.*#192.168.0.0/24|192.168.0.0|255.255.255.0||en0#' "${NET_ROUTE_GET}"
-  sed -i.bak 's#^192.168.0.0|.*#192.168.0.0|192.168.0.0|255.255.255.0||en0#' "${NET_ROUTE_GET}"
+  sed -i.bak 's#^host:192.168.0.0|.*#host:192.168.0.0|192.168.0.0|255.255.255.0||en0#' "${NET_ROUTE_GET}"
   list_home '192.168.0.0/24 192.168.1.1'
   run "${HELPER}" apply
   [ "$status" -eq 0 ]
@@ -2118,5 +2122,18 @@ EOF
   run "${HELPER}" apply
   [ "$status" -eq 0 ]
   [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
+@test "the helper asks about the network address as a host" {
+  # Without `-host`, `route get` answered `default` for the listed /24's
+  # network address on 20.11.2026, because an address ending in .0 reads as a
+  # classful network, while its hosts went into the tunnel. Asked that way,
+  # the helper saw nothing to do.
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.0.0|default|default|192.168.1.1|en0' >>"${NET_ROUTE_GET}"
+  list_home '192.168.0.0/24 192.168.1.1'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1, out of utun4"* ]]
 }
 

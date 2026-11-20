@@ -245,7 +245,11 @@ look() {
   other=no
   [ "${exact}" != ours ] || ours=yes
   [ "${exact}" != other ] || other=yes
-  where="$(route_get "${cidr%/*}")"
+  # Where the network address goes, asked as a host. Without `-host`,
+  # `route get` reads an address that ends in .0 as a classful network and
+  # answers `default` when no route has exactly that prefix: on 20.11.2026 it
+  # said the listed /24 went out of en0 while its hosts went into the tunnel.
+  where="$(route_get -host "${cidr%/*}")"
   echo "${on}|${where##*|}|${ours}|${other}"
 }
 
