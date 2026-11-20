@@ -141,6 +141,10 @@ line_problem() {
 # The file's entries, comments and blank lines left out, bad lines reported.
 entries() {
   [ -f "${FILE}" ] || return 0
+  if [ ! -r "${FILE}" ]; then
+    warn "${FILE} cannot be read"
+    return 1
+  fi
   number=0
   while IFS= read -r raw || [ -n "${raw}" ]; do
     number=$((number + 1))
@@ -287,7 +291,17 @@ take_lock() {
 }
 
 cmd_status() {
-  entries | while read -r cidr gateway mac; do
+  # The sudoers line allows this one as root too, and as root a list that is
+  # not root's is not read: its lines would come back in the warnings.
+  if [ "${EUID_NOW}" = 0 ] && [ -e "${FILE}" ] && ! file_is_roots; then
+    warn "${FILE} or its folder can be written by somebody other than root; nothing read"
+    exit 1
+  fi
+  # Read first, so a list that cannot be read is a failure and not an empty
+  # answer: `uninstall` decides from this which routes it may take away.
+  list="$(entries)" || exit 1
+  printf '%s\n' "${list}" | while read -r cidr gateway mac; do
+    [ -n "${cidr}" ] || continue
     echo "${cidr}|${gateway}|$(look "${cidr}" "${gateway}" "${mac}")"
   done
 }
@@ -304,7 +318,7 @@ cmd_apply() {
     exit 75
   fi
   failed=0
-  list="$(entries)"
+  list="$(entries)" || exit 1
   while read -r cidr gateway mac; do
     [ -n "${cidr}" ] || continue
     state="$(look "${cidr}" "${gateway}" "${mac}")"
