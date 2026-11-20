@@ -183,9 +183,8 @@ while :; do
 done
 case "$1 ${2:-}" in
   *vpnbar-localroute\ status)
-    if [ "${asking}" = 1 ]; then
-      [ "${STUB_SUDO_ALLOWED:-0}" = "1" ]
-      exit
+    if [ "${asking}" = 1 ] && [ "${STUB_SUDO_ALLOWED:-0}" != "1" ]; then
+      exit 1
     fi
     ;;
 esac
@@ -222,15 +221,16 @@ exit "${STUB_VISUDO_EXIT:-0}"
 EOF
   printf '#!/usr/bin/env bash\nexit 0\n' >"${STUB}/chown"
   chmod +x "${STUB}/chown"
-  # `arp -n <address>` from NET_ARP, whose lines are `address mac`.
+  # `arp -n <address>` from NET_ARP, whose lines are `address mac [interface]`,
+  # one output line per matching entry, en0 when no interface is given.
   export NET_ARP="${TMP}/arp"
   : >"${NET_ARP}"
   cat >"${STUB}/arp" <<'EOF'
 #!/usr/bin/env bash
 for argument in "$@"; do want="${argument}"; done
-mac="$(awk -v want="${want}" '$1 == want { print $2; exit }' "${NET_ARP}")"
-if [ -n "${mac}" ]; then
-  printf '? (%s) at %s on en0 ifscope [ethernet]\n' "${want}" "${mac}"
+lines="$(awk -v want="${want}" '$1 == want { printf "? (%s) at %s on %s ifscope [ethernet]\n", $1, $2, ($3 == "" ? "en0" : $3) }' "${NET_ARP}")"
+if [ -n "${lines}" ]; then
+  printf '%s\n' "${lines}"
 else
   printf '%s (%s) -- no entry\n' "${want}" "${want}"
 fi
@@ -2081,3 +2081,42 @@ EOF
   [[ "$output" == *"could not remove all of"* ]]
   [[ "$output" != *"removed the helper"* ]]
 }
+
+@test "local add takes the router's MAC from the interface the router is on" {
+  # Seen on 20.11.2026: the first line `arp -n` printed was another
+  # interface's, and the network was tied to 2:0:0:0:0:0.
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.1.1 2:0:0:0:0:0 bridge0' '192.168.1.1 a8:0:0:0:0:1 en0' >"${NET_ARP}"
+  run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -eq 0 ]
+  grep -qx '192.168.0.0/24 192.168.1.1 a8:0:0:0:0:1' "${VPNBAR_LOCAL_FILE}"
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1"* ]]
+}
+
+@test "the helper reads the router's MAC from the interface the router is on" {
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.1.1 2:0:0:0:0:0 bridge0' '192.168.1.1 a8:0:0:0:0:1 en0' >"${NET_ARP}"
+  list_home '192.168.0.0/24 192.168.1.1 a8:00:00:00:00:01'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"added 192.168.0.0/24 via 192.168.1.1"* ]]
+}
+
+@test "local add refuses the MAC macOS shows in place of a hidden one" {
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.1.1 2:0:0:0:0:0 en0' >"${NET_ARP}"
+  run "${SCRIPT}" local add 192.168.0.0/24
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no MAC address for 192.168.1.1"* ]]
+  [ ! -f "${VPNBAR_LOCAL_FILE}" ]
+}
+
+@test "the helper does not take a hidden MAC for the router's" {
+  stub_home_behind_a_tunnel
+  printf '%s\n' '192.168.1.1 2:0:0:0:0:0 en0' >"${NET_ARP}"
+  list_home '192.168.0.0/24 192.168.1.1 2:0:0:0:0:0'
+  run "${HELPER}" apply
+  [ "$status" -eq 0 ]
+  [ ! -s "${NET_ROUTE_CALLS}" ]
+}
+
