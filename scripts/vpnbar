@@ -1890,12 +1890,19 @@ local_add() {
   # line on the machine.
   printf '%s\n' "${line}" | "$(local_helper_source)" validate || return 1
   local_setup || return 1
-  {
+  # Under the lock from the read to the write, like `remove`: an add that read
+  # the list before a removal would otherwise write the removed line back.
+  local_lock || return 1
+  if ! {
     if [ -f "${LOCAL_FILE}" ]; then
       awk -v cidr="${cidr}" '$1 != cidr' "${LOCAL_FILE}"
     fi
     printf '%s\n' "${line}"
-  } | local_write || return 1
+  } | local_write; then
+    local_unlock
+    return 1
+  fi
+  local_unlock
   echo "${cidr} stays out of every tunnel while ${gateway}${mac:+ (${mac})} is the router here"
   local code=0
   sudo "${LOCAL_HELPER}" apply || code=$?
@@ -1969,7 +1976,13 @@ local_remove() {
 local_uninstall() {
   local status cidr gateway on netif ours other failed=0
   local_lock || return 1
-  status="$(local_status 2>/dev/null || true)"
+  # A status that could not be read is not an empty one: going on would delete
+  # the list and leave its routes in the table with nothing that knows them.
+  if ! status="$(local_status)"; then
+    local_unlock
+    echo "could not tell which routes are vpnbar's; nothing removed" >&2
+    return 1
+  fi
   while IFS='|' read -r cidr gateway on netif ours other; do
     [ "${ours:-}" = yes ] || continue
     if sudo route -n delete -net "${cidr}" "${gateway}" >/dev/null; then
@@ -1987,7 +2000,11 @@ EOF
     echo "nothing else removed; run it again once the route can go" >&2
     return 1
   fi
-  sudo rm -f "${LOCAL_SUDOERS}" "${LOCAL_HELPER}" "${LOCAL_FILE}"
+  if ! sudo rm -f "${LOCAL_SUDOERS}" "${LOCAL_HELPER}" "${LOCAL_FILE}"; then
+    local_unlock
+    echo "could not remove all of ${LOCAL_SUDOERS}, ${LOCAL_HELPER} and ${LOCAL_FILE}" >&2
+    return 1
+  fi
   local_unlock
   sudo rmdir "$(dirname "${LOCAL_FILE}")" 2>/dev/null || true
   echo "removed the helper, its sudoers line and the list"

@@ -1841,7 +1841,9 @@ EOF
   list_home '192.168.0.0/24 192.168.1.1' '10.0.0.0/24 192.168.1.1'
   run "${SCRIPT}" local remove 192.168.0.0/24
   [ "$status" -eq 0 ]
-  ! grep -q '^192.168.0.0/24' "${VPNBAR_LOCAL_FILE}"
+  # Counted rather than `! grep`: bats ignores a negated command that is not
+  # the last one in a test.
+  [ "$(grep -c '^192.168.0.0/24' "${VPNBAR_LOCAL_FILE}")" -eq 0 ]
   grep -q '^10.0.0.0/24' "${VPNBAR_LOCAL_FILE}"
   grep -qx -- '-n delete -net 192.168.0.0/24 192.168.1.1' "${NET_ROUTE_CALLS}"
 }
@@ -1927,7 +1929,7 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"The installed helper differs"* ]]
   [[ "$output" == *"kept the installed helper"* ]]
-  ! cmp -s "${HELPER}" "${VPNBAR_LOCAL_HELPER}"
+  [ "$(cksum <"${HELPER}")" != "$(cksum <"${VPNBAR_LOCAL_HELPER}")" ]
   [ ! -e "${VPNBAR_LOCAL_HELPER}.vpnbar-new" ]
 }
 
@@ -2051,4 +2053,31 @@ EOF
 @test "local uninstall finishes where the list has no folder" {
   run "${SCRIPT}" local uninstall
   [ "$status" -eq 0 ]
+}
+
+@test "local uninstall removes nothing when it cannot tell which routes are its own" {
+  stub_home_behind_a_tunnel
+  stub_our_route_in_place
+  list_home '192.168.0.0/24 192.168.1.1'
+  : >"${VPNBAR_LOCAL_SUDOERS}"
+  chmod 000 "${VPNBAR_LOCAL_FILE}"
+  run "${SCRIPT}" local uninstall
+  chmod 644 "${VPNBAR_LOCAL_FILE}"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"nothing removed"* ]]
+  [ -f "${VPNBAR_LOCAL_FILE}" ]
+  [ -f "${VPNBAR_LOCAL_SUDOERS}" ]
+  [ "$(grep -c delete "${NET_ROUTE_CALLS}")" -eq 0 ]
+}
+
+@test "local uninstall says so when the files will not go" {
+  stub_home_behind_a_tunnel
+  list_home '10.0.0.0/24 192.168.1.1'
+  : >"${VPNBAR_LOCAL_SUDOERS}"
+  chmod 555 "$(dirname "${VPNBAR_LOCAL_SUDOERS}")"
+  run "${SCRIPT}" local uninstall
+  chmod 755 "$(dirname "${VPNBAR_LOCAL_SUDOERS}")"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not remove all of"* ]]
+  [[ "$output" != *"removed the helper"* ]]
 }
