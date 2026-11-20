@@ -1784,12 +1784,20 @@ local_write() {
   sudo mv -f "${staged}" "${LOCAL_FILE}"
 }
 
-# What the helper sees, read without privileges:
-# `cidr|gateway|on|interface|ours|other`.
+# What the helper sees: `cidr|gateway|on|interface|ours|other`. Asked as root
+# where the sudoers line allows it, because only root is shown the router's
+# real MAC (see local_router_mac); unprivileged otherwise, where every network
+# tied to a MAC reads as "not on it".
 local_status() {
-  local source
+  local source answer
   source="$(local_helper_source)" || return 1
   [ -f "${LOCAL_FILE}" ] || return 0
+  if [ "${LOCAL_FILE} ${LOCAL_HELPER} ${LOCAL_SUDOERS}" != "${LOCAL_DEFAULTS}" ] || [ -x "${LOCAL_HELPER}" ]; then
+    if answer="$(sudo -n -k "${LOCAL_HELPER}" status 2>/dev/null)"; then
+      printf '%s\n' "${answer}"
+      return 0
+    fi
+  fi
   VPNBAR_LOCAL_FILE="${LOCAL_FILE}" "${source}" status
 }
 
@@ -1800,8 +1808,28 @@ local_router() {
   netstat -rn -f inet 2>/dev/null | awk '$1 == "default" && $4 !~ /^utun/ && $2 ~ /^[0-9.]+$/ { print $2; exit }'
 }
 
+# The router's MAC, from the line of the interface it is reached on, and only
+# when it is on the link (no gateway of its own, not a tunnel). Read as root:
+# macOS hides every MAC behind 2:0:0:0:0:0 from a process that lacks the Local
+# Network permission, which a terminal usually does. On 20.11.2026 that
+# placeholder was recorded, and the helper, which as root saw the real one,
+# decided at once that the machine was not at home and took the route away.
 local_router_mac() {
-  arp -n "$1" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit } }'
+  local netif
+  netif="$(route -n get "$1" 2>/dev/null | awk '
+    $1 == "gateway:" { through = 1 }
+    $1 == "interface:" { netif = $2 }
+    END { if (!through && netif !~ /^utun/) print netif }
+  ')"
+  [ -n "${netif}" ] || return 0
+  sudo arp -n "$1" 2>/dev/null | awk -v netif="${netif}" '
+    {
+      on = ""
+      for (i = 1; i < NF; i++) if ($i == "on") { on = $(i + 1) }
+      if (on != netif) { next }
+      for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit }
+    }
+  ' | grep -v -x -i -e '2:0:0:0:0:0' -e '02:00:00:00:00:00' || true
 }
 
 # One `ok` or `FAIL` line per network, and LOCAL_PROBLEMS counting the fails.
@@ -1883,6 +1911,15 @@ local_add() {
     # Without it, any network whose router has the same address would count
     # as this one, and traffic meant for the tunnel would go to that router.
     echo "no MAC address for ${gateway}; add the network while you are on it" >&2
+    return 1
+  fi
+  # Read again after the router has been asked: a MAC that does not hold
+  # still is not one to tie a network to.
+  local again
+  ping -c 1 -t 1 "${gateway}" >/dev/null 2>&1 || true
+  again="$(local_router_mac "${gateway}")"
+  if [ "${again}" != "${mac}" ]; then
+    echo "the MAC of ${gateway} changed while it was read (${mac}, then ${again:-none}); try again" >&2
     return 1
   fi
   line="${cidr} ${gateway}${mac:+ ${mac}}"

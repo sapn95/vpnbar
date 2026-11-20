@@ -187,8 +187,20 @@ route_get() {
   '
 }
 
+# The router's MAC as the interface it is reached on knows it. 2:0:0:0:0:0 is
+# not an answer: it is what macOS shows a process that lacks the Local Network
+# permission in place of every MAC, and reads as "unknown". `arp -n` prints
+# one line per interface that has an entry for the address, and on 20.11.2026
+# the first of them said 2:0:0:0:0:0 while en0's said the router's own.
 router_mac() {
-  arp -n "$1" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit } }'
+  arp -n "$1" 2>/dev/null | awk -v netif="$2" '
+    {
+      on = ""
+      for (i = 1; i < NF; i++) if ($i == "on") { on = $(i + 1) }
+      if (on != netif) { next }
+      for (i = 1; i < NF; i++) if ($i == "at" && $(i + 1) != "(incomplete)") { print $(i + 1); exit }
+    }
+  ' | grep -v -x -i -e '2:0:0:0:0:0' -e '02:00:00:00:00:00'
 }
 
 # Is the machine on the network this entry belongs to? Its router has to be on
@@ -206,10 +218,10 @@ on_network() {
   [ -n "${netif}" ] && [ -z "${via_gateway}" ] || return 1
   case "${netif}" in utun*) return 1 ;; esac
   [ -n "${mac}" ] || return 0
-  seen="$(router_mac "${gateway}")"
+  seen="$(router_mac "${gateway}" "${netif}")"
   if [ -z "${seen}" ]; then
     ping -c 1 -t 1 "${gateway}" >/dev/null 2>&1 || true
-    seen="$(router_mac "${gateway}")"
+    seen="$(router_mac "${gateway}" "${netif}")"
   fi
   [ -n "${seen}" ] && [ "$(mac_norm "${seen}")" = "$(mac_norm "${mac}")" ]
 }

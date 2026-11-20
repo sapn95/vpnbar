@@ -37,7 +37,15 @@ vpnbar local remove 192.168.0.0/24
 `add` records the network with the router it belongs to: the current default
 router and the MAC address that router answers with. Without a MAC it refuses:
 on a strange network whose router has the same address, the route would send
-traffic meant for the tunnel to that router. The MAC is what makes "on
+traffic meant for the tunnel to that router.
+
+The MAC is read as root. macOS shows a process that lacks the Local Network
+permission `2:0:0:0:0:0` in place of every MAC, and a terminal usually lacks it.
+The first `add` on 20.11.2026 recorded that placeholder; the helper, running as
+root, saw the real MAC, decided the machine was not at home and took the route
+away at once. Read as root, the MAC is the real one, the placeholder is refused
+wherever it turns up, and `vpnbar local` and the doctor ask for the status
+through the same sudoers line, as root. The MAC is what makes "on
 this network" mean this network. Half the home routers there are sit at
 `192.168.1.1`, and on somebody else's network the same prefix belongs to
 somebody else.
