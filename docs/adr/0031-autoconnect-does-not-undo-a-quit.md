@@ -2,7 +2,9 @@
 
 **Status:** accepted, 2026-09-24. Narrows
 [ADR 0013](0013-autoconnect-is-a-plan-not-a-timer.md) and completes
-[ADR 0028](0028-quit-and-restart-are-per-application.md).
+[ADR 0028](0028-quit-and-restart-are-per-application.md). Amended by
+[ADR 0051](0051-a-switch-starts-its-client.md): a switch or a Connect from the
+menu starts a client that is not running.
 
 ## The decision
 

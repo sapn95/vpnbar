@@ -1572,6 +1572,66 @@ function obj:act(id, verb)
   end)
 end
 
+--- Seconds a client is given to show up after it was started.
+local CLIENT_START_WAIT = 30
+
+--- Start the client a connection goes through, when it is not running.
+---
+--- Returns false when it is running already, and the caller goes on as before.
+--- Otherwise starts it with `backends.launchCommand`, which loads a launchd
+--- agent rather than opening a copy beside it (ADR 0048), as a task so the run
+--- loop does not wait for launchd, and calls `started` once the application is
+--- there. A client that does not come is said once, and `started` is not
+--- called ([ADR 0051](../docs/adr/0051-a-switch-starts-its-client.md)).
+--- @param id string profile id
+--- @param started function called once the client runs
+--- @return boolean true when a start was begun
+function obj:startClient(id, started)
+  local profile = store.get(self.config, id)
+  local app = profile and profile.app
+  if not app or runningApp(app) then
+    return false
+  end
+  self.logger.i(("start: %s is not running; starting it for %s"):format(app, id))
+  -- Which pause this start belongs to. **Disconnect everything** while the
+  -- client is still coming up ends the request: "everything off" outranks the
+  -- click before it, and a Connect pressed afterwards would leave a tunnel up
+  -- under a paused planner that then leaves it there.
+  local generation = self.pauses or 0
+  local task = hs.task.new("/bin/sh", function(code)
+    if code ~= 0 then
+      self:complain(("%s could not be started for %s"):format(app, profile.name or id))
+      return
+    end
+    local waited = 0
+    local function check()
+      if not self.running then
+        return
+      end
+      if (self.pauses or 0) ~= generation then
+        self.logger.i(("start: %s is no longer wanted for %s"):format(app, id))
+        return
+      end
+      if runningApp(app) then
+        self.logger.i(("start: %s is running"):format(app))
+        started()
+        return
+      end
+      waited = waited + 1
+      if waited >= CLIENT_START_WAIT then
+        self:complain(("%s was started for %s and did not come up"):format(app, profile.name or id))
+        return
+      end
+      hs.timer.doAfter(1, check)
+    end
+    check()
+  end, { "-c", backends.launchCommand(app, self.config) })
+  if not task or not task:start() then
+    self:complain(("%s could not be started for %s"):format(app, profile.name or id))
+  end
+  return true
+end
+
 --- Prefer one connection for this session, and connect it now.
 ---
 --- The preference is what makes this a switch rather than a Connect: with *Only
@@ -1600,6 +1660,17 @@ function obj:switchTo(id)
   self:resume(id)
   autoconnect.forget(self.attempts, id)
   self.logger.i(("switch: %s is preferred until restart"):format(id))
+  -- A client that is not running has nothing to press, and the planner waits
+  -- for one that is (ADR 0031), so a switch to it went nowhere. It is started
+  -- here; once it runs, the switch presses Connect the way it always does and
+  -- takes the other connection down when this one is up (ADR 0051). Asked
+  -- before the state, which is from the last refresh and can still say
+  -- connected for a client that has quit since.
+  if self:startClient(id, function()
+    self:refreshSoon({ autoconnect = true }, 1)
+  end) then
+    return
+  end
   local state = self.states[id]
   if state == "connected" or state == "connecting" then
     -- Already up: nothing to connect, only the other one to take down, which
@@ -1710,6 +1781,7 @@ function obj:disconnectAll()
   -- of the run cannot start anything back up (ADR 0041). A switch in progress
   -- ends here too: "everything off" outranks "this one now".
   self.paused = true
+  self.pauses = (self.pauses or 0) + 1
   self.switching = nil
   -- An exemption from the last resume is not this pause's to keep: a switch
   -- that ends the pause would otherwise find it still open.
@@ -1977,7 +2049,12 @@ function obj:dispatch(action)
     connect = function()
       -- Somebody asking for a connection is somebody asking for its client back.
       self:resume(action.id)
-      self:act(action.id, "connect")
+      -- And for it to be running: started first if it is not (ADR 0051).
+      if not self:startClient(action.id, function()
+        self:act(action.id, "connect")
+      end) then
+        self:act(action.id, "connect")
+      end
     end,
     resume = function()
       self:resume(action.id)

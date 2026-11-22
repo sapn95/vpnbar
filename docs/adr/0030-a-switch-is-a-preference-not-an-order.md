@@ -2,7 +2,9 @@
 
 **Status:** accepted, 2026-09-20. Amended by
 [ADR 0047](0047-a-tunnel-that-carries-nothing.md): a switch is over once its
-target carries, not once it reads `connected`.
+target carries, not once it reads `connected`; and by
+[ADR 0051](0051-a-switch-starts-its-client.md): a switch starts its client
+when it is not running.
 
 ## The decision
 
