@@ -228,7 +228,9 @@ started meanwhile. Once it is up, everything else that is up goes down, whether
 or not *Only one connection at a time* is on. After ten minutes it is an
 ordinary preference again, and vpnbar says so once. A switch to a connection
 whose probe names an address to reach is over only once that address goes
-through it ([The probe](#the-probe)).
+through it ([The probe](#the-probe)). A switch, like a Connect from the menu,
+first starts the client the connection goes through when it is not running
+([ADR 0051](docs/adr/0051-a-switch-starts-its-client.md)).
 
 ## Force disconnect
 
